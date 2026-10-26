@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: gitleaks (full history)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          cd /tmp
+          curl -fsSLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz\$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          cd "$GITHUB_WORKSPACE"
+          /tmp/gitleaks git --no-banner --redact .
+
+  config:
+    name: Compose and config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Placeholder secrets files (CI only)
+        run: |
+          sudo mkdir -p /etc/agent-manager
+          for f in postgres paperclip hermes sandbox; do echo "CI_PLACEHOLDER=1" | sudo tee /etc/agent-manager/$f.env >/dev/null; done
+          sudo touch /etc/agent-manager/sandbox_authorized_keys
+      - name: docker compose config
+        run: docker compose -f compose.yaml config --quiet
+      - name: Images pinned by digest
+        run: |
+          set -euo pipefail
+          bad=$(grep -E '^\s*image:' compose.yaml | grep -v '@sha256:' || true)
+          [ -z "$bad" ] || { echo "Unpinned image(s):"; echo "$bad"; exit 1; }
+      - name: No xAI models, ZDR routing on
+        run: |
+          set -euo pipefail
+          ! grep -RInE 'x-ai/|grok' --include='*.yaml' --include='*.yml' --include='*.md' hermes agents || { echo "xAI model referenced"; exit 1; }
+          python3 - <<'EOF'
+          import yaml
+          c = yaml.safe_load(open("hermes/config.yaml"))
+          assert c["provider_routing"]["data_collection"] == "deny"
+          assert "x-ai" in c["provider_routing"]["ignore"]
+          assert c["terminal"]["backend"] == "ssh"
+          assert c["terminal"]["env_passthrough"] == []
+          print("hermes config ok")
+          EOF
+
+  sandbox:
+    name: Sandbox image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build
+        run: docker build -t sandbox:ci sandbox
+      - name: Start with a test key and a fake GitHub token
+        run: |
+          set -euo pipefail
+          ssh-keygen -q -t ed25519 -N '' -f /tmp/ci_key
+          cp /tmp/ci_key.pub /tmp/authorized_keys
+          docker run -d --name sb -p 127.0.0.1:2222:22 \
+            -e GH_TOKEN=ci-fake-token -e OPENROUTER_API_KEY=must-not-leak \
+            -v /tmp/authorized_keys:/etc/ssh/authorized_keys/agent:ro sandbox:ci
+          for i in $(seq 1 20); do nc -z 127.0.0.1 2222 && break; sleep 1; done
+      - name: Checks over SSH, as Hermes would connect
+        run: |
+          set -euo pipefail
+          s() { ssh -i /tmp/ci_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@127.0.0.1 "$@"; }
+          [ "$(s whoami)" = agent ]
+          s 'git --version && gh --version | head -1 && gitleaks version && mise --version'
+          s 'test -s ~/.git-credentials && grep -q ci-fake-token ~/.git-credentials'
+          s 'test "$(stat -c %a ~/.git-credentials)" = 600'
+          # The container env (where a model key could sit) must not reach SSH sessions.
+          ! s 'env' | grep -q must-not-leak
+          ! s 'env' | grep -q ci-fake-token
+          # No root login, no password login.
+          ! ssh -i /tmp/ci_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1 true
+          echo "sandbox ok"
+      - name: Host key survives a restart
+        run: |
+          set -euo pipefail
+          before=$(docker exec sb ssh-keygen -lf /etc/ssh/hostkeys/ssh_host_ed25519_key.pub)
+          docker restart sb >/dev/null; sleep 3
+          after=$(docker exec sb ssh-keygen -lf /etc/ssh/hostkeys/ssh_host_ed25519_key.pub)
+          # Without a volume the key lives in the container layer, which a restart keeps.
+          [ "$before" = "$after" ]
