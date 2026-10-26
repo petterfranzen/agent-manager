@@ -72,6 +72,8 @@ jobs:
           set -euo pipefail
           ssh-keygen -q -t ed25519 -N '' -f /tmp/ci_key
           cp /tmp/ci_key.pub /tmp/authorized_keys
+          # As on the VM: root-owned, not writable by others (sshd StrictModes).
+          sudo chown root:root /tmp/authorized_keys && sudo chmod 0644 /tmp/authorized_keys
           docker run -d --name sb -p 127.0.0.1:2222:22 \
             -e GH_TOKEN=ci-fake-token -e OPENROUTER_API_KEY=must-not-leak \
             -v /tmp/authorized_keys:/etc/ssh/authorized_keys/agent:ro sandbox:ci
@@ -79,6 +81,7 @@ jobs:
       - name: Checks over SSH, as Hermes would connect
         run: |
           set -euo pipefail
+          trap 'docker logs sb 2>&1 | tail -20' ERR
           s() { ssh -i /tmp/ci_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@127.0.0.1 "$@"; }
           [ "$(s whoami)" = agent ]
           s 'git --version && gh --version | head -1 && gitleaks version && mise --version'

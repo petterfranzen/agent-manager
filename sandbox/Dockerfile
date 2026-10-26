@@ -26,6 +26,8 @@ RUN set -eu; cd /tmp \
 
 # Non-root agent user, no sudo. Key-only SSH, no root login, no forwarding.
 RUN useradd -m -u 10001 -s /bin/bash agent \
+ # '*' = no password but not locked; sshd may refuse key logins to locked ('!') accounts.
+ && usermod -p '*' agent \
  && mkdir -p /run/sshd /etc/ssh/authorized_keys \
  && printf '%s\n' \
       'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PermitRootLogin no' \
