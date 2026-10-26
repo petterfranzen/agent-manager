@@ -1,0 +1,8 @@
+# Secrets never live in this public repo. They are in /etc/agent-manager/ on the VM.
+.env
+*.env
+!.env.example
+*.key
+*.pem
+id_*
+data/
