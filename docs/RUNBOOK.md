@@ -33,9 +33,16 @@ cd /opt/agent-manager && git log --oneline -1
 ```bash
 bash /opt/agent-manager/scripts/new-secrets.sh
 ```
-It asks for the OpenRouter key and the GitHub token (paste each; nothing is
-shown) and generates everything else into `/etc/agent-manager/` (root-only).
-Running it again never overwrites anything.
+It asks for the OpenRouter key and the GitHub token and generates everything
+else into `/etc/agent-manager/` (root-only). Running it again never overwrites
+anything.
+
+- Nothing is shown while you paste, but it reports how many characters it got.
+  Compare that with the key's length in your password manager.
+- **The Hetzner web console often garbles long pastes.** Paste each key in 2–3
+  pieces, pressing Enter after each, then press Enter on an empty line to finish.
+- Each key is checked live with OpenRouter and GitHub before it's saved. A
+  garbled one is rejected with "Not accepted" and asked for again (up to 5 tries).
 
 ## 4. Start the stack
 ```bash
