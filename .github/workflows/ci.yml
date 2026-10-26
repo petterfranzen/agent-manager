@@ -86,6 +86,9 @@ jobs:
           [ "$(s whoami)" = agent ]
           s 'git --version && gh --version | head -1 && gitleaks version && mise --version'
           s 'test -s ~/.git-credentials && grep -q ci-fake-token ~/.git-credentials'
+          # gh must accept its config as written (no migration attempt).
+          ! s 'gh config get git_protocol -h github.com 2>&1' | grep -qi 'migrat'
+          [ "$(s 'gh config get git_protocol -h github.com')" = https ]
           s 'test "$(stat -c %a ~/.git-credentials)" = 600'
           # The container env (where a model key could sit) must not reach SSH sessions.
           ! s 'env' | grep -q must-not-leak
