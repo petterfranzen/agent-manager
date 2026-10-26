@@ -43,6 +43,8 @@ anything.
   pieces, pressing Enter after each, then press Enter on an empty line to finish.
 - Each key is checked live with OpenRouter and GitHub before it's saved. A
   garbled one is rejected with "Not accepted" and asked for again (up to 5 tries).
+- Underscores in the GitHub token often arrive as another character or not at
+  all (the console assumes a US keyboard). The script puts them back, so that's fine.
 
 ## 4. Start the stack
 ```bash

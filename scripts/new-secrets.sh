@@ -32,11 +32,13 @@ read_secret() { # prompt -> stdout
 }
 
 # Asks until the service accepts the value (max 5 tries). $2 is a check command
-# that gets the value as $1 and returns 0 if it works.
-ask_checked() { # prompt check-fn -> stdout
+# that gets the value as $1 and returns 0 if it works; optional $3 repairs the
+# pasted value first.
+ask_checked() { # prompt check-fn [repair-fn] -> stdout
   local v try
   for try in 1 2 3 4 5; do
     v=$(read_secret "$1")
+    [[ -n "${3:-}" ]] && v=$("$3" "$v")
     if [[ -n "$v" ]] && "$2" "$v"; then printf '%s' "$v"; return 0; fi
     echo "  Not accepted (try $try of 5). Paste it again, in smaller pieces if it keeps failing." >&2
   done
@@ -48,6 +50,20 @@ check_openrouter() {
   local code; code=$(curl -sS -o /dev/null -w '%{http_code}' -m 20 https://openrouter.ai/api/v1/key -H "Authorization: Bearer $1" || true)
   [[ "$code" == 200 ]] && { echo "  OpenRouter accepted the key." >&2; return 0; }
   echo "  OpenRouter said HTTP $code." >&2; return 1
+}
+
+# GitHub tokens contain only letters, digits and "_". The Hetzner console often
+# turns "_" into another character or drops it (keyboard layout), so put it back:
+# any other character must have been an underscore, and a fine-grained token is
+# always github_pat_ + 22 characters + _ + 59. The live check catches a bad guess.
+repair_github() { # token -> stdout
+  local t=$1 fixed
+  fixed=$(printf '%s' "$t" | sed 's/[^A-Za-z0-9_]/_/g')
+  if [[ "$fixed" =~ ^github_?pat_?([A-Za-z0-9]{22})_?([A-Za-z0-9]{59})$ ]]; then
+    fixed="github_pat_${BASH_REMATCH[1]}_${BASH_REMATCH[2]}"
+  fi
+  [[ "$fixed" != "$t" ]] && echo "  Put back the underscores the console mangled or dropped." >&2
+  printf '%s' "$fixed"
 }
 
 check_github() {
@@ -84,7 +100,7 @@ else
 fi
 
 if [[ ! -e "$D/sandbox.env" ]]; then
-  GHT=$(ask_checked "GitHub token agents-ghost (input hidden):" check_github)
+  GHT=$(ask_checked "GitHub token agents-ghost (input hidden):" check_github repair_github)
   write_once sandbox.env "GH_TOKEN=$GHT"
   unset GHT
 else
