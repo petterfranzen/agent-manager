@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Refuses a push that would publish a secret. The repos are public.
+set -euo pipefail
+if ! gitleaks git --no-banner --redact --log-opts="@{upstream}..HEAD" . 2>/dev/null; then
+  # First push of a branch has no upstream: scan what's new against origin/main.
+  gitleaks git --no-banner --redact --log-opts="origin/main..HEAD" . || {
+    echo "pre-push: gitleaks found a possible secret. Remove it (and rewrite the commit) before pushing." >&2
+    exit 1
+  }
+fi

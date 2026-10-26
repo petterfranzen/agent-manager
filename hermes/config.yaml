@@ -1,0 +1,45 @@
+# Hermes config, mounted read-only at /opt/data/config.yaml. Keys come from
+# /etc/agent-manager/hermes.env, never from here. See docs/DESIGN.md "Models".
+
+model:
+  provider: openrouter
+  default: deepseek/deepseek-v4.1-flash
+
+# OpenRouter routing. The account also enforces ZDR and no training; these
+# repeat it per request so a settings change can't silently loosen it.
+provider_routing:
+  sort: price
+  data_collection: "deny"
+  ignore: ["x-ai"]          # Petter's choice: no xAI, ever.
+
+# Tried in order when the primary fails (429/5xx/401/403/404), per turn.
+fallback_providers:
+  - provider: openrouter
+    model: z-ai/glm-5.3-flash
+  - provider: openrouter
+    model: minimax/minimax-m3
+  - provider: openrouter
+    model: anthropic/claude-haiku-5.5
+
+# Subagents: pinned explicitly, with their own fallback chain (avoids the
+# credential mix-up fixed in hermes-agent#90009). Flat by default; Paperclip's
+# org chart is the hierarchy, not deep Hermes nesting.
+delegation:
+  provider: openrouter
+  model: deepseek/deepseek-v4.1-flash
+  fallback_providers:
+    - provider: openrouter
+      model: z-ai/glm-5.3-flash
+  max_spawn_depth: 1
+  max_concurrent_children: 2
+
+terminal:
+  backend: ssh              # the sandbox container; host/user/key come from env
+  cwd: /home/agent/work
+  timeout: 600              # builds can take a while
+  persistent_shell: true
+  env_passthrough: []       # nothing from the Hermes container reaches commands
+
+memory:
+  memory_enabled: true
+  write_approval: false

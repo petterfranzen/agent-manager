@@ -1,0 +1,104 @@
+# Agent stack for the Hetzner VM. See docs/DESIGN.md and docs/RUNBOOK.md.
+# Secrets live in /etc/agent-manager/*.env (root-only), one file per service,
+# never in this public repo. Images are pinned by digest; Dependabot proposes
+# updates, merged only once a release is 24 h old (patch rule).
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    restart: unless-stopped
+    env_file: /etc/agent-manager/postgres.env   # POSTGRES_PASSWORD
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_DB: paperclip
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=30", "-c", "work_mem=4MB"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 256m
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  paperclip:
+    image: ghcr.io/paperclipai/paperclip:2026.1023.0@sha256:40f46940c4612ead131aebe6079cd4651f8cd1434af49f7c621887f4a452a62e
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: /etc/agent-manager/paperclip.env   # BETTER_AUTH_SECRET, DATABASE_URL
+    environment:
+      HOST: "0.0.0.0"
+      PAPERCLIP_HOME: /paperclip
+      PAPERCLIP_DEPLOYMENT_MODE: authenticated
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: public
+      PAPERCLIP_PUBLIC_URL: https://agents.pastabake.cloud
+      NODE_OPTIONS: --max-old-space-size=512
+      DO_NOT_TRACK: "1"
+    # Loopback only: cloudflared on the host publishes it behind Cloudflare Access.
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - paperclip-data:/paperclip
+    mem_limit: 768m
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  hermes:
+    image: nousresearch/hermes-agent:v0.22.5@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d
+    restart: unless-stopped
+    command: ["gateway", "run"]
+    depends_on:
+      - paperclip
+      - sandbox
+    # Shares paperclip's network namespace: Paperclip reaches the gateway on
+    # 127.0.0.1:8642, the only plain-HTTP target its hermes_gateway adapter allows.
+    network_mode: "service:paperclip"
+    env_file: /etc/agent-manager/hermes.env   # OPENROUTER_API_KEY, API_SERVER_KEY
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "127.0.0.1"
+      # Commands run in the sandbox over SSH; Hermes never forwards provider
+      # credentials over SSH, so the OpenRouter key can't reach agent commands.
+      TERMINAL_SSH_HOST: sandbox
+      TERMINAL_SSH_USER: agent
+      TERMINAL_SSH_KEY: /opt/data/ssh/id_ed25519
+    volumes:
+      - hermes-data:/opt/data
+      - ./hermes/config.yaml:/opt/data/config.yaml:ro
+      # Owned by UID 10000 (the image's hermes user), mode 0400; see scripts/new-secrets.sh.
+      - /etc/agent-manager/hermes_ssh_key:/opt/data/ssh/id_ed25519:ro
+    mem_limit: 512m
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  sandbox:
+    build: ./sandbox
+    restart: unless-stopped
+    env_file: /etc/agent-manager/sandbox.env   # GH_TOKEN (fine-grained, ghost-in-the-machine only)
+    volumes:
+      - /etc/agent-manager/sandbox_authorized_keys:/etc/ssh/authorized_keys/agent:ro
+      - sandbox-hostkeys:/etc/ssh/hostkeys
+      - sandbox-work:/home/agent/work
+      - sandbox-tools:/home/agent/.local/share/mise
+    mem_limit: 1536m
+    cpus: 1.5
+    pids_limit: 512
+    logging: *logging
+
+volumes:
+  pgdata:
+  paperclip-data:
+  hermes-data:
+  sandbox-hostkeys:
+  sandbox-work:
+  sandbox-tools:

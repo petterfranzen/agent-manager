@@ -1,0 +1,17 @@
+# Image and action updates arrive as PRs. Merge only once the release is 24 h
+# old (patch rule); security fixes within 72 h. The coordinator's check-ins
+# watch for these.
+version: 2
+updates:
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: weekly, day: monday, time: "05:00", timezone: Europe/Stockholm }
+    cooldown: { default-days: 1 }
+  - package-ecosystem: docker
+    directory: /sandbox
+    schedule: { interval: weekly, day: monday, time: "05:00", timezone: Europe/Stockholm }
+    cooldown: { default-days: 1 }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    cooldown: { default-days: 1 }
