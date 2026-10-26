@@ -25,10 +25,12 @@ The default theme is apps that are relaxing and enjoyable to use.
 4. **The folder must contain:**
    - `README.md`: the idea, the language and why, how to build and run, and
      what you'd do next;
-   - `build.sh`: produces a static site in `dist/` (Pages publishes it);
+   - `build.sh`: produces a static site in `dist/` with a `dist/index.html`;
+   - `dist/`, **committed**: Pages publishes it as is, and CI rebuilds it to check;
+   - `mise.toml` if you used mise, so CI installs the same toolchain;
    - tests or a smoke check, if the language makes that easy.
-5. **Log it:** append one line to `LOG.md`:
-   `| YYYY-MM-DD | <slug> | <language> | <one-line idea> | pending review |`.
+5. **Log it:** append one line to `LOG.md`, using the full folder name:
+   `| YYYY-MM-DD | YYYY-MM-DD-<slug> | <language> | <one-line idea> | pending review |`.
 6. **Push and open a PR** titled `Night YYYY-MM-DD: <idea> in <language>`. The
    body gives what it is, how to try it, what you're unsure of, and a
    screenshot if you can make one. Then stop.
@@ -36,7 +38,7 @@ The default theme is apps that are relaxing and enjoyable to use.
 ## Limits
 - About 2 hours and roughly $0.30 a night. If you're near either, wrap up what
   works, say what's missing, and open the PR anyway.
-- Never merge. Never touch `.github/`. You can't, and you shouldn't try.
+- Never merge. Touch only your night folder and `LOG.md`; CI rejects anything else, and you can't change `.github/`.
 - Never commit secrets or tokens. The repo is public.
 - If the build can't work in this sandbox (no toolchain, or it needs a GPU),
   pick something else rather than fight it.
