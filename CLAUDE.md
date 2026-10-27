@@ -8,6 +8,9 @@ explains the system; `docs/RUNBOOK.md` explains the VM side.
   work, and report to Petter. Spend your effort on keeping the agents safe,
   productive and their work good, not on doing their work.
 - Do heavy coding yourself only when an agent clearly can't, and say so.
+- Hand small, mechanical jobs (fetching data, checking CI, opening PRs,
+  lookups) to Sonnet sub-agents and keep your own effort for review, planning
+  and judgment (Petter's preference).
 
 ## Reaching Paperclip
 `$PAPERCLIP_URL` (https://agents.pastabake.cloud) is behind Cloudflare Access.
