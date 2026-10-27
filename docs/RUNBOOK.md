@@ -79,15 +79,19 @@ login, not Paperclip.
 
 ## 6. Claim Paperclip
 ```bash
-cd /opt/agent-manager && docker compose exec paperclip \
-  npx --yes paperclipai@2026.1023.0 auth bootstrap-ceo --data-dir /paperclip --base-url https://hq.sectionnine.dev
+cd /opt/agent-manager && echo '{"$meta":{"version":1,"updatedAt":"2026-10-27T00:00:00Z","source":"configure"},"database":{"mode":"postgres"},"logging":{"mode":"file"},"server":{"deploymentMode":"authenticated"},"telemetry":{"enabled":false}}' \
+| docker compose exec -T -u node paperclip sh -c \
+  'cat > /tmp/bootstrap.json && cd /app && pnpm paperclipai auth bootstrap-ceo --config /tmp/bootstrap.json --base-url https://hq.sectionnine.dev; rm -f /tmp/bootstrap.json'
 ```
-It prints a one-time invite URL. Keep the CLI version equal to the Paperclip
-image tag in compose.yaml. Open the link in the browser where you're logged in
+It prints a one-time invite URL. It uses the CLI bundled in the Paperclip
+image. The CLI insists on a config file, but our container runs from
+environment variables, so the command hands it a throwaway one in `/tmp` (the
+database address comes from `DATABASE_URL`); the server never reads it. Open the link in the browser where you're logged in
 to Cloudflare Access, sign up and claim the board. The link is a one-time
 credential: don't paste it anywhere else. Then:
 - create a company, e.g. `section9`;
 - in instance settings, turn **telemetry off** if there's a switch.
+- Paperclip's setup wizard then insists on a first agent: create **Saito** with the step 7 settings; the roster script adopts him by name.
 
 ## 7. Hire the agents
 For each brief in [`agents/`](../agents/README.md): **Agents → Add agent →
