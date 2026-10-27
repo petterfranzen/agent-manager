@@ -69,7 +69,7 @@ docker compose exec sandbox sh -c 'ls -l /home/agent/.git-credentials'   # exist
 In **Cloudflare Zero Trust** (one.dash.cloudflare.com):
 1. **Networks → Tunnels →** your tunnel **→ Public hostnames → Add**:
    subdomain `hq`, domain `sectionnine.dev`, service `HTTP` `localhost:3100`.
-2. **Access → Applications → Add → Self-hosted**: name `agents`, hostname
+2. **Access → Applications → Add → Self-hosted**: name `section9-hq`, hostname
    `hq.sectionnine.dev` (no path, so the whole site is protected). Add two policies:
    - `petter`: action **Allow**, include **Emails** your address (for your browser);
    - `claude`: action **Service Auth**, include **Service Token** `claude-ops-stats`.
@@ -79,11 +79,14 @@ login, not Paperclip.
 
 ## 6. Claim Paperclip
 ```bash
-docker compose logs paperclip 2>&1 | grep -i -m1 board-claim
+cd /opt/agent-manager && docker compose exec paperclip \
+  npx --yes paperclipai@2026.1023.0 auth bootstrap-ceo --data-dir /paperclip --base-url https://hq.sectionnine.dev
 ```
-Open that link (at `https://hq.sectionnine.dev/...`), sign up and claim the
-board. Then:
-- create a company, e.g. `pastabake`;
+It prints a one-time invite URL. Keep the CLI version equal to the Paperclip
+image tag in compose.yaml. Open the link in the browser where you're logged in
+to Cloudflare Access, sign up and claim the board. The link is a one-time
+credential: don't paste it anywhere else. Then:
+- create a company, e.g. `section9`;
 - in instance settings, turn **telemetry off** if there's a switch.
 
 ## 7. Hire the agents
