@@ -63,22 +63,25 @@ docker compose exec sandbox sh -c 'ls -l /home/agent/.git-credentials'   # exist
 ```
 
 ## 5. Publish the dashboard through Cloudflare
+`sectionnine.dev` must be in the same Cloudflare account as the tunnel
+(registering it with Cloudflare Registrar does that).
+
 In **Cloudflare Zero Trust** (one.dash.cloudflare.com):
 1. **Networks → Tunnels →** your tunnel **→ Public hostnames → Add**:
-   subdomain `agents`, domain `pastabake.cloud`, service `HTTP` `localhost:3100`.
+   subdomain `hq`, domain `sectionnine.dev`, service `HTTP` `localhost:3100`.
 2. **Access → Applications → Add → Self-hosted**: name `agents`, hostname
-   `agents.pastabake.cloud` (no path, so the whole site is protected). Add two policies:
+   `hq.sectionnine.dev` (no path, so the whole site is protected). Add two policies:
    - `petter`: action **Allow**, include **Emails** your address (for your browser);
    - `claude`: action **Service Auth**, include **Service Token** `claude-ops-stats`.
 
-Check from outside: `https://agents.pastabake.cloud` should show the Cloudflare
+Check from outside: `https://hq.sectionnine.dev` should show the Cloudflare
 login, not Paperclip.
 
 ## 6. Claim Paperclip
 ```bash
 docker compose logs paperclip 2>&1 | grep -i -m1 board-claim
 ```
-Open that link (at `https://agents.pastabake.cloud/...`), sign up and claim the
+Open that link (at `https://hq.sectionnine.dev/...`), sign up and claim the
 board. Then:
 - create a company, e.g. `pastabake`;
 - in instance settings, turn **telemetry off** if there's a switch.
@@ -108,7 +111,7 @@ this is loopback.
 ## 9. Give Claude access
 1. In Paperclip, create a **board API key** for Claude.
 2. In the Claude Code cloud environment's settings (environment menu → Edit),
-   add the secrets `PAPERCLIP_URL` = `https://agents.pastabake.cloud` and
+   add the secrets `PAPERCLIP_URL` = `https://hq.sectionnine.dev` and
    `PAPERCLIP_API_KEY` = the key.
 3. Tell Claude. It checks the API, uploads the avatars from `agents/avatars/`,
    then does a first supervised nightly run.

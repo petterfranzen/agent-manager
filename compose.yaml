@@ -41,7 +41,7 @@ services:
       PAPERCLIP_HOME: /paperclip
       PAPERCLIP_DEPLOYMENT_MODE: authenticated
       PAPERCLIP_DEPLOYMENT_EXPOSURE: public
-      PAPERCLIP_PUBLIC_URL: https://agents.pastabake.cloud
+      PAPERCLIP_PUBLIC_URL: https://hq.sectionnine.dev
       NODE_OPTIONS: --max-old-space-size=512
       DO_NOT_TRACK: "1"
     # Loopback only: cloudflared on the host publishes it behind Cloudflare Access.

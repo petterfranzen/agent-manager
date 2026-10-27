@@ -13,7 +13,7 @@ explains the system; `docs/RUNBOOK.md` explains the VM side.
   and judgment (Petter's preference).
 
 ## Reaching Paperclip
-`$PAPERCLIP_URL` (https://agents.pastabake.cloud) is behind Cloudflare Access.
+`$PAPERCLIP_URL` (https://hq.sectionnine.dev) is behind Cloudflare Access.
 Send `CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID`, `CF-Access-Client-Secret:
 $CF_ACCESS_CLIENT_SECRET` and `Authorization: Bearer $PAPERCLIP_API_KEY`. Never
 print, log or commit any of these.

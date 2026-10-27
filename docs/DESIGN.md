@@ -36,7 +36,7 @@ flowchart TD
 | Container | Image | Memory cap | Notes |
 |---|---|---|---|
 | `postgres` | `postgres:17-alpine` (digest pinned) | 256 MB | Paperclip's database |
-| `paperclip` | `ghcr.io/paperclipai/paperclip:2026.1023.0` (digest pinned) | 768 MB | UI and API on `127.0.0.1:3100`; cloudflared publishes it as `agents.pastabake.cloud` |
+| `paperclip` | `ghcr.io/paperclipai/paperclip:2026.1023.0` (digest pinned) | 768 MB | UI and API on `127.0.0.1:3100`; cloudflared publishes it as `hq.sectionnine.dev` |
 | `hermes` | `nousresearch/hermes-agent:v0.22.5` (digest pinned) | 512 MB | Gateway API on port 8642. It shares `paperclip`'s network namespace, so Paperclip reaches it on loopback, the only plain-HTTP target Paperclip allows. |
 | `sandbox` | built from `sandbox/Dockerfile` | 1.5 GB, 1.5 CPU | Where agent commands run, reached over SSH. Holds the GitHub token, never the OpenRouter key. |
 
@@ -114,12 +114,17 @@ Petter's feedback goes into `LOG.md` and shapes the following nights.
 
 ## Coordinator interface
 
-Claude reaches Paperclip at `https://agents.pastabake.cloud` through Cloudflare
+Claude reaches Paperclip at `https://hq.sectionnine.dev` through Cloudflare
 Access, using the same `claude-ops-stats` service token as the flight-tracker
 stats endpoint. Paperclip's board API key is stored in the Claude Code
 environment's secrets as `PAPERCLIP_API_KEY`. The check-ins read open tasks,
 results and budgets, and the coordinator writes tasks and comments. Rules for
 Claude are in [`../CLAUDE.md`](../CLAUDE.md).
+
+## Domains
+
+`sectionnine.dev` is the Hetzner VM's domain (Section 9: the agents and, after
+its move, flight-tracker). `pastabake.cloud` is the homelab's.
 
 ## Open items
 
