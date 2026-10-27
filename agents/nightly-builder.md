@@ -33,15 +33,20 @@ The default theme is apps that are relaxing and enjoyable to use.
    cd ghost && git sparse-checkout set --no-cone LOG.md
    ```
    Read `LOG.md`: past nights' language, idea, verdict and Petter's feedback.
-   Before choosing, check the other copies' work tonight:
+   Check what the other copies claimed tonight (drafts included):
    `gh pr list --repo petterfranzen/ghost-in-the-machine --state open --search "Night YYYY-MM-DD in:title"`.
-   Choose a language not in the log, and not taken by any of those PRs, and an
-   idea that fits the feedback. Prefer
-   languages that can produce a static web build (Rust or Zig to WebAssembly,
-   Gleam, Elm, ReScript, Nim, Haxe, OCaml via js_of_ocaml…), so the morning
-   preview works in a browser.
-2. **Branch and scaffold:** `git switch -c night/YYYY-MM-DD-<slug>`, then
-   `git sparse-checkout add nights/YYYY-MM-DD-<slug>` and create that folder. Use
+   Choose a language that's in neither the log nor those PRs, and an idea that
+   fits the feedback. Prefer languages that can produce a static web build
+   (Rust or Zig to WebAssembly, Gleam, Elm, ReScript, Nim, Haxe, OCaml via
+   js_of_ocaml…), so the morning preview works in a browser.
+2. **Claim it straight away**, so a copy starting later sees your pick:
+   `git switch -c night/YYYY-MM-DD-<slug>`, then
+   `git sparse-checkout add nights/YYYY-MM-DD-<slug>`, create that folder with a
+   one-line `README.md`, and append your line to `LOG.md`, using the full folder name:
+   `| YYYY-MM-DD | YYYY-MM-DD-<slug> | <language> | <one-line idea> | pending review |`.
+   Commit, push, and open a **draft** PR titled
+   `Night YYYY-MM-DD: <idea> in <language>` (`gh pr create --draft`). If
+   someone else claimed the same language in the meantime, pick again. Then use
    `mise` to install the toolchain (`mise use <tool>@<version>`), pinned to a
    version released at least 24 hours ago.
 3. **Build** something small and complete rather than big and half-done. Keep
@@ -54,12 +59,10 @@ The default theme is apps that are relaxing and enjoyable to use.
    - `dist/`, **committed**: Pages publishes it as is, and CI rebuilds it to check;
    - `mise.toml` if you used mise, so CI installs the same toolchain;
    - tests or a smoke check, if the language makes that easy.
-5. **Log it:** append one line to `LOG.md`, using the full folder name:
-   `| YYYY-MM-DD | YYYY-MM-DD-<slug> | <language> | <one-line idea> | pending review |`.
-6. **Push and open a PR** titled `Night YYYY-MM-DD: <idea> in <language>`. The
-   body gives what it is, how to try it, what you're unsure of, and a
-   screenshot if you can make one. Then remove your run folder with
-   `rm -rf "$W"` and stop.
+5. **Finish the PR:** push, then write the body: what it is, how to try it,
+   what you're unsure of, and a screenshot if you can make one. Sign it with
+   your name. Mark it ready with `gh pr ready`, remove your run folder with
+   `rm -rf "$W"`, and stop.
 
 ## Limits
 - About 2 hours and roughly $0.30 a night. If you're near either, wrap up what
