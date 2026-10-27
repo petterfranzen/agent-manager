@@ -59,6 +59,22 @@ jobs:
           assert c["terminal"]["env_passthrough"] == []
           print("hermes config ok")
           EOF
+      - name: No listeners beyond loopback
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml config --format json > /tmp/compose.json
+          python3 - <<'EOF'
+          import json
+          svc = json.load(open("/tmp/compose.json"))["services"]
+          env = svc["hermes"].get("environment", {})
+          for k in ("HERMES_DASHBOARD", "WEBHOOK_ENABLED"):
+              assert env.get(k) in ("0", "false"), f"hermes {k} must be 0 or false, got {env.get(k)!r}"
+          for name, s in svc.items():
+              for p in s.get("ports", []):
+                  assert name == "paperclip", f"{name} publishes a port: {p}"
+                  assert p.get("host_ip") == "127.0.0.1", f"paperclip publishes beyond loopback: {p}"
+          print("listeners ok")
+          EOF
 
   sandbox:
     name: Sandbox image smoke test
