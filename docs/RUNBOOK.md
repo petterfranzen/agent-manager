@@ -89,6 +89,7 @@ adapter Hermes gateway**, with:
 
 | Field | Value |
 |---|---|
+| Name / title | from `agents/README.md`, e.g. `Tachikoma` / `Nightly builder` |
 | API base URL | `http://127.0.0.1:8642` |
 | API key | the gateway key: `grep API_SERVER_KEY /etc/agent-manager/hermes.env` |
 | Paperclip API URL | `http://127.0.0.1:3100` |
@@ -100,16 +101,17 @@ Plain HTTP is fine here: Hermes and Paperclip share a network namespace, so
 this is loopback.
 
 ## 8. Routines
-- **Nightly build:** cron `0 1 * * *`, Europe/Stockholm, assigned to the nightly builder.
-- **Ops report:** `30 6 * * *`, assigned to ops.
-- **Backup coordinator:** `0 */6 * * *`, assigned to the backup coordinator.
+- **Nightly build:** cron `0 1 * * *`, Europe/Stockholm, assigned to Tachikoma (nightly builder).
+- **Ops report:** `30 6 * * *`, assigned to Saito (ops).
+- **Backup coordinator:** `0 */6 * * *`, assigned to Togusa (backup coordinator).
 
 ## 9. Give Claude access
 1. In Paperclip, create a **board API key** for Claude.
 2. In the Claude Code cloud environment's settings (environment menu → Edit),
    add the secrets `PAPERCLIP_URL` = `https://agents.pastabake.cloud` and
    `PAPERCLIP_API_KEY` = the key.
-3. Tell Claude. It checks the API, then does a first supervised nightly run.
+3. Tell Claude. It checks the API, uploads the avatars from `agents/avatars/`,
+   then does a first supervised nightly run.
 
 ## Day to day
 | Task | Command |

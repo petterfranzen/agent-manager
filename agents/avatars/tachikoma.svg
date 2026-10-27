@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<defs>
+  <radialGradient id="bg" cx="50%" cy="40%" r="70%">
+    <stop offset="0" stop-color="#16203a"/><stop offset="1" stop-color="#05070d"/>
+  </radialGradient>
+  <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+    <path d="M32 0H0V32" fill="none" stroke="#3ad1ff" stroke-opacity=".08" stroke-width="1"/>
+  </pattern>
+  <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+    <stop offset="0" stop-color="#3ad1ff" stop-opacity=".9"/><stop offset="1" stop-color="#3ad1ff" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+<rect width="512" height="512" fill="url(#bg)"/>
+<rect width="512" height="512" fill="url(#grid)"/>
+<circle cx="256" cy="236" r="200" fill="none" stroke="#3ad1ff" stroke-opacity=".35" stroke-width="3"/>
+
+
+<defs><radialGradient id="shell" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#7fe0ff"/><stop offset=".55" stop-color="#2b8fd8"/><stop offset="1" stop-color="#16467a"/></radialGradient></defs>
+<g stroke="#9fb4c8" stroke-width="12" stroke-linecap="round" fill="none">
+  <path d="M190 330L132 380L112 460"/><path d="M322 330L380 380L400 460"/>
+  <path d="M220 350L200 420L210 480"/><path d="M292 350L312 420L302 480"/>
+</g>
+<g fill="#cfe2f2"><circle cx="112" cy="462" r="12"/><circle cx="400" cy="462" r="12"/><circle cx="210" cy="482" r="12"/><circle cx="302" cy="482" r="12"/></g>
+<ellipse cx="256" cy="360" rx="110" ry="40" fill="#000" opacity=".25"/>
+<circle cx="256" cy="250" r="120" fill="url(#shell)" stroke="#0e2d50" stroke-width="5"/>
+<path d="M170 200Q256 150 342 200" fill="none" stroke="#ffffff" stroke-opacity=".35" stroke-width="8" stroke-linecap="round"/>
+<g>
+  <circle cx="210" cy="262" r="34" fill="#f5fbff" stroke="#0e2d50" stroke-width="5"/>
+  <circle cx="302" cy="262" r="34" fill="#f5fbff" stroke="#0e2d50" stroke-width="5"/>
+  <circle cx="216" cy="266" r="16" fill="#0b1830"/><circle cx="308" cy="266" r="16" fill="#0b1830"/>
+  <circle cx="222" cy="259" r="6" fill="#fff"/><circle cx="314" cy="259" r="6" fill="#fff"/>
+  <circle cx="256" cy="312" r="9" fill="#0b1830"/>
+</g>
+<path d="M256 130V82" stroke="#9fb4c8" stroke-width="6" stroke-linecap="round"/>
+<circle cx="256" cy="74" r="12" fill="#3ad1ff"/><circle cx="256" cy="74" r="26" fill="url(#glow)"/>
+<g fill="#3ad1ff" opacity=".9"><path d="M372 120l6 14 14 6-14 6-6 14-6-14-14-6 14-6z"/><path d="M134 150l4 9 9 4-9 4-4 9-4-9-9-4 9-4z"/></g>
+
+</svg>
