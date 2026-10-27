@@ -67,6 +67,9 @@ services:
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "127.0.0.1"
+      # Off on purpose: both would listen on all interfaces, reachable from the sandbox.
+      HERMES_DASHBOARD: "0"
+      WEBHOOK_ENABLED: "false"
       # Commands run in the sandbox over SSH; Hermes never forwards provider
       # credentials over SSH, so the OpenRouter key can't reach agent commands.
       TERMINAL_SSH_HOST: sandbox

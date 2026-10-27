@@ -41,7 +41,6 @@ public).
 
 ## Open
 - Roster-as-code script for Paperclip (in progress).
-- Pin `HERMES_DASHBOARD=0` and fail CI if a webhook listener is enabled.
 - Move flight-tracker to `flight.sectionnine.dev` and an SSH hostname on the same domain.
 - flight-tracker freshness: separate sweep backoff, OpenSky rate-limit headers, honest `lastSweepAt`, OpenSky OAuth.
 - 24 h delay for cloudflared in unattended-upgrades (patch rule).
