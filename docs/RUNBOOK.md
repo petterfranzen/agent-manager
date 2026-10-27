@@ -69,7 +69,7 @@ docker compose exec sandbox sh -c 'ls -l /home/agent/.git-credentials'   # exist
 In **Cloudflare Zero Trust** (one.dash.cloudflare.com):
 1. **Networks → Tunnels →** your tunnel **→ Public hostnames → Add**:
    subdomain `hq`, domain `sectionnine.dev`, service `HTTP` `localhost:3100`.
-2. **Access → Applications → Add → Self-hosted**: name `agents`, hostname
+2. **Access → Applications → Add → Self-hosted**: name `section9-hq`, hostname
    `hq.sectionnine.dev` (no path, so the whole site is protected). Add two policies:
    - `petter`: action **Allow**, include **Emails** your address (for your browser);
    - `claude`: action **Service Auth**, include **Service Token** `claude-ops-stats`.
@@ -79,12 +79,22 @@ login, not Paperclip.
 
 ## 6. Claim Paperclip
 ```bash
-docker compose logs paperclip 2>&1 | grep -i -m1 board-claim
+cd /opt/agent-manager && echo '{"$meta":{"version":1,"updatedAt":"2026-10-27T00:00:00Z","source":"configure"},"database":{"mode":"postgres"},"logging":{"mode":"file"},"server":{"deploymentMode":"authenticated"},"telemetry":{"enabled":false}}' \
+| docker compose exec -T -u node paperclip sh -c \
+  'cat > /tmp/bootstrap.json && cd /app && pnpm paperclipai auth bootstrap-ceo --config /tmp/bootstrap.json --base-url https://hq.sectionnine.dev; rm -f /tmp/bootstrap.json'
 ```
-Open that link (at `https://hq.sectionnine.dev/...`), sign up and claim the
-board. Then:
-- create a company, e.g. `pastabake`;
+It prints a one-time invite URL. It uses the CLI bundled in the Paperclip
+image. The CLI insists on a config file, but our container runs from
+environment variables, so the command hands it a throwaway one in `/tmp` (the
+database address comes from `DATABASE_URL`); the server never reads it.
+Open the link in the browser where you're logged in to Cloudflare Access, sign up and claim the board. The link is a one-time
+credential: don't paste it anywhere else. Then:
+- create a company, e.g. `section9`;
 - in instance settings, turn **telemetry off** if there's a switch.
+- Paperclip's setup wizard then insists on a first agent and may only offer
+  the Claude adapter. Create **Saito** with it, then **pause** him at once (a
+  Claude agent runs inside the Paperclip container). The roster script in
+  step 7 adopts him by name and switches him to the Hermes gateway.
 
 ## 7. Hire the agents
 For each brief in [`agents/`](../agents/README.md): **Agents → Add agent →
