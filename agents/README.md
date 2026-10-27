@@ -4,13 +4,23 @@ Each file here is a Paperclip agent's instructions. Hire each one in Paperclip
 with the **Hermes gateway** adapter (see docs/RUNBOOK.md, step 7) and paste its
 brief as the agent's instructions.
 
-| Agent | Brief | Reports to | Monthly budget | Wakes on |
-|---|---|---|---|---|
-| Nightly builder | [nightly-builder.md](nightly-builder.md) | Coordinator (Claude) | $10 | Routine, 01:00 Stockholm |
-| Coder | [coder.md](coder.md) | Coordinator | $4 | Assigned tasks |
-| Researcher | [researcher.md](researcher.md) | Coordinator | $3 | Assigned tasks |
-| Backup coordinator | [backup-coordinator.md](backup-coordinator.md) | Petter | $2 | Routine, every 6 h, acts only if Claude is silent |
-| Ops | [ops.md](ops.md) | Coordinator | $1 | Routine, 06:30 Stockholm |
+The team is named after Section 9 in *Ghost in the Shell*. Petter is **the
+Chief**, Claude (the coordinator) is **the Major**, and the agents are:
+
+| | Name | Role | Brief | Reports to | Monthly budget | Wakes on |
+|---|---|---|---|---|---|---|
+| <img src="avatars/tachikoma.png" width="48"> | **Tachikoma** | Nightly builder | [nightly-builder.md](nightly-builder.md) | The Major | $10 | Routine, 01:00 Stockholm |
+| <img src="avatars/batou.png" width="48"> | **Batou** | Coder | [coder.md](coder.md) | The Major | $4 | Assigned tasks |
+| <img src="avatars/ishikawa.png" width="48"> | **Ishikawa** | Researcher | [researcher.md](researcher.md) | The Major | $3 | Assigned tasks |
+| <img src="avatars/togusa.png" width="48"> | **Togusa** | Backup coordinator | [backup-coordinator.md](backup-coordinator.md) | The Chief | $2 | Routine, every 6 h, acts only if the Major is silent |
+| <img src="avatars/saito.png" width="48"> | **Saito** | Ops (read-only) | [ops.md](ops.md) | The Major | $1 | Routine, 06:30 Stockholm |
+
+Each brief opens with a short personality. It sets the agent's voice in
+comments and PRs, never its quality bar or rules.
+
+**Avatars** are original drawings in `avatars/` (SVG sources made by
+`make.py`, rendered to 512 px PNGs by `render.js`). The Major uploads them
+through Paperclip's API once it has the board key (runbook step 9).
 
 The budgets add up to $20, the OpenRouter key's monthly cap. Paperclip stops
 an agent at its budget, and the key stops everything at $20.

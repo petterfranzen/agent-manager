@@ -7,13 +7,16 @@ flight-tracker. Claude, in Claude Code sessions on Petter's plan, coordinates
 them: it writes briefs, reviews work, merges, and reports. Cheap models
 on OpenRouter do the bulk of the work:
 
-- **Nightly builder:** each night, picks a language and an idea it hasn't done
+- **Tachikoma, nightly builder:** each night, picks a language and an idea it hasn't done
   before, builds a small app in `ghost-in-the-machine`, and leaves a preview
   link for the morning.
-- **Researcher:** research tasks and reports.
-- **Coder:** small fixes and first drafts in `ghost-in-the-machine`.
-- **Ops:** read-only watch over the VM; reports to the coordinator.
-- **Backup coordinator:** keeps work moving when Claude is unavailable.
+- **Ishikawa, researcher:** research tasks and reports.
+- **Batou, coder:** small fixes and first drafts in `ghost-in-the-machine`.
+- **Saito, ops:** read-only watch over the VM; reports to the coordinator.
+- **Togusa, backup coordinator:** keeps work moving when Claude is unavailable.
+
+Names come from Section 9 in *Ghost in the Shell* (Claude is the Major, Petter
+the Chief); see [agents/README.md](../agents/README.md) for avatars and personalities.
 
 ## Architecture
 
