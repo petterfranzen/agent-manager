@@ -40,7 +40,7 @@ public).
 | 2026-10-26 | `/api/ops/stats` behind Cloudflare Access with JWT verification; field names reveal no technology. | Monitoring without fingerprinting the stack. |
 
 ## Open
-- Roster-as-code script for Paperclip (in progress).
+- Apply the roster on the VM and switch Saito to the Hermes gateway.
 - Move flight-tracker to `flight.sectionnine.dev` and an SSH hostname on the same domain.
 - flight-tracker freshness: separate sweep backoff, OpenSky rate-limit headers, honest `lastSweepAt`, OpenSky OAuth.
 - 24 h delay for cloudflared in unattended-upgrades (patch rule).

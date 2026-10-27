@@ -89,7 +89,7 @@ environment variables, so the command hands it a throwaway one in `/tmp` (the
 database address comes from `DATABASE_URL`); the server never reads it.
 Open the link in the browser where you're logged in to Cloudflare Access, sign up and claim the board. The link is a one-time
 credential: don't paste it anywhere else. Then:
-- create a company, e.g. `section9`;
+- create a company named `Section 9` (the roster looks it up by name);
 - in instance settings, turn **telemetry off** if there's a switch.
 - Paperclip's setup wizard then insists on a first agent and may only offer
   the Claude adapter. Create **Saito** with it, then **pause** him at once (a
@@ -97,34 +97,69 @@ credential: don't paste it anywhere else. Then:
   step 7 adopts him by name and switches him to the Hermes gateway.
 
 ## 7. Hire the agents
-For each brief in [`agents/`](../agents/README.md): **Agents → Add agent →
-adapter Hermes gateway**, with:
+The team is code: [`agents/roster.toml`](../agents/roster.toml) lists the
+company budget, each agent (role, brief, budget, avatar) and its routine.
+`scripts/paperclip-apply.py` applies it to Paperclip through the API. It is
+safe to re-run: it creates what is missing and changes only what differs. It
+never deletes anything.
 
-| Field | Value |
-|---|---|
-| Name / title | from `agents/README.md`, e.g. `Tachikoma` / `Nightly builder` |
-| API base URL | `http://127.0.0.1:8642` |
-| API key | the gateway key: `grep API_SERVER_KEY /etc/agent-manager/hermes.env` |
-| Paperclip API URL | `http://127.0.0.1:3100` |
-| Session key strategy | `issue` |
-| Instructions | the agent's brief, pasted |
-| Monthly budget | from the table in `agents/README.md` |
+**a. Mint two board keys, once:** `roster-vm` for this script and
+`major-cloud` for Claude (step 9). Each command runs on its own:
+```bash
+cd /opt/agent-manager
+# 1. Log the CLI in. It prints an approval link and waits: open it where you're
+#    signed in to hq.sectionnine.dev (swap a 127.0.0.1:3100 prefix for that) and approve.
+docker compose exec -u node paperclip sh -c \
+  'cd /app && pnpm -s paperclipai auth login --api-base http://127.0.0.1:3100 --no-browser'
+# 2. Mint the keys. Each prints a pcp_board_... key once: put it in your password manager.
+for n in roster-vm major-cloud; do docker compose exec -u node paperclip sh -c \
+  "cd /app && pnpm -s paperclipai token board create --api-base http://127.0.0.1:3100 --name $n --ttl-days 365"; done
+# 3. Log the CLI out, so no login session stays on the volume.
+docker compose exec -u node paperclip sh -c 'cd /app && pnpm -s paperclipai auth logout --api-base http://127.0.0.1:3100'
+```
+The keys expire after 365 days (a Daybook reminder is set). Renew the same
+way, then retire the old ones with `pnpm paperclipai token board revoke <id>`.
 
-Plain HTTP is fine here: Hermes and Paperclip share a network namespace, so
-this is loopback.
+**b. Store `roster-vm`**, root-only, without an editor and out of shell
+history. Paste the first line on its own, then the key when it asks:
+```bash
+unset K; read -rsp 'Paste the roster-vm key: ' K; echo
+```
+Then:
+```bash
+printf 'PAPERCLIP_BOARD_KEY=%s\n' "$K" > /etc/agent-manager/paperclip-board.env; unset K
+chmod 600 /etc/agent-manager/paperclip-board.env; wc -c < /etc/agent-manager/paperclip-board.env   # 79
+```
+(Pasting both blocks at once makes `read` swallow the next line instead of the key.)
+
+**c. Apply.** Look first, then do it:
+```bash
+cd /opt/agent-manager
+python3 scripts/paperclip-apply.py --dry-run
+python3 scripts/paperclip-apply.py
+```
+One line per action, for example `agent Saito: switch adapter claude_local ->
+hermes_gateway`; `ok: Batou unchanged` means nothing to do. The script reads
+the gateway key (`API_SERVER_KEY`) from `/etc/agent-manager/hermes.env` and
+sends it only when it creates an agent, switches its adapter, or you pass
+`--set-api-key` (use that after rotating the gateway key). Agents in Paperclip
+but not in the roster are listed as "not in roster" and left alone.
+
+The company must exist already (step 6) and be named `Section 9`.
+Plain HTTP is fine for the gateway: Hermes and Paperclip share a network
+namespace, so this is loopback.
 
 ## 8. Routines
-- **Nightly build:** cron `0 1 * * *`, Europe/Stockholm, assigned to Tachikoma (nightly builder).
-- **Ops report:** `30 6 * * *`, assigned to Saito (ops).
-- **Backup coordinator:** `0 */6 * * *`, assigned to Togusa (backup coordinator).
+They are in the roster and are created **paused** (`active = false`). After
+the Major's first supervised run, set `active = true` in a PR and re-apply.
+The script never resumes a paused agent: unpause Saito in Paperclip then too.
 
 ## 9. Give Claude access
-1. In Paperclip, create a **board API key** for Claude.
+1. Use the `major-cloud` key from step 7a.
 2. In the Claude Code cloud environment's settings (environment menu → Edit),
    add the secrets `PAPERCLIP_URL` = `https://hq.sectionnine.dev` and
    `PAPERCLIP_API_KEY` = the key.
-3. Tell Claude. It checks the API, uploads the avatars from `agents/avatars/`,
-   then does a first supervised nightly run.
+3. Tell Claude. It checks the API, then does a first supervised nightly run.
 
 ## Day to day
 | Task | Command |
