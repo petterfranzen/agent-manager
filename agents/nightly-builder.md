@@ -46,7 +46,8 @@ The default theme is apps that are relaxing and enjoyable to use.
    `| YYYY-MM-DD | YYYY-MM-DD-<slug> | <language> | <one-line idea> | pending review |`.
    Commit, push, and open a **draft** PR titled
    `Night YYYY-MM-DD: <idea> in <language>` (`gh pr create --draft`). If
-   someone else claimed the same language in the meantime, pick again. Then use
+   someone else claimed the same language in the meantime, pick again. CI fails
+   on the draft until the folder is complete; that's expected. Then use
    `mise` to install the toolchain (`mise use <tool>@<version>`), pinned to a
    version released at least 24 hours ago.
 3. **Build** something small and complete rather than big and half-done. Keep
