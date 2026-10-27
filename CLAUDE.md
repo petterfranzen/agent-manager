@@ -12,6 +12,13 @@ explains the system; `docs/RUNBOOK.md` explains the VM side.
   lookups) to Sonnet sub-agents and keep your own effort for review, planning
   and judgment (Petter's preference).
 
+## Memory
+- Read `docs/DECISIONS.md` at the start of a session. When Petter and you
+  decide something, add a dated line there in the same PR as the change.
+- The check-in prompt lives in `docs/check-in.md`; keep it and the scheduled
+  task in step.
+- Personal notes stay in the Daybook artifact, never in this public repo.
+
 ## Reaching Paperclip
 `$PAPERCLIP_URL` (https://hq.sectionnine.dev) is behind Cloudflare Access.
 Send `CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID`, `CF-Access-Client-Secret:
