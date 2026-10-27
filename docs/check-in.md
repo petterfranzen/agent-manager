@@ -28,7 +28,7 @@ Some tools are deferred. Load the ones you need first with ToolSearch, e.g. `sel
 - Keep a trend in the Daybook artifact's database (<DAYBOOK_URL>, via ArtifactData): collection `opsSamples`, one document per Stockholm date (id `YYYY-MM-DD`) holding a `samples` array. Append the stats response exactly as returned (the whole JSON object with memory, io, cpu, data and freshness), not a hand-picked subset. Pin the update with if_version, or create the document with set.
 - Compare with the previous sample (today's or yesterday's): disk read MB/s from io.readBytesTotal, cache refaults per minute, new softLimitEventsTotal. If uptimeSeconds dropped, the service restarted: say so, and don't compute rates across the restart. Samples under ~1 hour of uptime aren't steady state; note that.
 - **Flag** (and send a push, see step 5) if: memory.appBytes > 1.2 GB; read rate > 5 MB/s; softLimitEventsTotal rising; pressureSomeAvg60 > 10; outOfMemoryKillsTotal > 0; lastSweepAt older than 30 minutes once uptime is over 15 minutes; freshness.aircraftSeenLast10m is 0; or health isn't UP.
-- Background: the VM is a Hetzner CX23 (2 vCPU, 3.8 GB, 4 GB swap, Ubuntu 26.04). PR #132's 384 MB heap was installed on 26 Oct, so memory.managedMaxBytes should read about 400 MB. If it reads ~805 MB, the old service file is back: flag it.
+- Background: the VM is a Hetzner CX23 (2 vCPU, 3.8 GB, 4 GB swap, Ubuntu 26.04). PR #132's 384 MB heap was installed on 26 Oct, so memory.managedMaxBytes should read about 400 MB. If it reads ~805 MB, the old service file is back: flag it. Since 27 Oct the agent stack (Paperclip, Hermes, Postgres, sandbox) also runs on this VM, so less memory is free than before.
 
 ## 2. GitHub (petterfranzen/flight-tracker)
 Call `mcp__claude-code-remote__add_repo` (owner petterfranzen, repo flight-tracker, access push) so `gh api` works. Use REST calls only (GraphQL is blocked). List open PRs with CI status, and recent runs on main. The Dependabot alerts API is not readable from these sessions (403), so don't rely on it.
@@ -47,6 +47,7 @@ Short, plain, specific. Numbers with units. No hedging, no filler.
 
 ## 5. Notify Petter
 - Morning: always send one push notification (PushNotification) with the digest text.
+- **Weekday backlog nudge (Mon–Fri, morning run only):** Petter wants a backlog of ideas and tasks to build up, with a gentle prompt, never pushy. End the morning push with one short, friendly question inviting a new task or idea, varied from day to day and grounded in what's open (e.g. "Anything you'd like Ishikawa to dig into?", "An idea to park for later?", "Want me to start on the rental research?"). Also store it as `meta/nudge` {question, at} so the Daybook page can show it. Skip the nudge if Petter added a Daybook item in the last 24 hours or if 3 or more suggestions are still `new`. At most one nudge a day; never in midday or evening pushes, never on weekends.
 - Midday and evening: only when something is flagged, a reminder is overdue, or you merged something.
 - One notification per run, besides any scheduled reminders.
 

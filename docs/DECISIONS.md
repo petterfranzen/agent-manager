@@ -19,6 +19,7 @@ public).
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-10-27 | Weekday mornings, the check-in's push ends with one gentle backlog question (skipped if Petter added something in the last day). No extra notifications. | Petter wants a backlog of ideas and tasks to build up without being nagged. |
 | 2026-10-27 | Paperclip's agents, budgets, routines and avatars become a roster file applied by a script, not UI clicks. | Recreatable from code. |
 | 2026-10-27 | No backups of Paperclip's database or Hermes's memory. | Agent history isn't valuable enough; everything else is in GitHub. |
 | 2026-10-27 | `sectionnine.dev` (Cloudflare Registrar) is the Hetzner VM's domain; `pastabake.cloud` stays with the homelab. Paperclip is `hq.sectionnine.dev`; flight-tracker moves later. | Separate the homelab from Section 9. |
