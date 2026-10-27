@@ -1,8 +1,9 @@
 # Agents
 
-Each file here is a Paperclip agent's instructions. Hire each one in Paperclip
-with the **Hermes gateway** adapter (see docs/RUNBOOK.md, step 7) and paste its
-brief as the agent's instructions.
+Each file here is a Paperclip agent's instructions. `roster.toml` lists the
+agents, their budgets, avatars and routines; `scripts/paperclip-apply.py`
+applies it to Paperclip with the **Hermes gateway** adapter, sending each brief
+as the agent's instructions (see docs/RUNBOOK.md, step 7).
 
 The team is named after Section 9 in *Ghost in the Shell*. Petter is **the
 Chief**, Claude (the coordinator) is **the Major**, and the agents are:
@@ -29,8 +30,8 @@ Each brief opens with a short personality. It sets the agent's voice in
 comments and PRs, never its quality bar or rules.
 
 **Avatars** are original drawings in `avatars/` (SVG sources made by
-`make.py`, rendered to 512 px PNGs by `render.js`). The Major uploads them
-through Paperclip's API once it has the board key (runbook step 9).
+`make.py`, rendered to 512 px PNGs by `render.js`). The roster
+script uploads them through Paperclip's API (runbook step 7).
 
 The budgets add up to $20, the OpenRouter key's monthly cap. Paperclip stops
 an agent at its budget, and the key stops everything at $20.
