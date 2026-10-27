@@ -1,0 +1,81 @@
+# The team as code. scripts/paperclip-apply.py applies this to Paperclip on the
+# VM (docs/RUNBOOK.md, step 7). Safe to re-run: it changes only what differs.
+#
+# Routines stay `active = false` (created paused) until the Major has done a
+# supervised first run. Then flip them to true in a PR and re-apply.
+#
+# The budgets add up to $20, the OpenRouter key's monthly cap.
+
+[company]
+name = "Section 9"
+budget_monthly_cents = 2000
+
+# Hermes gateway adapter settings shared by every agent. The gateway key is
+# not here: the script reads API_SERVER_KEY from /etc/agent-manager/hermes.env.
+[defaults]
+api_base_url = "http://127.0.0.1:8642"
+paperclip_api_url = "http://127.0.0.1:3100"
+session_key_strategy = "issue"
+timeout_sec = 600
+
+[[agents]]
+name = "Tachikoma"
+role = "engineer"
+title = "Nightly builder"
+brief = "agents/nightly-builder.md"
+avatar = "agents/avatars/tachikoma.png"
+budget_monthly_cents = 1000
+timeout_sec = 7200
+
+[agents.routine]
+title = "Nightly build"
+description = "Build tonight's app, following your brief."
+cron = "0 1 * * *"
+timezone = "Europe/Stockholm"
+active = false
+
+[[agents]]
+name = "Batou"
+role = "engineer"
+title = "Coder"
+brief = "agents/coder.md"
+avatar = "agents/avatars/batou.png"
+budget_monthly_cents = 400
+
+[[agents]]
+name = "Ishikawa"
+role = "researcher"
+title = "Researcher"
+brief = "agents/researcher.md"
+avatar = "agents/avatars/ishikawa.png"
+budget_monthly_cents = 300
+
+[[agents]]
+name = "Togusa"
+role = "general"
+title = "Backup coordinator"
+brief = "agents/backup-coordinator.md"
+avatar = "agents/avatars/togusa.png"
+budget_monthly_cents = 200
+
+[agents.routine]
+title = "Backup coordinator check"
+description = "Check whether the Major is active; act only per your brief."
+cron = "0 */6 * * *"
+timezone = "Europe/Stockholm"
+active = false
+
+[[agents]]
+name = "Saito"
+role = "devops"
+title = "Ops (read-only)"
+brief = "agents/ops.md"
+avatar = "agents/avatars/saito.png"
+budget_monthly_cents = 100
+
+[agents.routine]
+title = "Morning ops report"
+description = "Write the morning ops report, following your brief."
+cron = "30 6 * * *"
+timezone = "Europe/Stockholm"
+active = false
