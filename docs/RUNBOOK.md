@@ -86,12 +86,15 @@ cd /opt/agent-manager && echo '{"$meta":{"version":1,"updatedAt":"2026-10-27T00:
 It prints a one-time invite URL. It uses the CLI bundled in the Paperclip
 image. The CLI insists on a config file, but our container runs from
 environment variables, so the command hands it a throwaway one in `/tmp` (the
-database address comes from `DATABASE_URL`); the server never reads it. Open the link in the browser where you're logged in
-to Cloudflare Access, sign up and claim the board. The link is a one-time
+database address comes from `DATABASE_URL`); the server never reads it.
+Open the link in the browser where you're logged in to Cloudflare Access, sign up and claim the board. The link is a one-time
 credential: don't paste it anywhere else. Then:
 - create a company, e.g. `section9`;
 - in instance settings, turn **telemetry off** if there's a switch.
-- Paperclip's setup wizard then insists on a first agent: create **Saito** with the step 7 settings; the roster script adopts him by name.
+- Paperclip's setup wizard then insists on a first agent and may only offer
+  the Claude adapter. Create **Saito** with it, then **pause** him at once (a
+  Claude agent runs inside the Paperclip container). The roster script in
+  step 7 adopts him by name and switches him to the Hermes gateway.
 
 ## 7. Hire the agents
 For each brief in [`agents/`](../agents/README.md): **Agents → Add agent →
