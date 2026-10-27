@@ -15,6 +15,16 @@ Chief**, Claude (the coordinator) is **the Major**, and the agents are:
 | <img src="avatars/togusa.png" width="48"> | **Togusa** | Backup coordinator | [backup-coordinator.md](backup-coordinator.md) | The Chief | $2 | Routine, every 6 h, acts only if the Major is silent |
 | <img src="avatars/saito.png" width="48"> | **Saito** | Ops (read-only) | [ops.md](ops.md) | The Major | $1 | Routine, 06:30 Stockholm |
 
+**Copying Tachikoma:**
+- Hire another agent with the same brief and adapter settings, named
+  `Tachikoma 2`, `Tachikoma 3` and so on, reporting to the Major.
+- Give each copy its own routine, staggered (for example 01:00, 01:20 and 01:40
+  Stockholm), and its own budget. The copies share the nightly builder's $10
+  unless Petter raises the OpenRouter key's $20 cap. Each night costs roughly
+  $0.30.
+- Copies are safe in parallel: separate run folders, separate branches, and the
+  Major merges.
+
 Each brief opens with a short personality. It sets the agent's voice in
 comments and PRs, never its quality bar or rules.
 
