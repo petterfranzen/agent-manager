@@ -188,8 +188,9 @@ timer runs `agent-manager-sync` every 5 minutes, which:
   rolled back; after 3 failures on the same commit it stops until a new commit
   lands. It also refuses to run if `/opt/agent-manager` has local changes or
   `main` was force-pushed;
-- after a successful deploy, prunes dangling images (`docker image prune -f`,
-  never `-a`) and build cache older than a week, and reports `Disk: N% used,
+- after a successful deploy, removes every image no container uses
+  (`docker image prune -a -f`; a rollback re-pulls by digest) and build cache
+  older than a week, and reports `Disk: N% used,
   N GB free` plus the reclaimed space in that comment, prefixed with a
   `WARNING` once the disk is 85% full. The installer also caps the journal at
   200 MB (`/etc/systemd/journald.conf.d/agent-manager.conf`);
