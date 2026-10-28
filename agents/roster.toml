@@ -37,7 +37,7 @@ title = "Nightly build"
 description = "Build tonight's app, following your brief."
 cron = "0 1 * * *"
 timezone = "Europe/Stockholm"
-active = false
+active = true
 
 [[agents]]
 name = "Batou"

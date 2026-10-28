@@ -2,9 +2,16 @@
 # Install the pull-based deploy on the VM. Run once as root; safe to re-run.
 # See docs/RUNBOOK.md, step 10.
 #   bash /opt/agent-manager/deploy/install-sync.sh
-# Re-run it after a change to deploy/ to install the new script or units: the
-# sync applies the repo, but it does not replace its own installed copy.
+# The sync re-runs it with --from-sync after a change to deploy/ (quiet, and
+# without the first sync), so it only needs running by hand once.
 set -euo pipefail
+
+FROM_SYNC=0
+case "${1:-}" in
+  "") ;;
+  --from-sync) FROM_SYNC=1 ;;
+  *) echo "usage: $0 [--from-sync]" >&2; exit 2 ;;
+esac
 
 REPO=/opt/agent-manager
 STATE_DIR=/var/lib/agent-manager
@@ -21,6 +28,15 @@ install -m 0755 -o root -g root "$HERE/vm-sync.sh" /usr/local/sbin/agent-manager
 install -m 0644 -o root -g root "$HERE/agent-manager-sync.service" /etc/systemd/system/agent-manager-sync.service
 install -m 0644 -o root -g root "$HERE/agent-manager-sync.timer" /etc/systemd/system/agent-manager-sync.timer
 
+# Cap the journal (it had grown to ~1 GB). Restart journald only on a change.
+JOURNALD_CONF=/etc/systemd/journald.conf.d/agent-manager.conf
+JOURNALD_WANT=$'[Journal]\nSystemMaxUse=200M\n'
+if [ "$(cat "$JOURNALD_CONF" 2>/dev/null || true)" != "${JOURNALD_WANT%$'\n'}" ] || [ "$(stat -c %a "$JOURNALD_CONF")" != 644 ]; then
+  mkdir -p /etc/systemd/journald.conf.d
+  printf '%s' "$JOURNALD_WANT" | install -m 0644 -o root -g root /dev/stdin "$JOURNALD_CONF"
+  systemctl restart systemd-journald
+fi
+
 mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
 
@@ -34,6 +50,9 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now agent-manager-sync.timer
+
+# The sync itself is the caller with --from-sync: no first sync, no output.
+[ "$FROM_SYNC" -eq 0 ] || exit 0
 
 # First sync now rather than in 2 minutes; it waits for CI if main is not green yet.
 systemctl start agent-manager-sync.service || true

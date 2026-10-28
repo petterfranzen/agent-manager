@@ -19,6 +19,7 @@ public).
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-10-28 | Tachikoma's nightly routine is on (01:00 Stockholm). Other routines stay paused until each agent's supervised first run. | His first night shipped after one review round, and Petter liked it. |
 | 2026-10-28 | Run a slim repackaging of the official Paperclip image, built in GitHub Actions to ghcr.io/petterfranzen/paperclip-slim and pinned by digest: no agent CLIs, no provider pack. | The official image is 3.4 GB compressed, two-thirds of it unused by our Hermes setup; the VM disk was 83% full. Fewer binaries next to the database credentials. |
 | 2026-10-28 | The VM pulls agent-manager's main every 5 minutes and applies a commit only when all its CI checks passed; results are posted to a "Deploys" issue in Paperclip. main is protected by a ruleset. | Petter wants the Major to push config without him running commands, without giving the Major SSH or new keys. |
 | 2026-10-28 | Paperclip budgets allow unpriced usage; the OpenRouter key's $20 cap is the real limit. Sign-up closed, announcements off. | Hermes reports tokens, not cost, so the default "block" paused the whole company after Tachikoma's first run. |

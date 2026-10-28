@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import tomllib
 import unittest
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "paperclip-apply.py"
 REDACTED = "***REDACTED***"
+# What the roster asks each routine to be, so the tests follow roster.toml.
+WANT = {a["routine"]["title"]: ("active" if a["routine"]["active"] else "paused")
+        for a in tomllib.loads((ROOT / "agents" / "roster.toml").read_text())["agents"] if a.get("routine")}
 
 
 class FakePaperclip:
@@ -376,7 +380,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(len(self.fake.avatars), 5)
 
         self.assertEqual(len(self.fake.routines), 3)
-        self.assertTrue(all(r["status"] == "paused" for r in self.fake.routines.values()))
+        self.assertEqual({r["title"]: r["status"] for r in self.fake.routines.values()}, WANT)
         by_title = {r["title"]: r for r in self.fake.routines.values()}
         saito = by_title["Morning ops report"]
         self.assertEqual(saito["assigneeAgentId"], self.agent("Saito")["id"])
@@ -385,7 +389,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual([(t["cronExpression"], t["timezone"], t["enabled"]) for t in trig],
                          [("30 6 * * *", "Europe/Stockholm", True)])
         self.assertIn("agent Tachikoma: create", out)
-        self.assertIn("routine Nightly build: create (paused)", out)
+        self.assertIn(f"routine Nightly build: create ({WANT['Nightly build']})", out)
         self.assertEqual(len(self.key_sends()), 5)
 
     def test_second_run_changes_nothing_and_sends_no_key(self):
@@ -422,7 +426,7 @@ class ApplyTest(unittest.TestCase):
         routine = next(r for r in self.fake.routines.values() if r["title"] == "Nightly build")
         trig = next(t for t in self.fake.triggers.values() if t["routineId"] == routine["id"])
         trig["cronExpression"] = "0 2 * * *"
-        routine["status"] = "active"
+        routine["status"] = "paused" if WANT[routine["title"]] == "active" else "active"
         mark = len(self.fake.log)
         out = self.apply_ok().stdout
         self.assertEqual(batou["budgetMonthlyCents"], 400)
@@ -430,7 +434,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(batou["adapterConfig"]["apiKey"], self.hermes_key)
         self.assertEqual(self.key_sends(mark), [])
         self.assertEqual(trig["cronExpression"], "0 1 * * *")
-        self.assertEqual(routine["status"], "paused")
+        self.assertEqual(routine["status"], WANT[routine["title"]])
         self.assertIn("agent Batou: budgetMonthlyCents 999 -> 400; config instructions", out)
         self.assertEqual(len([r for r in self.writes(mark) if r["path"].startswith("/api/agents/")]), 1)
 
@@ -459,7 +463,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.writes(), [])
         self.assertEqual(self.fake.agents, {})
         self.assertIn("[dry-run] agent Tachikoma: create", out)
-        self.assertIn("[dry-run] routine Nightly build: create (paused)", out)
+        self.assertIn(f"[dry-run] routine Nightly build: create ({WANT['Nightly build']})", out)
         self.apply_ok()
         mark = len(self.fake.log)
         self.agent("Batou")["budgetMonthlyCents"] = 1
