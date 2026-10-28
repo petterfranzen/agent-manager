@@ -224,13 +224,12 @@ class Applier:
             }
             agent = self.sync_agent(company, spec, config, by_name.get(spec["name"]))
             synced[spec["name"]] = agent
-            if agent.get("status") != "pending_approval":
-                self.sync_avatar(cid, spec, agent, by_name.get(spec["name"]))
             if spec.get("routine"):
                 self.sync_routine(cid, spec["routine"], agent.get("id"), routines)
 
         self.sync_policies(company, synced)
         self.lift_budget_pauses(company, by_name)
+        self.sync_avatars(company, synced, by_name)
 
         roster_names = {a["name"] for a in self.roster["agents"]}
         for name in sorted(set(by_name) - roster_names):
@@ -455,6 +454,22 @@ class Applier:
         if agent.get("name") not in (None, name):
             raise ApplyError(f"agent {name} was created as {agent['name']}: a same-named agent exists")
         return agent
+
+    def sync_avatars(self, company, synced, before):
+        """Upload avatars last: Paperclip refuses them while the company is paused,
+        and the budget step above may just have lifted that pause."""
+        cid = company["id"]
+        if not self.dry:
+            now = next((c for c in self.api.call("GET", "/api/companies") or []
+                        if c.get("id") == cid), company)
+            if now.get("status") != "active":
+                self.say(f"avatars: skipped while company {company['name']} is "
+                         f"{now.get('status')}; the next run uploads them")
+                return
+        for spec in self.roster["agents"]:
+            agent = synced[spec["name"]]
+            if agent.get("status") != "pending_approval":
+                self.sync_avatar(cid, spec, agent, before.get(spec["name"]))
 
     def sync_avatar(self, cid, spec, agent, before):
         name = spec["name"]

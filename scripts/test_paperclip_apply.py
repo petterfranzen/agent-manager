@@ -211,7 +211,8 @@ class FakePaperclip:
         row = self.agents.get(aid)
         if not row:
             return 404, {"error": "Agent not found"}
-        if row["status"] == "pending_approval":
+        # As the server: refused for these agent states and whenever the company isn't active.
+        if row["status"] in ("pending_approval", "terminated") or self.company["status"] != "active":
             return 409, {"error": "Agent avatar cannot be updated in its current state"}
         raw = base64.b64decode(body["imageBase64"], validate=True)
         digest = hashlib.sha256(raw).hexdigest()
@@ -529,6 +530,24 @@ class ApplyTest(unittest.TestCase):
         out = self.apply_ok().stdout
         self.assertEqual(self.policy_writes(mark), [])
         self.assertNotIn("resume", out)
+
+    def test_avatars_wait_until_the_budget_pause_is_lifted(self):
+        # The VM's first sync: company paused by budget, avatars never uploaded.
+        self.apply_ok()
+        self.block_everything()
+        self.fake.avatars.clear()
+        for row in self.fake.agents.values():
+            row["appearance"] = {}
+        out = self.apply_ok().stdout
+        self.assertEqual(self.fake.company["status"], "active")
+        self.assertEqual(len(self.fake.avatars), 5)
+        self.assertIn("avatar Tachikoma: upload", out)
+
+    def test_avatars_skipped_while_the_company_stays_paused(self):
+        self.apply_ok()
+        self.fake.company.update(status="paused", pauseReason="manual")
+        out = self.apply_ok().stdout
+        self.assertIn("avatars: skipped while company Section 9 is paused", out)
 
     def test_budget_pause_with_policy_already_right_is_nudged(self):
         self.apply_ok()
