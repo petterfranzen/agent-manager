@@ -129,9 +129,11 @@ wait_for_paperclip() {
 
 # Best effort: one comment per deploy on the open "Deploys" issue in Paperclip.
 # Never prints the board key. A failure here is logged and ignored.
-report() { # report <result> <failedStep> <seconds> <text file>
+# <notes file> (optional) holds extra lines (disk report, self-update) for the
+# comment; <warning> (optional) is prefixed to the Result line.
+report() { # report <result> <failedStep> <seconds> <text file> [<notes file> [<warning>]]
   python3 -I - "$TARGET" "$SUBJECT" "$1" "$2" "$3" "$4" \
-    "$SECRETS_DIR/paperclip-board.env" "$PAPERCLIP_URL" <<'EOF'
+    "$SECRETS_DIR/paperclip-board.env" "$PAPERCLIP_URL" "${5:-}" "${6:-}" <<'EOF'
 import json
 import re
 import sys
@@ -139,7 +141,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-sha, subject, result, step, seconds, text_file, env_file, base = sys.argv[1:9]
+sha, subject, result, step, seconds, text_file, env_file, base, notes_file, warning = sys.argv[1:11]
 COMPANY = "Section 9"
 TITLE = "Deploys"
 DESCRIPTION = "The VM posts one comment per deploy here."
@@ -218,8 +220,12 @@ try:
     kept = [redact(ln)[:300] for ln in kept]
 
     out = [f"Deploy `{sha[:7]}`: {redact(subject)}", ""]
-    out.append("Result: success" if ok else f"Result: failure at step `{step}`")
+    prefix = redact(warning) + ". " if warning else ""
+    out.append(prefix + ("Result: success" if ok else f"Result: failure at step `{step}`"))
     out.append(f"Duration: {seconds} s")
+    if notes_file:
+        with open(notes_file, encoding="utf-8", errors="replace") as f:
+            out.extend(redact(ln)[:300] for ln in f.read().splitlines() if ln.strip())
     out.append("")
     if ok:
         out.append("Paperclip changes:" if kept else "No Paperclip changes.")
@@ -258,6 +264,54 @@ except Exception as e:  # best effort by design
 EOF
 }
 
+# Best effort, after a successful apply: every rebuild of the sandbox image
+# leaves the old one dangling. Dangling images only (never -a), and build cache
+# older than a week. Writes the reclaimed-space lines to $NOTES_FILE. Never fails.
+cleanup() {
+  local out
+  if out=$(docker image prune -f 2>&1); then
+    echo "$out" | grep -E 'Total( reclaimed space)?:' | sed 's/^/Images: /' >>"$NOTES_FILE" || true
+  else
+    log "docker image prune failed (ignored): $(echo "$out" | tail -n 1 | redact)"
+  fi
+  if out=$(docker builder prune -f --filter until=168h 2>&1); then
+    echo "$out" | grep -E 'Total( reclaimed space)?:' | sed 's/^/Build cache: /' >>"$NOTES_FILE" || true
+  else
+    log "docker builder prune failed (ignored): $(echo "$out" | tail -n 1 | redact)"
+  fi
+  return 0
+}
+
+# Free space on / after the cleanup: sets DISK_USED (percent) and DISK_FREE (GB).
+measure_disk() {
+  local line
+  line=$(df -P / | awk 'NR == 2 { sub(/%/, "", $5); printf "%d %.1f", $5, $4 / 1048576 }') || return 1
+  DISK_USED=${line% *}
+  DISK_FREE=${line#* }
+  [[ $DISK_USED =~ ^[0-9]+$ && $DISK_FREE =~ ^[0-9.]+$ ]]
+}
+
+# Best effort, after a successful apply: re-install the sync's own script and
+# units when deploy/ changed (or the first state has no applied commit).
+# Replacing the running script is safe: install writes a new inode and bash
+# keeps reading the old one.
+self_update() {
+  local changed out
+  if [ -n "$APPLIED" ]; then
+    changed=$(git diff --name-only "$APPLIED" "$TARGET" -- deploy/ 2>/dev/null) || changed=deploy/
+  else
+    changed=deploy/
+  fi
+  [ -n "$changed" ] || return 0
+  if out=$(bash deploy/install-sync.sh --from-sync 2>&1); then
+    log "deploy/ changed: updated its own installed copy"
+    echo "Updated its own copy (deploy/ changed)." >>"$NOTES_FILE"
+  else
+    log "could not update its own installed copy (ignored): $(echo "$out" | tail -n 3 | redact)"
+  fi
+  return 0
+}
+
 # Only one sync at a time (a deploy can outlast the 5 minute timer).
 exec 9>"$LOCK_FILE"
 flock -n 9 || exit 0
@@ -293,7 +347,12 @@ fi
 CHECKS_JSON=$(mktemp)
 OUT=$(mktemp)
 APPLY_OUT=$(mktemp)
-trap 'rm -f "$CHECKS_JSON" "$OUT" "$APPLY_OUT"' EXIT
+NOTES_FILE=$(mktemp)
+DISK_USED=""
+DISK_FREE=""
+DISK_WARN=""
+DISK_WARN_AT=85
+trap 'rm -f "$CHECKS_JSON" "$OUT" "$APPLY_OUT" "$NOTES_FILE"' EXIT
 
 curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' -o "$CHECKS_JSON" \
   "$GITHUB_API/repos/$GH_REPO/commits/$TARGET/check-runs?per_page=100" \
@@ -333,11 +392,25 @@ apply() {
 }
 
 if apply >"$OUT" 2>&1; then
+  cleanup || true
+  if measure_disk; then
+    # First line of the file, so the comment reads "Disk:" then the reclaimed space.
+    { echo "Disk: ${DISK_USED}% used, ${DISK_FREE} GB free"; cat "$NOTES_FILE"; } >"$NOTES_FILE.new" && mv "$NOTES_FILE.new" "$NOTES_FILE"
+    log "disk after cleanup: ${DISK_USED}% used, ${DISK_FREE} GB free"
+    if [ "$DISK_USED" -ge "$DISK_WARN_AT" ]; then
+      DISK_WARN="WARNING: disk ${DISK_USED}% used"
+      err "$DISK_WARN"
+    fi
+  else
+    log "could not measure free disk (ignored)"
+  fi
+  self_update || true
+  sed 's/^/agent-manager-sync:   /' "$NOTES_FILE" | redact || true
   DURATION=$((SECONDS - START))
   state_write "$TARGET" "$TARGET" "$NEXT_ATTEMPT" success ""
   log "applied ${TARGET:0:7} \"$SUBJECT\" in ${DURATION}s; paperclip-apply: $(tail -n 1 "$APPLY_OUT")"
   grep -v '^ok:' "$APPLY_OUT" | redact | sed 's/^/agent-manager-sync:   /' || true
-  report success "" "$DURATION" "$APPLY_OUT" || log "could not post to Paperclip (ignored)"
+  report success "" "$DURATION" "$APPLY_OUT" "$NOTES_FILE" "$DISK_WARN" || log "could not post to Paperclip (ignored)"
   exit 0
 fi
 
