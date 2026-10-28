@@ -197,8 +197,8 @@ Install it once, as root:
 ```bash
 bash /opt/agent-manager/deploy/install-sync.sh
 ```
-It records the commit checked out now as already applied, so the first run
-doesn't redo it. Re-run the installer after a change to `deploy/`: the sync
+It runs the first sync straight away, which applies what is checked out
+(idempotent: unchanged containers and agents are left alone). Re-run the installer after a change to `deploy/`: the sync
 applies the repo but does not replace its own installed copy.
 
 Watch and pause it:

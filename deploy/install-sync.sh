@@ -8,7 +8,6 @@ set -euo pipefail
 
 REPO=/opt/agent-manager
 STATE_DIR=/var/lib/agent-manager
-STATE_FILE=$STATE_DIR/sync-state.json
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 [ "$(id -u)" -eq 0 ] || { echo "error: run as root" >&2; exit 1; }
