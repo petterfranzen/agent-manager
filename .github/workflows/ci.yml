@@ -147,11 +147,14 @@ jobs:
           ! s 'env' | grep -q must-not-leak
           ! s 'env' | grep -q ci-fake-token
           # pc-task reads the agent's key and never prints it (no Paperclip here, so the call fails).
-          s 'pc-task --help' | grep -q 'pc-task --as <agent> status'
+          # Capture first: pc-task exits non-zero on these, which pipefail would count.
+          help=$(s 'pc-task --help')
+          echo "$help" | grep -q 'pc-task --as <agent> status'
           out=$(s 'pc-task --as Batou mine 2>&1' || true)
           echo "$out" | grep -q 'no response'
           ! echo "$out" | grep -q ci-fake-bridge-key
-          s 'pc-task --as Nobody mine 2>&1' | grep -q 'no Paperclip key for Nobody'
+          out=$(s 'pc-task --as Nobody mine 2>&1' || true)
+          echo "$out" | grep -q 'no Paperclip key for Nobody'
           ! s 'echo x > /run/paperclip-keys/batou.key' 2>/dev/null
           # No root login, no password login.
           ! ssh -i /tmp/ci_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1 true
