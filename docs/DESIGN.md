@@ -48,6 +48,28 @@ RAM. Every container is capped, so a runaway build is OOM-killed inside its
 container and can't take flight-tracker with it. The coordinator watches
 `/api/ops/stats` and flags pressure.
 
+## Deploys
+
+The VM pulls; nothing pushes to it. This keeps the Major off SSH and out of
+the VM's secrets.
+
+1. A PR merges to `main` and CI runs on the merge commit.
+2. `agent-manager-sync.timer` starts `agent-manager-sync` every 5 minutes. It
+   fetches `main` and exits unless there is a commit it hasn't applied.
+3. It reads the commit's check runs from GitHub's public API and waits until the
+   required ones all succeeded. It refuses a dirty working tree, a `main` that
+   was force-pushed, and a commit that has already failed three times.
+4. It fast-forwards `/opt/agent-manager`, runs `docker compose up -d --build`,
+   restarts Hermes if Paperclip's container was replaced, waits for Paperclip's
+   health check and runs `scripts/paperclip-apply.py`.
+5. It records the result in `/var/lib/agent-manager/sync-state.json` and posts a
+   comment on the `Deploys` issue in Paperclip: commit, result, duration and the
+   roster changes (or the end of the error). There is no automatic rollback.
+
+Anyone who can merge to `main` can run code as root on the VM, so `main` is
+protected by a ruleset (PR required, green CI). Setup is in
+[RUNBOOK.md](RUNBOOK.md), step 10.
+
 ## Models (OpenRouter, ZDR endpoints only)
 
 | Use | Model | $/M tokens in / out |

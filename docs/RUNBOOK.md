@@ -174,12 +174,48 @@ The script never resumes a paused agent: unpause Saito in Paperclip then too.
    `PAPERCLIP_API_KEY` = the key.
 3. Tell Claude. It checks the API, then does a first supervised nightly run.
 
+## 10. Hand deploys to the Major
+Once this is installed, merging a PR to `main` is the whole deploy. A systemd
+timer runs `agent-manager-sync` every 5 minutes, which:
+- fetches `main` and does nothing if the VM already runs that commit;
+- waits until every CI check on that exact commit has passed (the names it
+  requires are listed at the top of `deploy/vm-sync.sh`);
+- fast-forwards `/opt/agent-manager`, runs `docker compose up -d --build`
+  (restarting Hermes if Paperclip's container was replaced), waits for
+  Paperclip's health check, then runs `scripts/paperclip-apply.py`;
+- posts one comment per deploy on the open `Deploys` issue in Paperclip
+  (created on first use). A failed step is reported there too and is not
+  rolled back; after 3 failures on the same commit it stops until a new commit
+  lands. It also refuses to run if `/opt/agent-manager` has local changes or
+  `main` was force-pushed.
+
+**Trust model.** Anyone who can merge to `main` can run code as root on the
+VM. `main` is therefore protected by a ruleset that requires a PR and green CI,
+and the sync only ever reads the public GitHub API: no inbound access, no new keys.
+
+Install it once, as root:
+```bash
+bash /opt/agent-manager/deploy/install-sync.sh
+```
+It runs the first sync straight away, which applies what is checked out
+(idempotent: unchanged containers and agents are left alone). Re-run the installer after a change to `deploy/`: the sync
+applies the repo but does not replace its own installed copy.
+
+Watch and pause it:
+```bash
+systemctl list-timers agent-manager-sync.timer
+journalctl -u agent-manager-sync -n 50
+cat /var/lib/agent-manager/sync-state.json
+systemctl disable --now agent-manager-sync.timer    # pause; enable --now to resume
+```
+To run it by hand, use `systemctl start agent-manager-sync`.
+
 ## Day to day
 | Task | Command |
 |---|---|
 | Status and memory | `cd /opt/agent-manager && docker compose ps && docker stats --no-stream` |
 | Logs | `docker compose logs --tail 100 <service>` |
-| Update after a merged PR | `git pull && docker compose up -d --build` |
+| Update after a merged PR | Nothing: the sync applies it within ~5 minutes of green CI (step 10). By hand: `systemctl start agent-manager-sync` |
 | Stop everything (data kept) | `docker compose down` |
 | Disk used by Docker | `docker system df` |
 

@@ -19,6 +19,7 @@ public).
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-10-28 | The VM pulls agent-manager's main every 5 minutes and applies a commit only when all its CI checks passed; results are posted to a "Deploys" issue in Paperclip. main is protected by a ruleset. | Petter wants the Major to push config without him running commands, without giving the Major SSH or new keys. |
 | 2026-10-28 | Paperclip budgets allow unpriced usage; the OpenRouter key's $20 cap is the real limit. Sign-up closed, announcements off. | Hermes reports tokens, not cost, so the default "block" paused the whole company after Tachikoma's first run. |
 | 2026-10-27 | Weekday mornings, the check-in's push ends with one gentle backlog question (skipped if Petter added something in the last day). No extra notifications. | Petter wants a backlog of ideas and tasks to build up without being nagged. |
 | 2026-10-27 | Paperclip's agents, budgets, routines and avatars become a roster file applied by a script, not UI clicks. | Recreatable from code. |
