@@ -1,0 +1,22 @@
+[Unit]
+Description=Apply CI-green commits from agent-manager main
+Documentation=https://github.com/petterfranzen/agent-manager/blob/main/docs/RUNBOOK.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/agent-manager-sync
+TimeoutStartSec=20min
+Nice=10
+
+# Modest hardening. It runs as root and talks to Docker, and compose writes
+# under /opt and /var/lib/docker, so no ProtectSystem=strict. ProtectHome is
+# left off too: docker and buildx keep their config under /root/.docker.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true

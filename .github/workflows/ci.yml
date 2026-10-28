@@ -87,6 +87,27 @@ jobs:
       - name: paperclip-apply.py against a fake Paperclip
         run: python3 -m unittest scripts/test_paperclip_apply.py
 
+  deploy:
+    name: Deploy scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: bash -n and shellcheck
+        run: |
+          set -euo pipefail
+          for f in deploy/*.sh; do bash -n "$f"; done
+          shellcheck deploy/*.sh
+      - name: systemd-analyze verify
+        run: |
+          set -euo pipefail
+          if ! command -v systemd-analyze >/dev/null; then
+            echo "systemd-analyze is not on this runner; skipping"
+            exit 0
+          fi
+          # verify checks that ExecStart exists, so put the script where the unit expects it.
+          sudo install -m 0755 deploy/vm-sync.sh /usr/local/sbin/agent-manager-sync
+          systemd-analyze verify deploy/agent-manager-sync.service deploy/agent-manager-sync.timer
+
   sandbox:
     name: Sandbox image smoke test
     runs-on: ubuntu-latest
