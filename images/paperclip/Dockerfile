@@ -37,7 +37,7 @@
 FROM ghcr.io/paperclipai/paperclip:2026.1023.0@sha256:40f46940c4612ead131aebe6079cd4651f8cd1434af49f7c621887f4a452a62e AS upstream
 
 # Same Node base as upstream's `base` stage (node:24-trixie-slim), by digest.
-FROM node:24-trixie-slim@sha256:89c5244bc22a9bc3287d89ebc7e49b9cb5bb84cd40e6175ac3421d5a9f68b95a
+FROM node:25-trixie-slim@sha256:aabbe39553d15ede8a97cc60c9e1a97034ff772afcf696ea42b94e7f5f2ec71b
 
 ARG USER_UID=1000
 ARG USER_GID=1000
