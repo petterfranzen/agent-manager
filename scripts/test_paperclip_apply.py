@@ -2,7 +2,10 @@
 
 Run: python3 -m unittest scripts/test_paperclip_apply.py
 The fake implements only the endpoints the script uses, with the response
-shapes of Paperclip v2026.1023.0.
+shapes of Paperclip v2026.1023.0. Budgets follow its rules: a company or agent
+budget creates and mirrors a policy (unpriced usage "block" by default), saving
+a policy releases the budget holds and the budget pause it owns, and nothing
+ever releases a hold set by hand.
 """
 
 import base64
@@ -35,6 +38,7 @@ class FakePaperclip:
         self.company = {
             "id": str(uuid.uuid4()), "name": "Section 9", "status": "active",
             "budgetMonthlyCents": 0, "requireBoardApprovalForNewAgents": require_approval,
+            "pauseReason": None,
         }
         self.companies = [self.company]
         self.agents = {}
@@ -42,12 +46,17 @@ class FakePaperclip:
         self.avatars = {}   # agent id -> sha256
         self.routines = {}
         self.triggers = {}
+        self.policies = {}  # (scope type, scope id) -> monthly policy
+        self.unpriced_events = {}  # scope id -> unpriced cost events this month
+        self.spent = {}  # scope id -> billed cents this month
+        self.expose_holds = True
 
     def seed_agent(self, name, adapter_type="hermes_gateway", config=None, **fields):
         aid = str(uuid.uuid4())
         row = {"id": aid, "companyId": self.company["id"], "name": name, "role": "general",
                "title": None, "status": "idle", "adapterType": adapter_type,
-               "adapterConfig": config or {}, "budgetMonthlyCents": 0, "appearance": {}}
+               "adapterConfig": config or {}, "budgetMonthlyCents": 0, "appearance": {},
+               "lifecycleHolds": [], "pauseReason": None}
         row.update(fields)
         self.agents[aid] = row
         return row
@@ -56,7 +65,49 @@ class FakePaperclip:
         row = copy.deepcopy(row)
         if "apiKey" in row["adapterConfig"]:
             row["adapterConfig"]["apiKey"] = REDACTED
+        if not self.expose_holds:
+            del row["lifecycleHolds"]
         return row
+
+    def upsert_policy(self, scope, scope_id, amount, unpriced=None, active=None):
+        key = (scope, scope_id)
+        pol = self.policies.setdefault(key, {"unpricedUsagePolicy": "block", "isActive": True})
+        pol.update(scopeType=scope, scopeId=scope_id, metric="billed_cents",
+                   windowKind="calendar_month_utc", amount=amount)
+        if unpriced is not None:
+            pol["unpricedUsagePolicy"] = unpriced
+        pol["isActive"] = amount > 0 and (pol["isActive"] if active is None else active)
+        if scope == "company":
+            self.company["budgetMonthlyCents"] = amount
+        elif scope_id in self.agents:
+            self.agents[scope_id]["budgetMonthlyCents"] = amount
+        self.mutations += 1
+        self.reconcile()
+
+    def blocks(self, scope_id, pol):
+        if not pol["isActive"] or pol["amount"] <= 0:
+            return False
+        unpriced = pol["unpricedUsagePolicy"] != "allow" and self.unpriced_events.get(scope_id, 0) > 0
+        return self.spent.get(scope_id, 0) >= pol["amount"] or unpriced
+
+    def reconcile(self):
+        """What the server does after a policy change: lift the budget pause it owns."""
+        c = self.company
+        pol = self.policies.get(("company", c["id"]))
+        if c["status"] == "paused" and c["pauseReason"] == "budget" and not (pol and self.blocks(c["id"], pol)):
+            c["status"], c["pauseReason"] = "active", None
+        for a in self.agents.values():
+            if a["status"] in ("pending_approval", "terminated"):
+                continue
+            pol = self.policies.get(("agent", a["id"]))
+            holds = [h for h in a["lifecycleHolds"] if h not in ("budget", "company_paused")]
+            if pol and self.blocks(a["id"], pol):
+                holds.append("budget")
+            if c["status"] == "paused":
+                holds.append("company_paused")
+            a["lifecycleHolds"] = holds
+            a["pauseReason"] = holds[0] if holds else None
+            a["status"] = "paused" if holds else ("idle" if a["status"] == "paused" else a["status"])
 
     def view_routine(self, r):
         out = dict(r)
@@ -80,6 +131,7 @@ class FakePaperclip:
             return 400, {"error": "unexpected field"}
         self.company.update(body)
         self.mutations += 1
+        self.upsert_policy("company", cid, body["budgetMonthlyCents"])
         return 200, self.company
 
     def h_agents(self, body, cid):
@@ -93,6 +145,8 @@ class FakePaperclip:
                               budgetMonthlyCents=body["budgetMonthlyCents"], status=status)
         self.secrets[row["id"]] = body["adapterConfig"]["apiKey"]
         self.mutations += 1
+        if body["budgetMonthlyCents"] > 0:
+            self.upsert_policy("agent", row["id"], body["budgetMonthlyCents"])
         return row
 
     def h_create_agent(self, body, cid):
@@ -133,7 +187,25 @@ class FakePaperclip:
             row["adapterConfig"] = merged
         row.update(body)
         self.mutations += 1
+        if "budgetMonthlyCents" in body:
+            self.upsert_policy("agent", aid, body["budgetMonthlyCents"])
         return 200, self.view_agent(row)
+
+    def h_overview(self, body, cid):
+        out = []
+        for (scope, scope_id), pol in self.policies.items():
+            out.append(dict(pol, amount=pol["amount"] if pol["isActive"] else 0))
+        return 200, {"companyId": cid, "policies": out, "activeIncidents": []}
+
+    def h_policy(self, body, cid):
+        scope, scope_id = body["scopeType"], body["scopeId"]
+        known = scope_id == self.company["id"] if scope == "company" else scope_id in self.agents
+        if not known:
+            return 404, {"error": "Budget scope not found"}
+        if body.get("metric") != "billed_cents" or body.get("windowKind") != "calendar_month_utc":
+            return 400, {"error": "unexpected policy key"}
+        self.upsert_policy(scope, scope_id, body["amount"], body.get("unpricedUsagePolicy"), body.get("isActive"))
+        return 200, self.policies[(scope, scope_id)]
 
     def h_avatar(self, body, cid, aid):
         row = self.agents.get(aid)
@@ -194,6 +266,8 @@ class FakePaperclip:
         ("POST", r"/api/companies/([^/]+)/agent-hires", h_hire),
         ("POST", r"/api/agents/([^/]+)/approve", h_approve),
         ("PATCH", r"/api/agents/([^/]+)", h_patch_agent),
+        ("GET", r"/api/companies/([^/]+)/budgets/overview", h_overview),
+        ("POST", r"/api/companies/([^/]+)/budgets/policies", h_policy),
         ("PUT", r"/api/companies/([^/]+)/agents/([^/]+)/avatar", h_avatar),
         ("GET", r"/api/companies/([^/]+)/routines", h_routines),
         ("POST", r"/api/companies/([^/]+)/routines", h_create_routine),
@@ -315,11 +389,13 @@ class ApplyTest(unittest.TestCase):
 
     def test_second_run_changes_nothing_and_sends_no_key(self):
         self.apply_ok()
-        state = copy.deepcopy((self.fake.agents, self.fake.routines, self.fake.triggers, self.fake.company))
+        state = copy.deepcopy((self.fake.agents, self.fake.routines, self.fake.triggers, self.fake.company,
+                               self.fake.policies))
         mutations, mark = self.fake.mutations, len(self.fake.log)
         out = self.apply_ok().stdout
         self.assertEqual(self.fake.mutations, mutations)
-        self.assertEqual(state, (self.fake.agents, self.fake.routines, self.fake.triggers, self.fake.company))
+        self.assertEqual(state, (self.fake.agents, self.fake.routines, self.fake.triggers, self.fake.company,
+                                 self.fake.policies))
         self.assertEqual(self.key_sends(mark), [])
         # The only non-GET calls are avatar uploads, which the server ignores when unchanged.
         self.assertTrue(all(r["method"] == "PUT" and r["path"].endswith("/avatar")
@@ -327,6 +403,7 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("ok: Batou unchanged", out)
         self.assertIn("ok: routine Nightly build unchanged", out)
         self.assertNotIn("create", out)
+        self.assertIn("ok: budget policies unchanged (unpriced allow)", out)
         self.assertIn("done: 0 change(s)", out)
 
     def test_set_api_key_sends_it_to_every_agent(self):
@@ -388,6 +465,186 @@ class ApplyTest(unittest.TestCase):
         self.apply_ok("--dry-run")
         self.assertEqual(self.writes(mark), [])
         self.assertEqual(self.agent("Batou")["budgetMonthlyCents"], 1)
+
+    def policy_writes(self, since=0):
+        return [r for r in self.writes(since) if r["path"].endswith("/budgets/policies")]
+
+    def test_first_run_sets_a_policy_for_the_company_and_every_agent(self):
+        out = self.apply_ok().stdout
+        policies = self.fake.policies
+        self.assertEqual(len(policies), 6)
+        cid = self.fake.company["id"]
+        self.assertEqual((policies[("company", cid)]["amount"], policies[("company", cid)]["unpricedUsagePolicy"]),
+                         (2000, "allow"))
+        for name, cents in (("Tachikoma", 1000), ("Batou", 400), ("Ishikawa", 300), ("Togusa", 200), ("Saito", 100)):
+            pol = policies[("agent", self.agent(name)["id"])]
+            self.assertEqual((pol["amount"], pol["unpricedUsagePolicy"], pol["isActive"]), (cents, "allow", True), name)
+        self.assertIn("policy company Section 9: unpriced block -> allow", out)
+        self.assertIn("policy agent Tachikoma: unpriced block -> allow", out)
+        body = self.policy_writes()[0]["body"]
+        self.assertEqual(body, {"scopeType": "company", "scopeId": cid, "metric": "billed_cents",
+                                "windowKind": "calendar_month_utc", "amount": 2000, "isActive": True,
+                                "unpricedUsagePolicy": "allow"})
+
+    def test_policy_drift_is_fixed_and_a_rerun_writes_none(self):
+        self.apply_ok()
+        batou = self.agent("Batou")["id"]
+        self.fake.policies[("agent", batou)].update(unpricedUsagePolicy="block", amount=1)
+        self.fake.policies[("company", self.fake.company["id"])]["isActive"] = False
+        mark = len(self.fake.log)
+        out = self.apply_ok().stdout
+        self.assertIn("policy agent Batou: amount 1 -> 400 cents; unpriced block -> allow", out)
+        self.assertIn("policy company Section 9: amount 0 -> 2000 cents", out)
+        self.assertEqual(len(self.policy_writes(mark)), 2)
+        self.assertEqual(self.fake.policies[("agent", batou)]["unpricedUsagePolicy"], "allow")
+        self.assertTrue(self.fake.policies[("company", self.fake.company["id"])]["isActive"])
+        mark = len(self.fake.log)
+        self.apply_ok()
+        self.assertEqual(self.policy_writes(mark), [])
+
+    def block_everything(self, skip=()):
+        """Tachikoma ran once: unpriced usage, so the default policies paused the company and agents."""
+        self.fake.company.update(status="paused", pauseReason="budget")
+        for a in self.fake.agents.values():
+            if a["name"] not in skip:
+                self.fake.unpriced_events[a["id"]] = 1
+        self.fake.unpriced_events[self.fake.company["id"]] = 1
+        for key, pol in self.fake.policies.items():
+            pol["unpricedUsagePolicy"] = "block"
+        self.fake.reconcile()
+
+    def test_budget_paused_company_and_agents_are_resumed(self):
+        self.apply_ok()
+        self.block_everything()
+        self.assertEqual(self.fake.company["status"], "paused")
+        self.assertTrue(all(a["status"] == "paused" for a in self.fake.agents.values()))
+        out = self.apply_ok().stdout
+        self.assertEqual(self.fake.company["status"], "active")
+        self.assertIsNone(self.fake.company["pauseReason"])
+        self.assertTrue(all(a["status"] == "idle" and a["lifecycleHolds"] == [] for a in self.fake.agents.values()))
+        self.assertIn("resume company Section 9: budget pause lifted", out)
+        self.assertIn("resume agent Tachikoma: budget pause lifted", out)
+        self.assertNotIn("left alone", out)
+        mark = len(self.fake.log)
+        out = self.apply_ok().stdout
+        self.assertEqual(self.policy_writes(mark), [])
+        self.assertNotIn("resume", out)
+
+    def test_budget_pause_with_policy_already_right_is_nudged(self):
+        self.apply_ok()
+        self.block_everything()
+        # Someone set "allow" in the UI, but a stale hold is still there.
+        for pol in self.fake.policies.values():
+            pol["unpricedUsagePolicy"] = "allow"
+        tachikoma = self.agent("Tachikoma")
+        tachikoma.update(status="paused", lifecycleHolds=["budget"], pauseReason="budget")
+        self.fake.company.update(status="paused", pauseReason="budget")
+        mark = len(self.fake.log)
+        out = self.apply_ok().stdout
+        self.assertEqual(self.fake.company["status"], "active")
+        self.assertEqual(tachikoma["status"], "idle")
+        self.assertIn("resume agent Tachikoma: budget pause lifted", out)
+        self.assertGreaterEqual(len(self.policy_writes(mark)), 1)
+
+    def test_agent_paused_by_a_human_is_left_alone(self):
+        self.apply_ok()
+        saito = self.agent("Saito")
+        saito.update(status="paused", lifecycleHolds=["manual"], pauseReason="manual")
+        self.block_everything(skip=("Saito",))
+        out = self.apply_ok().stdout
+        self.assertEqual((saito["status"], saito["lifecycleHolds"], saito["pauseReason"]),
+                         ("paused", ["manual"], "manual"))
+        self.assertEqual(self.agent("Batou")["status"], "idle")
+        self.assertEqual(self.fake.company["status"], "active")
+        # The company's budget pause also held Saito; the company's is lifted, Petter's is not.
+        self.assertIn("agent Saito: budget pause lifted; still paused (manual), left alone", out)
+        self.assertNotIn("resume agent Saito", out)
+        # A re-run with only Saito paused writes nothing but the idempotent avatar PUTs.
+        mark = len(self.fake.log)
+        out = self.apply_ok().stdout
+        self.assertEqual(self.writes(mark), [w for w in self.writes(mark) if w["path"].endswith("/avatar")])
+        self.assertEqual(saito["status"], "paused")
+        self.assertIn("paused (manual): Saito: left alone", out)
+
+    def test_budget_and_human_hold_together_keep_the_human_hold(self):
+        self.apply_ok()
+        saito = self.agent("Saito")
+        self.fake.unpriced_events[saito["id"]] = 1
+        self.fake.policies[("agent", saito["id"])]["unpricedUsagePolicy"] = "block"
+        saito["lifecycleHolds"] = ["manual"]
+        self.fake.reconcile()
+        self.assertEqual(saito["lifecycleHolds"], ["manual", "budget"])
+        out = self.apply_ok().stdout
+        self.assertEqual((saito["status"], saito["lifecycleHolds"]), ("paused", ["manual"]))
+        self.assertIn("agent Saito: budget pause lifted; still paused (manual), left alone", out)
+
+    def test_company_paused_by_a_human_is_not_resumed(self):
+        self.apply_ok()
+        self.fake.company.update(status="paused", pauseReason="manual")
+        self.fake.reconcile()
+        out = self.apply_ok().stdout
+        self.assertEqual((self.fake.company["status"], self.fake.company["pauseReason"]), ("paused", "manual"))
+        self.assertTrue(all(a["status"] == "paused" for a in self.fake.agents.values()))
+        self.assertIn("paused (manual): Section 9: left alone", out)
+        self.assertIn("paused (company_paused): Batou: left alone", out)
+
+    def test_pause_without_a_reason_is_reported_not_resumed(self):
+        self.apply_ok()
+        batou = self.agent("Batou")
+        batou.update(status="paused", pauseReason=None)
+        self.fake.expose_holds = False
+        mark = len(self.fake.log)
+        out = self.apply_ok().stdout
+        self.assertEqual(batou["status"], "paused")
+        self.assertIn("paused (budget?): Batou: resume it in Paperclip", out)
+        self.assertEqual(self.policy_writes(mark), [])
+
+    def test_pause_reason_alone_is_enough_without_holds(self):
+        self.apply_ok()
+        self.fake.expose_holds = False
+        self.block_everything()
+        out = self.apply_ok().stdout
+        self.assertEqual(self.fake.company["status"], "active")
+        self.assertIn("resume agent Batou: budget pause lifted", out)
+
+    def test_cap_still_exceeded_stays_paused_and_is_reported(self):
+        self.apply_ok()
+        batou = self.agent("Batou")
+        self.fake.spent[batou["id"]] = 400
+        self.fake.reconcile()
+        self.assertEqual(batou["status"], "paused")
+        out = self.apply_ok().stdout
+        self.assertEqual(batou["status"], "paused")
+        self.assertIn("still paused (budget): agent Batou", out)
+        self.assertNotIn("resume agent Batou", out)
+
+    def test_dry_run_plans_policies_and_resumes_but_writes_nothing(self):
+        self.apply_ok()
+        self.block_everything(skip=("Saito",))
+        self.agent("Saito").update(status="paused", lifecycleHolds=["manual"], pauseReason="manual")
+        before = copy.deepcopy((self.fake.company, self.fake.agents, self.fake.policies))
+        mark = len(self.fake.log)
+        out = self.apply_ok("--dry-run").stdout
+        self.assertEqual(self.writes(mark), [])
+        self.assertEqual(before, (self.fake.company, self.fake.agents, self.fake.policies))
+        self.assertIn("[dry-run] policy company Section 9: unpriced block -> allow", out)
+        self.assertIn("[dry-run] resume company Section 9: budget pause", out)
+        self.assertIn("[dry-run] resume agent Tachikoma: budget pause", out)
+        self.assertIn("[dry-run] paused (manual): Saito: left alone", out)
+
+    def test_dry_run_on_an_empty_paperclip_plans_the_policies(self):
+        out = self.apply_ok("--dry-run").stdout
+        self.assertEqual(self.writes(), [])
+        self.assertIn("[dry-run] policy agent Tachikoma: create 1000 cents, unpriced allow", out)
+
+    def test_roster_unpriced_usage_must_be_allow_or_block(self):
+        roster = (ROOT / "agents" / "roster.toml").read_text().replace('unpriced_usage = "allow"', 'unpriced_usage = "maybe"')
+        path = Path(self.tmp.name) / "roster.toml"
+        path.write_text(roster)
+        proc = self.apply("--roster", str(path))
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("unpriced_usage must be 'allow' or 'block'", proc.stderr)
+        self.assertEqual(self.fake.log, [])
 
     def test_agent_not_in_roster_is_reported_not_touched(self):
         other = self.fake.seed_agent("Gally", "claude_local", {"model": "x"})

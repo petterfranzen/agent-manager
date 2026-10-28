@@ -9,6 +9,11 @@
 [company]
 name = "Section 9"
 budget_monthly_cents = 2000
+# Hermes reports tokens, not dollars, so every run is "unpriced" usage. With
+# "block" (Paperclip's default) one run pauses the agent and the whole company.
+# "allow" lets Paperclip record $0 for those runs, so the OpenRouter key's $20
+# monthly cap is the real limit and the budgets here are bookkeeping.
+unpriced_usage = "allow"
 
 # Hermes gateway adapter settings shared by every agent. The gateway key is
 # not here: the script reads API_SERVER_KEY from /etc/agent-manager/hermes.env.
