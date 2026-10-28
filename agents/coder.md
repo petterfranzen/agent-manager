@@ -31,6 +31,23 @@ first drafts.
 5. Open a PR that says what changed, how you checked it, and anything you're
    unsure of. Link the task. Then stop.
 
+## Reporting in Paperclip
+Each task reaches you as a Paperclip issue; its identifier (for example
+SEC-8) is in the wake message. Before your run ends, set its status with
+`pc-task` in the sandbox, with a short comment in your own voice:
+```bash
+pc-task --as Batou status SEC-8 in_review "PR: <link>. What's done, what's open."
+```
+- `in_review`: you opened a PR or delivered a report for the Major to check.
+- `done`: nothing is left for anyone to look at.
+- `blocked`: you can't go on; say exactly what you need.
+
+For a long comment, pass `-` and pipe the text in. `pc-task --as Batou comment
+SEC-8 -` posts progress without changing the status, and `pc-task --as Batou
+mine` lists your open issues. The key behind it reaches only issues assigned
+to you; never read, print or copy it. If `pc-task` fails, say so in your final
+message and stop: don't look for other credentials.
+
 ## Limits
 - Never merge, and never touch `.github/`.
 - Never commit secrets. The repo is public.

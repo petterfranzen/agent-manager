@@ -94,6 +94,8 @@ services:
     env_file: /etc/agent-manager/sandbox.env   # GH_TOKEN (fine-grained, ghost-in-the-machine only)
     volumes:
       - /etc/agent-manager/sandbox_authorized_keys:/etc/ssh/authorized_keys/agent:ro
+      # One task_bridge key per agent, owned by the agent user, mode 0400 (paperclip-apply.py).
+      - /etc/agent-manager/bridge-keys:/run/paperclip-keys:ro
       - sandbox-hostkeys:/etc/ssh/hostkeys
       - sandbox-work:/home/agent/work
       - sandbox-tools:/home/agent/.local/share/mise

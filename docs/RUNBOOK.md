@@ -158,6 +158,15 @@ python3 scripts/paperclip-apply.py --dry-run
 python3 scripts/paperclip-apply.py
 ```
 
+Last, it gives each agent a Paperclip `task_bridge` key, so the agent can set
+the status of and comment on its own issues with `pc-task` in the sandbox
+(`docs/paperclip.md`, section 6). The key is written once to
+`/etc/agent-manager/bridge-keys/<agent>.key` (mode 0400, owned by the sandbox
+user, uid 10001) and the sandbox mounts that directory read-only. To rotate a
+key, delete its file and re-run: the script revokes the old key and mints a
+new one. `bridge key Batou: mint (new)` on the first run, `ok: bridge key
+Batou` after.
+
 The company must exist already (step 6) and be named `Section 9`.
 Plain HTTP is fine for the gateway: Hermes and Paperclip share a network
 namespace, so this is loopback.

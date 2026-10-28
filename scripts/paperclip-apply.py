@@ -3,19 +3,21 @@
 
 Runs on the VM host as root, against Paperclip on loopback. Safe to re-run:
 it creates what is missing and changes only what differs. It never deletes.
-It also keeps the budget policies in step with the roster and lifts budget
-pauses (never a pause set by hand).
+It also keeps the budget policies in step with the roster, lifts budget
+pauses (never a pause set by hand), and gives each agent a task_bridge key
+so it can report on its own issues (written once to <secrets-dir>/bridge-keys).
 Standard library only. See docs/RUNBOOK.md, step 7.
 
 Secrets come from root-only files, never from arguments:
   PAPERCLIP_BOARD_KEY  in <secrets-dir>/paperclip-board.env
   API_SERVER_KEY       in <secrets-dir>/hermes.env
-Neither is printed or logged.
+None of these, nor the minted bridge keys, is printed or logged.
 """
 
 import argparse
 import base64
 import json
+import os
 import sys
 import tomllib
 import urllib.error
@@ -37,6 +39,13 @@ UNPRICED = ("allow", "block")
 MAX_AVATAR_BYTES = 512 * 1024
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+# Each agent's task_bridge key: it may read, comment on and set the status of
+# issues assigned to it, and create its own sub-tasks in BRIDGE_PROJECT, nothing
+# else (server/src/services/authorization.ts, decideTaskBridgeAccess). The file
+# belongs to the sandbox's agent user (uid 10001, sandbox/Dockerfile), read-only.
+BRIDGE_KEY_NAME = "task-bridge"
+BRIDGE_PROJECT = "Agent work"
+SANDBOX_UID = 10001
 
 
 class ApplyError(Exception):
@@ -178,9 +187,26 @@ def read_avatar(rel):
     return base64.b64encode(data).decode("ascii")
 
 
+def write_key(path, token):
+    """Write atomically, mode 0400, owned by the sandbox agent when run as root."""
+    path.parent.mkdir(mode=0o711, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o711)
+    tmp = path.with_suffix(".tmp")
+    if tmp.exists():
+        tmp.unlink()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+    with os.fdopen(fd, "w") as f:
+        f.write(token + "\n")
+    if os.geteuid() == 0:
+        os.chown(tmp, SANDBOX_UID, SANDBOX_UID)
+    os.replace(tmp, path)
+
+
 class Applier:
-    def __init__(self, api, roster, dry_run, set_api_key, hermes_key):
+    def __init__(self, api, roster, dry_run, set_api_key, hermes_key, keys_dir, secrets):
         self.api = api
+        self.keys_dir = keys_dir
+        self.secrets = secrets
         self.roster = roster
         self.dry = dry_run
         self.set_api_key = set_api_key
@@ -229,6 +255,7 @@ class Applier:
 
         self.sync_policies(company, synced)
         self.lift_budget_pauses(company, by_name)
+        self.sync_bridge_keys(cid, synced)
         self.sync_avatars(company, synced, by_name)
 
         roster_names = {a["name"] for a in self.roster["agents"]}
@@ -455,6 +482,53 @@ class Applier:
             raise ApplyError(f"agent {name} was created as {agent['name']}: a same-named agent exists")
         return agent
 
+    def sync_bridge_keys(self, cid, synced):
+        project_id = self.bridge_project(cid)
+        for spec in self.roster["agents"]:
+            agent = synced[spec["name"]]
+            if agent.get("id") and agent.get("status") != "pending_approval":
+                self.sync_bridge_key(spec["name"], agent["id"], project_id)
+
+    def bridge_project(self, cid):
+        found = [p for p in self.api.call("GET", f"/api/companies/{q(cid)}/projects") or []
+                 if p.get("name") == BRIDGE_PROJECT and not p.get("archivedAt")]
+        if found:
+            return found[0]["id"]
+        res = self.write("POST", f"/api/companies/{q(cid)}/projects", {
+            "name": BRIDGE_PROJECT, "status": "in_progress",
+            "description": "Boundary of the agents' task_bridge keys: sub-tasks they create land here."})
+        self.change(f"project {BRIDGE_PROJECT}: create")
+        return (res or {}).get("id")
+
+    def sync_bridge_key(self, name, aid, project_id):
+        """A token is shown only when minted, so a missing file means re-mint and
+        revoke the old key; a key whose boundary is not the project likewise."""
+        path = self.keys_dir / f"{name.lower()}.key"
+        keys = [k for k in self.api.call("GET", f"/api/agents/{q(aid)}/keys") or []
+                if k.get("name") == BRIDGE_KEY_NAME and not k.get("revokedAt")]
+        good = [k for k in keys if (k.get("scope") or {}).get("kind") == "task_bridge"
+                and (k.get("scope") or {}).get("projectId") == project_id]
+        has_file = path.is_file() and path.stat().st_size > 0
+        if len(good) == 1 and len(keys) == 1 and has_file:
+            self.say(f"ok: bridge key {name}")
+            return
+        why = "no key file" if keys and not has_file else ("new" if not keys else "boundary changed")
+        if self.dry:
+            self.change(f"bridge key {name}: mint ({why})")
+            return
+        for k in keys:
+            self.write("DELETE", f"/api/agents/{q(aid)}/keys/{q(k['id'])}", None)
+        res = self.write("POST", f"/api/agents/{q(aid)}/keys", {
+            "name": BRIDGE_KEY_NAME,
+            "scope": {"kind": "task_bridge", "projectId": project_id},
+        }) or {}
+        token = res.get("token")
+        if not token:
+            raise ApplyError(f"bridge key {name}: Paperclip returned no token")
+        self.secrets.append(token)
+        write_key(path, token)
+        self.change(f"bridge key {name}: mint ({why})" + (f", revoked {len(keys)}" if keys else ""))
+
     def sync_avatars(self, company, synced, before):
         """Upload avatars last: Paperclip refuses them while the company is paused,
         and the budget step above may just have lifted that pause."""
@@ -558,7 +632,8 @@ def main(argv=None):
 
         roster = load_roster(args.roster)
         api = Api(args.base_url, board_key, redact)
-        Applier(api, roster, args.dry_run, args.set_api_key, hermes_key).run()
+        Applier(api, roster, args.dry_run, args.set_api_key, hermes_key,
+                sdir / "bridge-keys", secrets).run()
     except ApiError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

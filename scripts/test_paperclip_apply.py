@@ -54,6 +54,8 @@ class FakePaperclip:
         self.unpriced_events = {}  # scope id -> unpriced cost events this month
         self.spent = {}  # scope id -> billed cents this month
         self.expose_holds = True
+        self.projects = []
+        self.keys = {}  # agent id -> [key rows]; tokens are only in mint responses
 
     def seed_agent(self, name, adapter_type="hermes_gateway", config=None, **fields):
         aid = str(uuid.uuid4())
@@ -263,6 +265,39 @@ class FakePaperclip:
         self.mutations += 1
         return 200, self.triggers[tid]
 
+    def h_projects(self, body, cid):
+        return 200, self.projects
+
+    def h_create_project(self, body, cid):
+        row = {"id": str(uuid.uuid4()), "companyId": cid, "archivedAt": None, **body}
+        self.projects.append(row)
+        self.mutations += 1
+        return 201, row
+
+    def h_keys(self, body, aid):
+        return 200, [{k: v for k, v in row.items() if k != "token"} for row in self.keys.get(aid, [])]
+
+    def h_create_key(self, body, aid):
+        scope = body.get("scope") or {"kind": "standard"}
+        if scope.get("kind") == "task_bridge" and not (scope.get("projectId") or scope.get("parentIssueId")):
+            return 400, {"error": "task_bridge keys require at least one project or parent issue boundary"}
+        row = {"id": str(uuid.uuid4()), "name": body["name"], "scope": scope,
+               "revokedAt": None, "token": "pcp_" + uuid.uuid4().hex}
+        self.keys.setdefault(aid, []).append(row)
+        self.mutations += 1
+        return 201, dict(row)
+
+    def h_revoke_key(self, body, aid, kid):
+        for row in self.keys.get(aid, []):
+            if row["id"] == kid:
+                row["revokedAt"] = "2026-10-28T00:00:00Z"
+                self.mutations += 1
+                return 200, {"ok": True}
+        return 404, {"error": "Key not found"}
+
+    def live_keys(self, aid):
+        return [k for k in self.keys.get(aid, []) if not k["revokedAt"]]
+
     routes = [
         ("GET", r"/api/companies", h_companies),
         ("PATCH", r"/api/companies/([^/]+)", h_patch_company),
@@ -279,6 +314,11 @@ class FakePaperclip:
         ("PATCH", r"/api/routines/([^/]+)", h_patch_routine),
         ("POST", r"/api/routines/([^/]+)/triggers", h_create_trigger),
         ("PATCH", r"/api/routine-triggers/([^/]+)", h_patch_trigger),
+        ("GET", r"/api/companies/([^/]+)/projects", h_projects),
+        ("POST", r"/api/companies/([^/]+)/projects", h_create_project),
+        ("GET", r"/api/agents/([^/]+)/keys", h_keys),
+        ("POST", r"/api/agents/([^/]+)/keys", h_create_key),
+        ("DELETE", r"/api/agents/([^/]+)/keys/([^/]+)", h_revoke_key),
     ]
 
 
@@ -359,6 +399,52 @@ class ApplyTest(unittest.TestCase):
 
     def agent(self, name):
         return next(a for a in self.fake.agents.values() if a["name"] == name)
+
+    def key_file(self, name):
+        return Path(self.secrets_dir) / "bridge-keys" / f"{name.lower()}.key"
+
+    def test_bridge_keys_minted_once_into_files(self):
+        out = self.apply_ok().stdout
+        self.assertEqual([p["name"] for p in self.fake.projects], ["Agent work"])
+        project = self.fake.projects[0]["id"]
+        for a in self.fake.agents.values():
+            keys = self.fake.live_keys(a["id"])
+            self.assertEqual(len(keys), 1, a["name"])
+            self.assertEqual(keys[0]["scope"], {"kind": "task_bridge", "projectId": project})
+            path = self.key_file(a["name"])
+            self.assertEqual(path.read_text(), keys[0]["token"] + "\n")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o400)
+            self.assertNotIn(keys[0]["token"], out + self.last.stderr)
+        self.assertEqual(self.key_file("x").parent.stat().st_mode & 0o777, 0o711)
+
+        before = len(self.fake.log)
+        out = self.apply_ok().stdout
+        self.assertIn("ok: bridge key Batou", out)
+        self.assertEqual(self.writes(before), [w for w in self.writes(before) if "/keys" not in w["path"]])
+        self.assertFalse([w for w in self.writes(before) if "/projects" in w["path"]])
+
+    def test_bridge_key_reminted_when_file_lost(self):
+        self.apply_ok()
+        batou = self.agent("Batou")["id"]
+        old = self.fake.live_keys(batou)[0]
+        self.key_file("Batou").unlink()
+        out = self.apply_ok().stdout
+        self.assertIn("bridge key Batou: mint (no key file), revoked 1", out)
+        self.assertIsNotNone(old["revokedAt"])
+        new = self.fake.live_keys(batou)
+        self.assertEqual(len(new), 1)
+        self.assertEqual(self.key_file("Batou").read_text(), new[0]["token"] + "\n")
+        self.assertEqual(len(self.fake.live_keys(self.agent("Togusa")["id"])), 1)
+
+    def test_bridge_keys_dry_run_writes_nothing(self):
+        self.apply_ok()
+        self.fake.keys.clear()
+        for p in self.key_file("x").parent.iterdir():
+            p.unlink()
+        out = self.apply_ok("--dry-run").stdout
+        self.assertIn("bridge key Tachikoma: mint (new)", out)
+        self.assertEqual(self.fake.keys, {})
+        self.assertEqual(list(self.key_file("x").parent.iterdir()), [])
 
     def test_first_run_creates_everything(self):
         out = self.apply_ok().stdout

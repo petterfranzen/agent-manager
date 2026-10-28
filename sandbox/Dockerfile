@@ -47,5 +47,7 @@ COPY --chown=agent:agent --chmod=0755 pre-push /home/agent/.config/git/hooks/pre
 
 USER root
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+# Agents report on their own Paperclip issues with it (task_bridge keys, read-only mount).
+COPY --chmod=0755 pc-task /usr/local/bin/pc-task
 EXPOSE 22
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
