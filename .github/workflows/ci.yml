@@ -122,9 +122,14 @@ jobs:
           cp /tmp/ci_key.pub /tmp/authorized_keys
           # As on the VM: root-owned, not writable by others (sshd StrictModes).
           sudo chown root:root /tmp/authorized_keys && sudo chmod 0644 /tmp/authorized_keys
+          # As paperclip-apply.py writes them: dir 0711, key 0400 owned by the agent user.
+          mkdir -p /tmp/bridge-keys && echo pcp_ci-fake-bridge-key > /tmp/bridge-keys/batou.key
+          sudo chown -R 10001:10001 /tmp/bridge-keys/batou.key && sudo chmod 0400 /tmp/bridge-keys/batou.key
+          sudo chown root:root /tmp/bridge-keys && sudo chmod 0711 /tmp/bridge-keys
           docker run -d --name sb -p 127.0.0.1:2222:22 \
             -e GH_TOKEN=ci-fake-token -e OPENROUTER_API_KEY=must-not-leak \
-            -v /tmp/authorized_keys:/etc/ssh/authorized_keys/agent:ro sandbox:ci
+            -v /tmp/authorized_keys:/etc/ssh/authorized_keys/agent:ro \
+            -v /tmp/bridge-keys:/run/paperclip-keys:ro sandbox:ci
           for i in $(seq 1 20); do nc -z 127.0.0.1 2222 && break; sleep 1; done
       - name: Checks over SSH, as Hermes would connect
         run: |
@@ -141,6 +146,16 @@ jobs:
           # The container env (where a model key could sit) must not reach SSH sessions.
           ! s 'env' | grep -q must-not-leak
           ! s 'env' | grep -q ci-fake-token
+          # pc-task reads the agent's key and never prints it (no Paperclip here, so the call fails).
+          # Capture first: pc-task exits non-zero on these, which pipefail would count.
+          help=$(s 'pc-task --help')
+          echo "$help" | grep -q 'pc-task --as <agent> status'
+          out=$(s 'pc-task --as Batou mine 2>&1' || true)
+          echo "$out" | grep -q 'no response'
+          ! echo "$out" | grep -q ci-fake-bridge-key
+          out=$(s 'pc-task --as Nobody mine 2>&1' || true)
+          echo "$out" | grep -q 'no Paperclip key for Nobody'
+          ! s 'echo x > /run/paperclip-keys/batou.key' 2>/dev/null
           # No root login, no password login.
           ! ssh -i /tmp/ci_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1 true
           echo "sandbox ok"

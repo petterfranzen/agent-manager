@@ -20,6 +20,7 @@ public).
 | Date | Decision | Why |
 |---|---|---|
 | 2026-10-28 | Tachikoma's nightly routine is on (01:00 Stockholm). Other routines stay paused until each agent's supervised first run. | His first night shipped after one review round, and Petter liked it. |
+| 2026-10-28 | Each agent gets a Paperclip `task_bridge` key, used through `pc-task` in the sandbox, to set the status of and comment on its own issues (Petter: "we need a solution"). `paperclip-apply.py` mints them (boundary: project "Agent work") into `/etc/agent-manager/bridge-keys/`, mounted read-only into the sandbox. | Without it every run ended with the issue unresolved, Paperclip marked it blocked and spent recovery runs on it, and a timed-out issue could not be restarted. A `task_bridge` key reaches only issues assigned to its agent: no company-wide reads, other agents, secrets or wakes. Accepted risk: all five keys sit in the one shared sandbox, so code run there could use another agent's key on that agent's issues. The keys work only inside the VM; Cloudflare Access fronts the public URL. |
 | 2026-10-28 | The sync removes every Docker image no container uses, with no age filter. | `--filter until=168h` goes by build date, so the replaced 8.9 GB Paperclip image (built 23 Oct) stayed and the disk hit 95%. Rollbacks re-pull by digest. |
 | 2026-10-28 | Run timeouts: Batou and Ishikawa 60 minutes (`timeout_sec = 3600`), Tachikoma 3 hours (was 2) so he can plan and explore ideas before building. | Batou's and Ishikawa's first tasks, the crew page redesign and the Stockholm housing research, both hit the 10-minute default and ended in error with nothing delivered. The $20 company cap bounds the cost of longer runs (Petter). |
 | 2026-10-28 | Run a slim repackaging of the official Paperclip image, built in GitHub Actions to ghcr.io/petterfranzen/paperclip-slim and pinned by digest: no agent CLIs, no provider pack. | The official image is 3.4 GB compressed, two-thirds of it unused by our Hermes setup; the VM disk was 83% full. Fewer binaries next to the database credentials. |
@@ -47,7 +48,6 @@ public).
 | 2026-10-26 | `/api/ops/stats` behind Cloudflare Access with JWT verification; field names reveal no technology. | Monitoring without fingerprinting the stack. |
 
 ## Open
-- Hermes gets no Paperclip credential, so agents can't comment on or close their issues. Mint a scoped agent key for Hermes, or keep reporting through PRs? (`docs/paperclip.md`, section 6)
 - Paperclip plugins: none for now. The Cloudflare sandbox plugin doesn't support the Hermes adapter, and plugin code runs unsandboxed in the Paperclip container. Revisit when that changes (`docs/paperclip-plugins.md`).
 - Give the sandbox a headless browser, so the agents can check what they build renders (Tachikoma's first night missed two visible bugs).
 - Apply the roster on the VM and switch Saito to the Hermes gateway.

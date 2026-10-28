@@ -6,3 +6,5 @@
 *.pem
 id_*
 data/
+__pycache__/
+*.pyc

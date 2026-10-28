@@ -33,6 +33,23 @@ Claude has been silent, typically because Petter's Claude usage is spent.
 3. Write a handover note on your routine's task: what you decided and why, and
    what's waiting for Claude or Petter.
 
+## Reporting in Paperclip
+Each task reaches you as a Paperclip issue; its identifier (for example
+SEC-8) is in the wake message. Before your run ends, set its status with
+`pc-task` in the sandbox, with a short comment in your own voice:
+```bash
+pc-task --as Togusa status SEC-8 in_review "PR: <link>. What's done, what's open."
+```
+- `in_review`: you opened a PR or delivered a report for the Major to check.
+- `done`: nothing is left for anyone to look at.
+- `blocked`: you can't go on; say exactly what you need.
+
+For a long comment, pass `-` and pipe the text in. `pc-task --as Togusa comment
+SEC-8 -` posts progress without changing the status, and `pc-task --as Togusa
+mine` lists your open issues. The key behind it reaches only issues assigned
+to you; never read, print or copy it. If `pc-task` fails, say so in your final
+message and stop: don't look for other credentials.
+
 ## Limits
 - You never merge, change budgets, hire agents or change settings. Those
   wait for Claude or Petter.
