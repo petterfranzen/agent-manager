@@ -3,6 +3,8 @@
 
 Runs on the VM host as root, against Paperclip on loopback. Safe to re-run:
 it creates what is missing and changes only what differs. It never deletes.
+It also keeps the budget policies in step with the roster and lifts budget
+pauses (never a pause set by hand).
 Standard library only. See docs/RUNBOOK.md, step 7.
 
 Secrets come from root-only files, never from arguments:
@@ -28,6 +30,10 @@ ROLES = {
     "ceo", "cto", "cmo", "cfo", "security", "engineer",
     "designer", "pm", "qa", "devops", "researcher", "general",
 }
+# The budget policy the monthly caps live in (packages/shared validators/budget.ts).
+BUDGET_METRIC = "billed_cents"
+BUDGET_WINDOW = "calendar_month_utc"
+UNPRICED = ("allow", "block")
 MAX_AVATAR_BYTES = 512 * 1024
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -120,6 +126,9 @@ def load_roster(path):
     company = roster.get("company", {})
     need(company, "name", str, "[company]")
     need(company, "budget_monthly_cents", int, "[company]")
+    need(company, "unpriced_usage", str, "[company]")
+    if company["unpriced_usage"] not in UNPRICED:
+        raise ApplyError("roster: [company] unpriced_usage must be 'allow' or 'block'")
     defaults = roster.get("defaults", {})
     for key in ("api_base_url", "paperclip_api_url", "session_key_strategy"):
         need(defaults, key, str, "[defaults]")
@@ -203,6 +212,7 @@ class Applier:
                     if r.get("status") != "archived"]
 
         d = self.roster["defaults"]
+        synced = {}
         for spec in self.roster["agents"]:
             brief = read_text(spec["brief"], "brief")
             config = {
@@ -213,10 +223,14 @@ class Applier:
                 "instructions": brief,
             }
             agent = self.sync_agent(company, spec, config, by_name.get(spec["name"]))
+            synced[spec["name"]] = agent
             if agent.get("status") != "pending_approval":
                 self.sync_avatar(cid, spec, agent, by_name.get(spec["name"]))
             if spec.get("routine"):
                 self.sync_routine(cid, spec["routine"], agent.get("id"), routines)
+
+        self.sync_policies(company, synced)
+        self.lift_budget_pauses(company, by_name)
 
         roster_names = {a["name"] for a in self.roster["agents"]}
         for name in sorted(set(by_name) - roster_names):
@@ -246,6 +260,133 @@ class Applier:
             return
         self.write("PATCH", f"/api/companies/{q(company['id'])}", {"budgetMonthlyCents": want})
         self.change(f"company {company['name']}: budget {have} -> {want} cents")
+
+    def policy_body(self, scope, scope_id, cents):
+        """Upsert body for one scope. Warn percent and hard stop stay as they are."""
+        return {"scopeType": scope, "scopeId": scope_id, "metric": BUDGET_METRIC,
+                "windowKind": BUDGET_WINDOW, "amount": cents, "isActive": cents > 0,
+                "unpricedUsagePolicy": self.roster["company"]["unpriced_usage"]}
+
+    def sync_policies(self, company, synced):
+        """Make the company and every roster agent's monthly policy match the roster.
+
+        budgetMonthlyCents on the company or an agent already creates and mirrors
+        its policy, but with unpricedUsagePolicy "block"; this sets that field.
+        """
+        cid = company["id"]
+        overview = self.api.call("GET", f"/api/companies/{q(cid)}/budgets/overview") or {}
+        have = {(p.get("scopeType"), p.get("scopeId")): p for p in overview.get("policies") or []
+                if p.get("metric") == BUDGET_METRIC and p.get("windowKind") == BUDGET_WINDOW}
+        unpriced = self.roster["company"]["unpriced_usage"]
+        targets = [("company", cid, company["name"], self.roster["company"]["budget_monthly_cents"])]
+        targets += [("agent", synced[a["name"]].get("id"), a["name"], a["budget_monthly_cents"])
+                    for a in self.roster["agents"]]
+        before = self.changes
+        for scope, scope_id, name, cents in targets:
+            pol = have.get((scope, scope_id)) if scope_id else None
+            if pol is None and cents <= 0:
+                continue
+            if pol is None:
+                notes = [f"create {cents} cents, unpriced {unpriced}"]
+            else:
+                notes = []
+                if pol.get("amount") != cents:
+                    notes.append(f"amount {pol.get('amount')} -> {cents} cents")
+                if pol.get("unpricedUsagePolicy") != unpriced:
+                    notes.append(f"unpriced {pol.get('unpricedUsagePolicy')} -> {unpriced}")
+                if not notes:
+                    continue
+            self.write("POST", f"/api/companies/{q(cid)}/budgets/policies",
+                       self.policy_body(scope, scope_id, cents))
+            self.change(f"policy {scope} {name}: " + "; ".join(notes))
+        if self.changes == before:
+            self.say(f"ok: budget policies unchanged (unpriced {unpriced})")
+
+    @staticmethod
+    def pause_kind(row, company_budget=False):
+        """Why a row is paused: None (not paused), 'budget', 'other' or 'unknown'.
+
+        An agent's holds (lifecycleHolds) say it exactly. Without them,
+        pauseReason is the first hold. The server only ever clears holds it
+        owns (budget, company_paused), so a pause set by hand is never lifted
+        by this script.
+        """
+        if row.get("status") != "paused":
+            return None
+        holds = row.get("lifecycleHolds")
+        if isinstance(holds, list) and holds:
+            if "budget" in holds or (company_budget and "company_paused" in holds):
+                return "budget"
+            return "other"
+        reason = row.get("pauseReason")
+        if reason == "budget":
+            return "budget"
+        return "other" if reason else "unknown"
+
+    @staticmethod
+    def pause_reasons(row):
+        holds = row.get("lifecycleHolds")
+        if isinstance(holds, list) and holds:
+            return ", ".join(holds)
+        return row.get("pauseReason") or "unknown"
+
+    def lift_budget_pauses(self, company, agents_before):
+        """Resume the company and roster agents that are paused only by a budget.
+
+        Saving a policy makes the server release the holds it owns, for the
+        company and every agent. Anything still paused for a budget gets the
+        policy saved once more, then is reported. A pause with another reason
+        is left alone; one that cannot be told apart is reported, not touched.
+        """
+        cid = company["id"]
+        scope_kind = self.pause_kind(company)
+        todo = []  # (label, name, scope, scope id, cents)
+        if scope_kind == "budget":
+            todo.append(("company", company["name"], "company", cid,
+                         self.roster["company"]["budget_monthly_cents"]))
+        elif scope_kind:
+            self.pause_note(scope_kind, company["name"], company)
+        for spec in self.roster["agents"]:
+            row = agents_before.get(spec["name"])
+            kind = self.pause_kind(row, scope_kind == "budget") if row else None
+            if kind == "budget":
+                todo.append(("agent", spec["name"], "agent", row["id"], spec["budget_monthly_cents"]))
+            elif kind:
+                self.pause_note(kind, spec["name"], row)
+        if not todo:
+            return
+        if self.dry:
+            for label, name, *_ in todo:
+                self.change(f"resume {label} {name}: budget pause")
+            return
+        now = self.read_pause_state(cid)
+        for label, name, scope, scope_id, cents in todo:
+            if self.pause_kind(now.get(scope_id, {}), True):
+                self.write("POST", f"/api/companies/{q(cid)}/budgets/policies",
+                           self.policy_body(scope, scope_id, cents))
+        now = self.read_pause_state(cid)
+        for label, name, scope, scope_id, cents in todo:
+            row = now.get(scope_id, {})
+            kind = self.pause_kind(row, True)
+            if kind == "budget":
+                self.say(f"still paused (budget): {label} {name}: "
+                         "its cap or unpriced usage still blocks it; see Budgets in Paperclip")
+            elif kind:
+                self.change(f"{label} {name}: budget pause lifted; still paused "
+                            f"({self.pause_reasons(row)}), left alone")
+            else:
+                self.change(f"resume {label} {name}: budget pause lifted")
+
+    def pause_note(self, kind, name, row):
+        if kind == "unknown":
+            self.say(f"paused (budget?): {name}: resume it in Paperclip")
+        else:
+            self.say(f"paused ({self.pause_reasons(row)}): {name}: left alone")
+
+    def read_pause_state(self, cid):
+        rows = [c for c in self.api.call("GET", "/api/companies") or [] if c.get("id") == cid]
+        rows += self.api.call("GET", f"/api/companies/{q(cid)}/agents") or []
+        return {r["id"]: r for r in rows}
 
     def sync_agent(self, company, spec, config, have):
         """Create or update one agent. Returns its row (id is None in a dry run)."""

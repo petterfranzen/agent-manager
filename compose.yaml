@@ -44,6 +44,10 @@ services:
       PAPERCLIP_PUBLIC_URL: https://hq.sectionnine.dev
       NODE_OPTIONS: --max-old-space-size=512
       DO_NOT_TRACK: "1"
+      # The board is claimed; close email sign-up. Board API keys and the CLI login don't use it.
+      PAPERCLIP_AUTH_DISABLE_SIGN_UP: "true"
+      # No fetch of the announcements feed from pages.paperclip.ing.
+      PAPERCLIP_ANNOUNCEMENTS_ENABLED: "false"
     # Loopback only: cloudflared on the host publishes it behind Cloudflare Access.
     ports:
       - "127.0.0.1:3100:3100"

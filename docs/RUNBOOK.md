@@ -145,6 +145,19 @@ sends it only when it creates an agent, switches its adapter, or you pass
 `--set-api-key` (use that after rotating the gateway key). Agents in Paperclip
 but not in the roster are listed as "not in roster" and left alone.
 
+The script also sets the budget policies: the company's and each agent's monthly
+cap from the roster, with unpriced usage allowed (`unpriced_usage` in
+`roster.toml`; Hermes reports tokens, not dollars, so Paperclip's default
+`block` pauses everyone after one run). It then resumes the company and agents
+paused only by a budget. A pause set by hand (Saito's) is left alone and
+listed; if Paperclip doesn't say why something is paused, you get `paused
+(budget?): <name>: resume it in Paperclip`. After pulling this change:
+```bash
+cd /opt/agent-manager && git pull && docker compose up -d
+python3 scripts/paperclip-apply.py --dry-run
+python3 scripts/paperclip-apply.py
+```
+
 The company must exist already (step 6) and be named `Section 9`.
 Plain HTTP is fine for the gateway: Hermes and Paperclip share a network
 namespace, so this is loopback.
