@@ -187,7 +187,14 @@ timer runs `agent-manager-sync` every 5 minutes, which:
   (created on first use). A failed step is reported there too and is not
   rolled back; after 3 failures on the same commit it stops until a new commit
   lands. It also refuses to run if `/opt/agent-manager` has local changes or
-  `main` was force-pushed.
+  `main` was force-pushed;
+- after a successful deploy, prunes dangling images (`docker image prune -f`,
+  never `-a`) and build cache older than a week, and reports `Disk: N% used,
+  N GB free` plus the reclaimed space in that comment, prefixed with a
+  `WARNING` once the disk is 85% full. The installer also caps the journal at
+  200 MB (`/etc/systemd/journald.conf.d/agent-manager.conf`);
+- re-runs the installer (`--from-sync`) when a deploy changed `deploy/`, and
+  says so in the comment.
 
 **Trust model.** Anyone who can merge to `main` can run code as root on the
 VM. `main` is therefore protected by a ruleset that requires a PR and green CI,
@@ -198,8 +205,8 @@ Install it once, as root:
 bash /opt/agent-manager/deploy/install-sync.sh
 ```
 It runs the first sync straight away, which applies what is checked out
-(idempotent: unchanged containers and agents are left alone). Re-run the installer after a change to `deploy/`: the sync
-applies the repo but does not replace its own installed copy.
+(idempotent: unchanged containers and agents are left alone). The installer is
+only needed once: the sync re-installs its own copy when `deploy/` changes.
 
 Watch and pause it:
 ```bash
