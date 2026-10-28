@@ -266,12 +266,14 @@ EOF
 
 # Best effort, after a successful apply: every rebuild of the sandbox image
 # leaves the old one behind, and a switched image (e.g. to paperclip-slim) stays
-# on disk. Removes images no container uses and that are over a week old (an
-# image a container uses, running or stopped, is never removed), and build
-# cache older than a week. Writes the reclaimed-space lines to $NOTES_FILE. Never fails.
+# on disk. Removes every image no container uses (an image a container uses,
+# running or stopped, is never removed; a rollback re-pulls by digest), and
+# build cache older than a week. No age filter on images: `until` compares the
+# image's build date, not when it was pulled, so a just-replaced image built
+# days ago would stay. Writes the reclaimed-space lines to $NOTES_FILE. Never fails.
 cleanup() {
   local out
-  if out=$(docker image prune -a -f --filter "until=168h" 2>&1); then
+  if out=$(docker image prune -a -f 2>&1); then
     echo "$out" | grep -E 'Total( reclaimed space)?:' | sed 's/^/Images: /' >>"$NOTES_FILE" || true
   else
     log "docker image prune failed (ignored): $(echo "$out" | tail -n 1 | redact)"
