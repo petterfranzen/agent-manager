@@ -370,12 +370,12 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(tachikoma["title"], "Nightly builder")
         self.assertEqual(tachikoma["budgetMonthlyCents"], 1000)
         cfg = tachikoma["adapterConfig"]
-        self.assertEqual(cfg["timeoutSec"], 7200)
+        self.assertEqual(cfg["timeoutSec"], 10800)
         self.assertEqual(cfg["apiBaseUrl"], "http://127.0.0.1:8642")
         self.assertEqual(cfg["paperclipApiUrl"], "http://127.0.0.1:3100")
         self.assertEqual(cfg["sessionKeyStrategy"], "issue")
         self.assertEqual(cfg["instructions"], (ROOT / "agents/nightly-builder.md").read_text())
-        self.assertEqual(self.agent("Batou")["adapterConfig"]["timeoutSec"], 600)
+        self.assertEqual(self.agent("Togusa")["adapterConfig"]["timeoutSec"], 600)
         self.assertEqual(self.fake.secrets[tachikoma["id"]], self.hermes_key)
         self.assertEqual(len(self.fake.avatars), 5)
 

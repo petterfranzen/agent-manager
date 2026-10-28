@@ -30,7 +30,7 @@ title = "Nightly builder"
 brief = "agents/nightly-builder.md"
 avatar = "agents/avatars/tachikoma.png"
 budget_monthly_cents = 1000
-timeout_sec = 7200
+timeout_sec = 10800
 
 [agents.routine]
 title = "Nightly build"
@@ -46,6 +46,7 @@ title = "Coder"
 brief = "agents/coder.md"
 avatar = "agents/avatars/batou.png"
 budget_monthly_cents = 400
+timeout_sec = 3600
 
 [[agents]]
 name = "Ishikawa"
@@ -54,6 +55,7 @@ title = "Researcher"
 brief = "agents/researcher.md"
 avatar = "agents/avatars/ishikawa.png"
 budget_monthly_cents = 300
+timeout_sec = 3600
 
 [[agents]]
 name = "Togusa"
