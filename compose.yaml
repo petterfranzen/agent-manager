@@ -30,7 +30,7 @@ services:
     logging: *logging
 
   paperclip:
-    image: ghcr.io/paperclipai/paperclip:2026.1023.0@sha256:40f46940c4612ead131aebe6079cd4651f8cd1434af49f7c621887f4a452a62e
+    image: ghcr.io/petterfranzen/paperclip-slim:2026.1023.0@sha256:11f779b7d7f9cace740878fc9504ed9a08f285bd318129ed0a131f28ebd311b1
     restart: unless-stopped
     depends_on:
       postgres:
