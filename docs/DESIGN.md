@@ -93,6 +93,25 @@ Account settings, done 2026-10-26:
 **No xAI models.** That's Petter's choice: SpaceXAI ZDR is on, `provider_routing.ignore`
 lists `x-ai`, and no config names an `x-ai/*` model.
 
+## Images
+
+`paperclip` runs a slim repackaging of the official Paperclip image, not the
+official one. The official image is 3.4 GB compressed. About two thirds of that
+is the global agent CLIs (claude-code, codex, opencode, gemini-cli, kimi-code)
+and a provider pack for remote OpenCode/ACPX runs. Our agents use the
+`hermes_gateway` adapter, so Paperclip never starts any of them, and the 83%
+full VM disk can't spare the room. With them gone, nothing next to
+`DATABASE_URL` can run an agent CLI.
+
+`images/paperclip/Dockerfile` copies the application from the official image
+(pinned by digest) onto the same Node base, with upstream's apt packages, user
+setup, entrypoint, environment and default command. Only the CLIs and the
+provider pack are left out. `.github/workflows/paperclip-image.yml` builds it
+on every change, starts it against Postgres, checks that its config matches
+upstream's and that the CLIs are gone, and on `main` pushes it to
+`ghcr.io/petterfranzen/paperclip-slim`. Once it is published, `compose.yaml`
+pins it by digest. To bump Paperclip, follow the comment at the top of the Dockerfile.
+
 ## Rules
 
 - **Server agents never merge.** They push branches and open PRs, and the
