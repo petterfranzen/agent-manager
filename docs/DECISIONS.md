@@ -21,7 +21,7 @@ public).
 |---|---|---|
 | 2026-10-27 | Weekday mornings, the check-in's push ends with one gentle backlog question (skipped if Petter added something in the last day). No extra notifications. | Petter wants a backlog of ideas and tasks to build up without being nagged. |
 | 2026-10-27 | Paperclip's agents, budgets, routines and avatars become a roster file applied by a script, not UI clicks. | Recreatable from code. |
-| 2026-10-27 | No backups of Paperclip's database or Hermes's memory. | Agent history isn't valuable enough; everything else is in GitHub. |
+| 2026-10-27 | No off-host backups of Paperclip's database or Hermes's memory. Paperclip's own hourly on-host backups stay on (restore steps in `docs/paperclip.md`); they help after a bad upgrade. | Agent history isn't valuable enough; everything else is in GitHub. |
 | 2026-10-27 | `sectionnine.dev` (Cloudflare Registrar) is the Hetzner VM's domain; `pastabake.cloud` stays with the homelab. Paperclip is `hq.sectionnine.dev`; flight-tracker moves later. | Separate the homelab from Section 9. |
 | 2026-10-27 | `pastabake.cloud` (Porkbun, expires 2027-02-16): transfer to Cloudflare or replace for the NAS, decided by mid-January. | Manage domains in one place. |
 | 2026-10-27 | Paperclip runs from environment variables only; the first admin is claimed with the CLI's bootstrap invite. | Browser claim is disabled in authenticated + public mode. |
@@ -41,6 +41,9 @@ public).
 | 2026-10-26 | `/api/ops/stats` behind Cloudflare Access with JWT verification; field names reveal no technology. | Monitoring without fingerprinting the stack. |
 
 ## Open
+- Hermes gets no Paperclip credential, so agents can't comment on or close their issues. Mint a scoped agent key for Hermes, or keep reporting through PRs? (`docs/paperclip.md`, section 6)
+- Paperclip plugins: none for now. The Cloudflare sandbox plugin doesn't support the Hermes adapter, and plugin code runs unsandboxed in the Paperclip container. Revisit when that changes (`docs/paperclip-plugins.md`).
+- Give the sandbox a headless browser, so the agents can check what they build renders (Tachikoma's first night missed two visible bugs).
 - Apply the roster on the VM and switch Saito to the Hermes gateway.
 - Move flight-tracker to `flight.sectionnine.dev` and an SSH hostname on the same domain.
 - flight-tracker freshness: separate sweep backoff, OpenSky rate-limit headers, honest `lastSweepAt`, OpenSky OAuth.
