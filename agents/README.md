@@ -6,7 +6,7 @@ applies it to Paperclip with the **Hermes gateway** adapter, sending each brief
 as the agent's instructions (see docs/RUNBOOK.md, step 7).
 
 The team is named after Section 9 in *Ghost in the Shell*. Petter is **the
-Chief**, Claude (the coordinator) is **the Major**, and the agents are:
+Chief**, Claude (the coordinator) is **the Major** (avatar: `avatars/major.png`; the Major isn't a Paperclip agent), and the agents are:
 
 | | Name | Role | Brief | Reports to | Monthly budget | Wakes on |
 |---|---|---|---|---|---|---|

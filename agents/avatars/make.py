@@ -149,7 +149,26 @@ tachikoma = frame("#3ad1ff", """
 <g fill="#3ad1ff" opacity=".9"><path d="M372 120l6 14 14 6-14 6-6 14-6-14-14-6 14-6z"/><path d="M134 150l4 9 9 4-9 4-4 9-4-9-9-4 9-4z"/></g>
 """)
 
-for name, svg in {"tachikoma": tachikoma, "batou": batou, "ishikawa": ishikawa,
+# The Major: Claude, the coordinator. Short dark bob with a straight fringe,
+# steady eyes, high collar, and two data ports at the nape.
+skin = "#e6c3a8"
+major = frame("#ff6ad5", person(
+    skin, "#1f1a2b",
+    HEAD.format(skin=skin),
+    '<path d="M166 262C150 150 190 96 256 96C322 96 362 150 346 262C344 300 336 316 326 322C330 276 330 226 322 200C300 206 212 206 190 200C182 226 182 276 186 322C176 316 168 300 166 262Z" fill="#3b2457"/>'
+    '<path d="M186 198C190 150 214 132 256 132C298 132 322 150 326 198L322 206C300 194 212 194 190 206Z" fill="#4a2e6b"/>',
+    """
+<path d="M204 226Q222 214 240 226Q222 234 204 226Z" fill="#fff"/><path d="M272 226Q290 214 308 226Q290 234 272 226Z" fill="#fff"/>
+<circle cx="222" cy="225" r="7" fill="#7a1f3d"/><circle cx="290" cy="225" r="7" fill="#7a1f3d"/>
+<circle cx="224" cy="223" r="2" fill="#fff"/><circle cx="292" cy="223" r="2" fill="#fff"/>
+<path d="M202 212L240 216M272 216L310 212" stroke="#2a1840" stroke-width="5" stroke-linecap="round"/>
+<path d="M256 236L249 272H263" fill="none" stroke="#c49a80" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M236 302Q256 308 278 300" fill="none" stroke="#9c4a5a" stroke-width="5" stroke-linecap="round"/>
+<g fill="#c8ced8" stroke="#6b7280" stroke-width="2"><circle cx="232" cy="334" r="5"/><circle cx="248" cy="338" r="5"/></g>
+""",
+    collar='<path d="M206 372L226 336L256 360L286 336L306 372L256 420Z" fill="#2b2440"/><path d="M226 336L256 360L286 336" fill="none" stroke="#ff6ad5" stroke-opacity=".5" stroke-width="2"/>'))
+
+for name, svg in {"major": major, "tachikoma": tachikoma, "batou": batou, "ishikawa": ishikawa,
                   "saito": saito, "togusa": togusa}.items():
     (HERE / f"{name}.svg").write_text(svg)
     print("wrote", name)
