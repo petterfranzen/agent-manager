@@ -1,0 +1,246 @@
+name: Paperclip image
+
+# Builds images/paperclip (the slim repackaging of the official Paperclip image),
+# smoke-tests it, and on main pushes it to ghcr.io/petterfranzen/paperclip-slim.
+# See the comment block in images/paperclip/Dockerfile for what is removed and
+# how to bump.
+
+on:
+  pull_request:
+    paths:
+      - "images/paperclip/**"
+      - ".github/workflows/paperclip-image.yml"
+  push:
+    branches: [main]
+    paths:
+      - "images/paperclip/**"
+      - ".github/workflows/paperclip-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paperclip-image-${{ github.ref }}
+  # A push to main finishes its push step; only superseded PR runs are cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE_REPO: ghcr.io/petterfranzen/paperclip-slim
+
+jobs:
+  slim:
+    # One job on purpose: deploy/vm-sync.sh needs every check run on a commit to
+    # be "success", and a skipped job (a push job gated on main) counts as not
+    # green. The push steps below are gated instead; steps make no check run.
+    name: Paperclip slim image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write # the push step, main only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Free disk space (two Paperclip images and Postgres do not fit otherwise)
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # The docker driver builds in the daemon, so the upstream image pulled
+          # below is the one the build and the comparison both use.
+          driver: docker
+
+      - name: Pull the upstream image (pinned by digest in the Dockerfile)
+        id: upstream
+        run: |
+          set -euo pipefail
+          ref=$(sed -n 's/^FROM \(ghcr\.io\/paperclipai\/paperclip:[^ ]*@sha256:[0-9a-f]*\) AS upstream$/\1/p' images/paperclip/Dockerfile)
+          [ -n "$ref" ] || { echo "no digest-pinned 'FROM ... AS upstream' line in the Dockerfile"; exit 1; }
+          docker pull --platform linux/amd64 "$ref"
+          version=$(docker image inspect "$ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+          [ -n "$version" ] || { echo "upstream image has no org.opencontainers.image.version label"; exit 1; }
+          docker tag "$ref" paperclip-upstream:ci
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Upstream: $ref (version $version)"
+
+      - name: Build (linux/amd64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: images/paperclip
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          tags: paperclip-slim:ci
+
+      - name: Sizes, slim vs upstream
+        run: |
+          set -euo pipefail
+          docker image ls --format 'table {{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}' | grep -E 'REPOSITORY|paperclip-(slim|upstream):ci'
+          # Same figure as `docker image ls`: uncompressed. Registry size is what the VM downloads.
+          gz=$(docker save paperclip-slim:ci | gzip | wc -c)
+          echo "slim, gzipped docker save (approximates the compressed registry size): $((gz / 1000000)) MB"
+
+      - name: Config matches upstream except for what is removed
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import json, subprocess, sys
+
+          def cfg(image):
+              return json.loads(subprocess.check_output(["docker", "image", "inspect", image]))[0]["Config"]
+
+          up, slim = cfg("paperclip-upstream:ci"), cfg("paperclip-slim:ci")
+          env = lambda c: dict(e.split("=", 1) for e in c["Env"])
+          ue, se = env(up), env(slim)
+
+          removed = {"PAPERCLIP_RUNNER_REMOTE_PROVIDER_PACK_PATH"}
+          # From the Node base image; a base bump may move them.
+          informational = {"NODE_VERSION", "YARN_VERSION"}
+          problems = []
+          for k in sorted(set(ue) | set(se)):
+              if k in removed:
+                  if k in se:
+                      problems.append(f"env {k} should be removed")
+              elif ue.get(k) != se.get(k):
+                  line = f"env {k}: upstream={ue.get(k)!r} slim={se.get(k)!r}"
+                  if k in informational:
+                      print("note:", line)
+                  else:
+                      problems.append(line)
+          for key in ("Entrypoint", "Cmd", "WorkingDir", "ExposedPorts"):
+              if (up.get(key) or None) != (slim.get(key) or None):
+                  problems.append(f"{key}: upstream={up.get(key)!r} slim={slim.get(key)!r}")
+          for key in ("User", "Volumes"):
+              if (up.get(key) or None) != (slim.get(key) or None):
+                  problems.append(f"{key}: upstream={up.get(key)!r} slim={slim.get(key)!r}")
+          if problems:
+              print("config differs from upstream:")
+              print("\n".join("  " + p for p in problems))
+              sys.exit(1)
+          print("Env, Entrypoint, Cmd, WorkingDir, User, ExposedPorts and Volumes match upstream")
+          EOF
+          probe='stat -c "%n %U:%G %a" /app /paperclip /usr/local/bin/docker-entrypoint.sh; sha256sum /usr/local/bin/docker-entrypoint.sh; getent passwd node; getent group node'
+          docker run --rm --entrypoint sh paperclip-upstream:ci -c "$probe" > /tmp/probe-upstream.txt
+          docker run --rm --entrypoint sh paperclip-slim:ci -c "$probe" > /tmp/probe-slim.txt
+          cat /tmp/probe-slim.txt
+          diff -u /tmp/probe-upstream.txt /tmp/probe-slim.txt && echo "app/home ownership, entrypoint script and node user match upstream"
+
+      - name: The agent CLIs and the provider pack are gone, the tools Paperclip may shell out to are not
+        run: |
+          set -euo pipefail
+          # Positive control: the check below means something only if upstream has them.
+          control=$(docker run --rm --entrypoint sh paperclip-upstream:ci -c 'command -v claude codex opencode gemini kimi || true')
+          echo "upstream has:"; echo "$control"
+          [ -n "$control" ] || { echo "upstream has none of the CLIs; update this check"; exit 1; }
+          clis=$(docker run --rm --entrypoint sh paperclip-slim:ci -c 'command -v claude codex opencode gemini kimi || true')
+          [ -z "$clis" ] || { echo "CLIs still in the slim image:"; echo "$clis"; exit 1; }
+          docker run --rm --entrypoint sh paperclip-slim:ci -c 'test ! -e /opt/paperclip-runner'
+          docker run --rm --entrypoint sh paperclip-slim:ci -c 'command -v git gh ssh jq rg tini gosu curl python3 node corepack'
+          echo "slim image: no agent CLIs, no /opt/paperclip-runner"
+
+      - name: Smoke test, against Postgres as on the VM
+        run: |
+          set -euo pipefail
+          # The same Postgres image (digest) as compose.yaml.
+          pg_image=$(sed -n 's/^ *image: \(postgres:[^ ]*@sha256:[0-9a-f]*\)$/\1/p' compose.yaml)
+          [ -n "$pg_image" ] || { echo "no digest-pinned postgres image in compose.yaml"; exit 1; }
+          pgpw=$(openssl rand -hex 16)
+          secret=$(openssl rand -hex 32)
+          echo "::add-mask::$pgpw"
+          echo "::add-mask::$secret"
+          docker network create pcnet
+          docker run -d --name postgres --network pcnet \
+            -e POSTGRES_USER=paperclip -e POSTGRES_DB=paperclip -e POSTGRES_PASSWORD="$pgpw" \
+            "$pg_image" postgres -c shared_buffers=64MB -c max_connections=30 -c work_mem=4MB
+          for _ in $(seq 1 30); do
+            docker exec postgres pg_isready -U paperclip && break
+            sleep 2
+          done
+          docker exec postgres pg_isready -U paperclip
+          # Environment as compose.yaml sets it for paperclip.
+          docker run -d --name paperclip --network pcnet -p 127.0.0.1:3100:3100 \
+            -e DATABASE_URL="postgres://paperclip:${pgpw}@postgres:5432/paperclip" \
+            -e BETTER_AUTH_SECRET="$secret" \
+            -e HOST=0.0.0.0 \
+            -e PAPERCLIP_HOME=/paperclip \
+            -e PAPERCLIP_DEPLOYMENT_MODE=authenticated \
+            -e PAPERCLIP_DEPLOYMENT_EXPOSURE=public \
+            -e PAPERCLIP_PUBLIC_URL=http://127.0.0.1:3100 \
+            -e NODE_OPTIONS=--max-old-space-size=512 \
+            -e DO_NOT_TRACK=1 \
+            -e PAPERCLIP_AUTH_DISABLE_SIGN_UP=true \
+            -e PAPERCLIP_ANNOUNCEMENTS_ENABLED=false \
+            --memory 768m --security-opt no-new-privileges:true \
+            paperclip-slim:ci
+          deadline=$((SECONDS + 180))
+          until curl -fsS --max-time 5 http://127.0.0.1:3100/api/health -o /tmp/health.json 2>/dev/null \
+              && python3 -c 'import json,sys; sys.exit(0 if json.load(open("/tmp/health.json")).get("status") == "ok" else 1)'; do
+            [ "$(docker inspect -f '{{.State.Running}}' paperclip)" = true ] || { echo "paperclip exited"; exit 1; }
+            [ "$SECONDS" -lt "$deadline" ] || { echo "no healthy /api/health within 3 min"; exit 1; }
+            sleep 3
+          done
+          cat /tmp/health.json; echo
+          python3 - <<'EOF'
+          import json
+          h = json.load(open("/tmp/health.json"))
+          assert h["status"] == "ok", h
+          # A fresh database has no board user yet.
+          assert h["bootstrapStatus"] in ("ready", "bootstrap_pending"), h
+          assert h["deploymentMode"] == "authenticated", h
+          print("health ok: status", h["status"], "bootstrap", h["bootstrapStatus"], "commit", h.get("commit"))
+          EOF
+          echo "smoke test ok"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker logs paperclip 2>&1 | tail -80 || true
+          docker logs postgres 2>&1 | tail -20 || true
+
+      # Everything below runs only on main, after the checks above passed.
+      - name: Log in to ghcr.io
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the tested image
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker tag paperclip-slim:ci "$IMAGE_REPO:$UPSTREAM_VERSION"
+          docker tag paperclip-slim:ci "$IMAGE_REPO:sha-$short"
+          docker push "$IMAGE_REPO:$UPSTREAM_VERSION" | tee /tmp/push-version.log
+          docker push "$IMAGE_REPO:sha-$short" | tee /tmp/push-sha.log
+          digest=$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' /tmp/push-version.log | tail -1)
+          [ -n "$digest" ] || { echo "could not read the pushed digest"; exit 1; }
+          [ "$digest" = "$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' /tmp/push-sha.log | tail -1)" ] \
+            || { echo "the two tags have different digests"; exit 1; }
+          # Compressed size, as the VM will download it.
+          bytes=$(docker manifest inspect "$IMAGE_REPO@$digest" | python3 -c 'import json,sys; m=json.load(sys.stdin); print(sum(l["size"] for l in m["layers"]) + m["config"]["size"])')
+          {
+            echo "## Pushed Paperclip slim image"
+            echo
+            echo "Pin this in compose.yaml (follow-up PR; make the package public first, once):"
+            echo
+            echo '```'
+            echo "image: $IMAGE_REPO:$UPSTREAM_VERSION@$digest"
+            echo '```'
+            echo
+            echo "Tags: \`$UPSTREAM_VERSION\`, \`sha-$short\`. Compressed size: $((bytes / 1000000)) MB."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "=================================================================="
+          echo "PUSHED $IMAGE_REPO:$UPSTREAM_VERSION@$digest"
+          echo "compressed size: $((bytes / 1000000)) MB"
+          echo "=================================================================="
