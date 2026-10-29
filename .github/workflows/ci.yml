@@ -155,6 +155,9 @@ jobs:
           ! echo "$out" | grep -q ci-fake-bridge-key
           out=$(s 'pc-task --as Nobody mine 2>&1' || true)
           echo "$out" | grep -q 'no Paperclip key for Nobody'
+          # Changes need the run id from the wake message (Paperclip answers 401 without it).
+          out=$(s 'pc-task --as Batou status SEC-1 done x 2>&1' || true)
+          echo "$out" | grep -q 'changes need --run'
           ! s 'echo x > /run/paperclip-keys/batou.key' 2>/dev/null
           # No root login, no password login.
           ! ssh -i /tmp/ci_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1 true

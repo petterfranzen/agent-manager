@@ -3,11 +3,13 @@
 
 Usage:
   pc-task --as <agent> mine
-  pc-task --as <agent> comment <issue> <text | ->
-  pc-task --as <agent> status <issue> <status> [<text | ->]
+  pc-task --as <agent> --run <run id> comment <issue> <text | ->
+  pc-task --as <agent> --run <run id> status <issue> <status> [<text | ->]
 
-<agent> is your name (Batou, Tachikoma, ...), or set PC_AGENT. <issue> is the
-identifier from your task, e.g. SEC-8. "-" reads the text from stdin.
+<agent> is your name (Batou, Tachikoma, ...), or set PC_AGENT. <run id> is the
+"Run ID" line of your wake message, or set PAPERCLIP_RUN_ID; Paperclip refuses
+changes from an agent without it. <issue> is the identifier from your task,
+e.g. SEC-8. "-" reads the text from stdin.
 Statuses: todo, in_progress, in_review, done, blocked, cancelled.
 
 Each agent has a task_bridge key (mounted read-only at /run/paperclip-keys) that
@@ -26,6 +28,7 @@ import urllib.request
 
 API = os.environ.get("PAPERCLIP_API_URL", "http://paperclip:3100").rstrip("/") + "/api"
 KEYS = "/run/paperclip-keys"
+UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 STATUSES = {"todo", "in_progress", "in_review", "done", "blocked", "cancelled"}
 
 
@@ -44,11 +47,13 @@ def key_for(agent):
         fail(f"no Paperclip key for {agent}; tell the Major")
 
 
-def call(key, method, path, body=None):
+def call(key, method, path, body=None, run=None):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(API + path, data=data, method=method)
     req.add_header("Authorization", "Bearer " + key)
     req.add_header("Accept", "application/json")
+    if run:
+        req.add_header("X-Paperclip-Run-Id", run)
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
@@ -75,12 +80,20 @@ def summary(issue):
 
 def main(argv):
     agent = os.environ.get("PC_AGENT")
-    if len(argv) >= 2 and argv[0] == "--as":
-        agent, argv = argv[1], argv[2:]
+    run = os.environ.get("PAPERCLIP_RUN_ID")
+    while len(argv) >= 2 and argv[0] in ("--as", "--run"):
+        if argv[0] == "--as":
+            agent = argv[1]
+        else:
+            run = argv[1]
+        argv = argv[2:]
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
         return
     cmd, args = argv[0], argv[1:]
+    if cmd in ("comment", "status") and not (run and UUID.fullmatch(run.strip())):
+        fail("changes need --run <run id>: the Run ID line of your wake message")
+    run = run.strip() if run else None
     key = key_for(agent)
     if cmd == "mine" and not args:
         issues = call(key, "GET", "/agents/me/inbox-lite") or []
@@ -88,7 +101,7 @@ def main(argv):
             print(json.dumps(summary(issue)))
     elif cmd == "comment" and len(args) == 2:
         call(key, "POST", f"/issues/{urllib.parse.quote(args[0], safe='')}/comments",
-             {"body": text_arg(args[1])})
+             {"body": text_arg(args[1])}, run)
         print(f"commented on {args[0]}")
     elif cmd == "status" and len(args) in (2, 3):
         if args[1] not in STATUSES:
@@ -96,7 +109,7 @@ def main(argv):
         body = {"status": args[1]}
         if len(args) == 3:
             body["comment"] = text_arg(args[2])
-        issue = call(key, "PATCH", f"/issues/{urllib.parse.quote(args[0], safe='')}", body)
+        issue = call(key, "PATCH", f"/issues/{urllib.parse.quote(args[0], safe='')}", body, run)
         print(json.dumps(summary(issue or {})))
     else:
         fail("unknown command or wrong arguments; see pc-task --help")

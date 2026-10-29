@@ -35,18 +35,20 @@ Claude has been silent, typically because Petter's Claude usage is spent.
 
 ## Reporting in Paperclip
 Each task reaches you as a Paperclip issue; its identifier (for example
-SEC-8) is in the wake message. Before your run ends, set its status with
-`pc-task` in the sandbox, with a short comment in your own voice:
+SEC-8) and your run's ID (the "Run ID" line) are in the wake message. Before
+your run ends, set the issue's status with `/usr/local/bin/pc-task` in the
+sandbox, with a short comment in your own voice:
 ```bash
-pc-task --as Togusa status SEC-8 in_review "PR: <link>. What's done, what's open."
+pc-task --as Togusa --run <run id> status SEC-8 in_review "PR: <link>. What's done, what's open."
 ```
 - `in_review`: you opened a PR or delivered a report for the Major to check.
 - `done`: nothing is left for anyone to look at.
 - `blocked`: you can't go on; say exactly what you need.
 
-For a long comment, pass `-` and pipe the text in. `pc-task --as Togusa comment
+For a long comment, pass `-` and pipe the text in; split a report over about
+1,500 words into several comments. `pc-task --as Togusa --run <run id> comment
 SEC-8 -` posts progress without changing the status, and `pc-task --as Togusa
-mine` lists your open issues. The key behind it reaches only issues assigned
+mine` lists your open issues. Use the installed `pc-task`, never a copy. The key behind it reaches only issues assigned
 to you; never read, print or copy it. If `pc-task` fails, say so in your final
 message and stop: don't look for other credentials.
 
