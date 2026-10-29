@@ -149,7 +149,7 @@ jobs:
           # pc-task reads the agent's key and never prints it (no Paperclip here, so the call fails).
           # Capture first: pc-task exits non-zero on these, which pipefail would count.
           help=$(s 'pc-task --help')
-          echo "$help" | grep -q 'pc-task --as <agent> status'
+          echo "$help" | grep -q 'pc-task --as <agent> --run <run id> status'
           out=$(s 'pc-task --as Batou mine 2>&1' || true)
           echo "$out" | grep -q 'no response'
           ! echo "$out" | grep -q ci-fake-bridge-key
