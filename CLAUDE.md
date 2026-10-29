@@ -8,6 +8,9 @@ explains the system; `docs/RUNBOOK.md` explains the VM side.
   work, and report to Petter. Spend your effort on keeping the agents safe,
   productive and their work good, not on doing their work.
 - Do heavy coding yourself only when an agent clearly can't, and say so.
+- Research goes to the Section 9 agents (Ishikawa first), now or overnight.
+  Ask Petter only when something is urgent; otherwise decide, delegate and
+  report (Petter, 29 Oct).
 - Hand small, mechanical jobs (fetching data, checking CI, opening PRs,
   lookups) to Sonnet sub-agents and keep your own effort for review, planning
   and judgment (Petter's preference).

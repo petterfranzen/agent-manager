@@ -295,6 +295,25 @@ measure_disk() {
   [[ $DISK_USED =~ ^[0-9]+$ && $DISK_FREE =~ ^[0-9.]+$ ]]
 }
 
+# One line on the VM's memory, since the agent stack shares it with
+# flight-tracker: available and total RAM, swap in use, and flight-tracker's
+# MemoryLow (the page cache the kernel leaves it under VM-wide pressure).
+# Prints nothing if /proc/meminfo can't be read.
+measure_memory() {
+  local mem low
+  mem=$(awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} /^SwapTotal:/ {st=$2} /^SwapFree:/ {sf=$2}
+    END { if (t) printf "%.1f of %.1f GB available, swap %.1f GB used", a/1048576, t/1048576, (st-sf)/1048576 }' /proc/meminfo 2>/dev/null) || return 0
+  [ -n "$mem" ] || return 0
+  low=$(systemctl show -p MemoryLow --value flight-tracker 2>/dev/null || true)
+  case "$low" in
+    ""|0) low="not set" ;;
+    infinity) ;;
+    *[!0-9]*) ;;
+    *) low="$((low / 1048576))M" ;;
+  esac
+  echo "Memory: $mem; flight-tracker MemoryLow $low"
+}
+
 # Best effort, after a successful apply: re-install the sync's own script and
 # units when deploy/ changed (or the first state has no applied commit).
 # Replacing the running script is safe: install writes a new inode and bash
@@ -399,7 +418,7 @@ if apply >"$OUT" 2>&1; then
   cleanup || true
   if measure_disk; then
     # First line of the file, so the comment reads "Disk:" then the reclaimed space.
-    { echo "Disk: ${DISK_USED}% used, ${DISK_FREE} GB free"; cat "$NOTES_FILE"; } >"$NOTES_FILE.new" && mv "$NOTES_FILE.new" "$NOTES_FILE"
+    { echo "Disk: ${DISK_USED}% used, ${DISK_FREE} GB free"; measure_memory; cat "$NOTES_FILE"; } >"$NOTES_FILE.new" && mv "$NOTES_FILE.new" "$NOTES_FILE"
     log "disk after cleanup: ${DISK_USED}% used, ${DISK_FREE} GB free"
     if [ "$DISK_USED" -ge "$DISK_WARN_AT" ]; then
       DISK_WARN="WARNING: disk ${DISK_USED}% used"
