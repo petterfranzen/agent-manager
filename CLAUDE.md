@@ -28,6 +28,17 @@ Send `CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID`, `CF-Access-Client-Secret:
 $CF_ACCESS_CLIENT_SECRET` and `Authorization: Bearer $PAPERCLIP_API_KEY`. Never
 print, log or commit any of these.
 
+## Spend (real money)
+When Petter asks what the agents cost or how much budget is left, or a report
+needs it: read the description of the open Paperclip issue titled "Spend"
+(`GET /api/companies/{id}/issues`, then `GET /api/issues/{issueId}`). The VM
+rewrites it every hour from OpenRouter's own figures: this month, cap, left,
+today, and what was booked per agent. Quote its "As of" time. If it's more than
+3 hours old, the VM's `agent-manager-spend.timer` has stopped: say so, and
+check the Deploys issue. Paperclip's own costs (`/costs/by-agent`) are the same
+money split per agent by token share. Don't put an OpenRouter key in cloud
+sessions: a normal key only sees itself, and a management key can mint keys.
+
 ## Merging
 - Petter authorised you to merge PRs with green CI after your review, in
   `ghost-in-the-machine`, here, and in flight-tracker (production included; send

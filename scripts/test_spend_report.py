@@ -40,7 +40,7 @@ class Stub:
                                   "limit": 20, "limit_remaining": 20 - self.usage}}
         if auth != "Bearer " + BOARD:
             return 401, {"error": "Board access required"}
-        if method == "POST":
+        if method in ("POST", "PATCH"):
             self.posts.append((path, body))
             return 201, {"id": "issue-1"} if path.endswith("/issues") else {"ok": True}
         if path == "/api/companies":
@@ -66,7 +66,7 @@ def serve(stub):
             self.end_headers()
             self.wfile.write(data)
 
-        do_GET = do_POST = any
+        do_GET = do_POST = do_PATCH = any
 
         def log_message(self, *a):
             pass
@@ -157,6 +157,19 @@ class SpendTest(unittest.TestCase):
         self.assertIn("Waiting to be booked", self.comments()[0])
         after = json.loads(self.state.read_text())
         self.assertEqual((after["usage"], after["at"]), (before["usage"], before["at"]))
+
+    def test_every_run_updates_the_snapshot(self):
+        self.day_ago()
+        self.run_ok("--comment-hour", "24")
+        patches = [b for p, b in self.stub.posts if p == "/api/issues/issue-1"]
+        self.assertEqual(len(patches), 1)
+        desc = patches[0]["description"]
+        self.assertIn("Live snapshot", desc)
+        self.assertIn("This month (UTC): $1.00", desc)
+        self.assertIn("Cap: $20.00", desc)
+        self.assertIn("Left: $19.00", desc)
+        self.assertIn("Tachikoma: $", desc)
+        self.assertNotIn(ORKEY, desc)
 
     def test_dry_run_writes_nothing(self):
         self.day_ago()
