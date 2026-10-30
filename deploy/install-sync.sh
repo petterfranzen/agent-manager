@@ -30,6 +30,8 @@ install -m 0644 -o root -g root "$HERE/agent-manager-sync.timer" /etc/systemd/sy
 install -m 0755 -o root -g root "$HERE/spend-report.py" /usr/local/sbin/agent-manager-spend
 install -m 0644 -o root -g root "$HERE/agent-manager-spend.service" /etc/systemd/system/agent-manager-spend.service
 install -m 0644 -o root -g root "$HERE/agent-manager-spend.timer" /etc/systemd/system/agent-manager-spend.timer
+install -m 0755 -o root -g root "$HERE/crew-status.py" /usr/local/sbin/agent-manager-crew-status
+install -m 0644 -o root -g root "$HERE/agent-manager-crew-status.service" /etc/systemd/system/agent-manager-crew-status.service
 
 # Cap the journal (it had grown to ~1 GB). Restart journald only on a change.
 JOURNALD_CONF=/etc/systemd/journald.conf.d/agent-manager.conf

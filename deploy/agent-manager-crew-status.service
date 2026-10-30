@@ -1,0 +1,22 @@
+[Unit]
+Description=Publish the public crew page's status.json to ghost-in-the-machine (crew-status branch)
+Documentation=https://github.com/petterfranzen/agent-manager/blob/main/docs/RUNBOOK.md
+# Pulled in hourly by agent-manager-spend.service and run after it, so the
+# budgets it reads include the hour's booking. A spend failure doesn't stop it.
+After=network-online.target docker.service agent-manager-spend.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/local/sbin/agent-manager-crew-status
+TimeoutStartSec=5min
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true

@@ -210,6 +210,21 @@ timer runs `agent-manager-sync` every 5 minutes, which:
   Stockholm, it comments a summary on the "Spend" issue. Run it by hand with
   `systemctl start agent-manager-spend`; preview with
   `python3 -I /usr/local/sbin/agent-manager-spend --dry-run`;
+- after each spend run, `agent-manager-crew-status.service` (pulled in by the
+  spend service, ordered after it, failing on its own) publishes the public
+  crew page's `crew/status.json` to ghost-in-the-machine's `crew-status`
+  branch, which the page fetches from
+  `https://raw.githubusercontent.com/petterfranzen/ghost-in-the-machine/crew-status/crew/status.json`.
+  It reads Paperclip (agents, issues, runs, cost by agent), OpenRouter's month
+  and merged PRs, writes through the contents API with the sandbox's
+  `GH_TOKEN`, and skips the commit when only `generatedAt` changed in the last
+  3 hours. Text is allowlisted (public issue titles and merged PR titles);
+  every other task shows as "On a private task" / "Research (private)", and a
+  private word anywhere fails the run before anything is written. Preview with
+  `python3 -I /usr/local/sbin/agent-manager-crew-status --dry-run`; run with
+  `systemctl start agent-manager-crew-status`. ghost-in-the-machine's CI and
+  Pages only run on PRs and `main`, so the branch triggers nothing; never open
+  a PR from it;
 - re-runs the installer (`--from-sync`) when a deploy changed `deploy/`, and
   says so in the comment.
 
