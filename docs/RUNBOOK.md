@@ -220,7 +220,9 @@ timer runs `agent-manager-sync` every 5 minutes, which:
   `GH_TOKEN`, and skips the commit when only `generatedAt` changed in the last
   3 hours. Text is allowlisted (public issue titles and merged PR titles);
   every other task shows as "On a private task" / "Research (private)", and a
-  private word anywhere fails the run before anything is written. Preview with
+  private word anywhere fails the run before anything is written. The
+  private words are one per line in root-only `/etc/agent-manager/crew-deny.txt`
+  (mode 600); without it the run publishes nothing. Preview with
   `python3 -I /usr/local/sbin/agent-manager-crew-status --dry-run`; run with
   `systemctl start agent-manager-crew-status`. ghost-in-the-machine's CI and
   Pages only run on PRs and `main`, so the branch triggers nothing; never open

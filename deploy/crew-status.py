@@ -54,9 +54,12 @@ TEXT_MAX = 90
 # Issue titles that may appear on the public page (exact, or prefix with "...").
 ALLOWED_EXACT = {"Nightly build", "Review and redesign the crew page (GITS-95)"}
 ALLOWED_PREFIX = ("Crew page", "Night ", "Check: ")
-# Never published, whatever the source; a hit fails the whole run.
-DENY = re.compile(r"petter|franz[eé]n|stockholm|rental|housing|apartment|lägenhet|bostad|qasa|samtrygg|bofrid|wåhlin",
-                  re.IGNORECASE)
+# Never published, whatever the source; a hit fails the whole run. The owner's
+# name is here; the private topics are one term per line in <secrets-dir>/crew-deny.txt
+# (root-only on the VM, so this public repo doesn't list them), and the run refuses
+# to publish without that file.
+DENY_BASE = r"petter|franz[eé]n"
+DENY = re.compile(DENY_BASE, re.IGNORECASE)
 PRIVATE = "On a private task"
 PRIVATE_RESEARCH = "Research (private)"
 IDENT = re.compile(r"\b([A-Z]{2,6}-\d+)\b")
@@ -306,6 +309,15 @@ def main(argv=None):
                 roster = tomllib.load(f)
         except (OSError, tomllib.TOMLDecodeError) as e:
             raise Failure(f"cannot read the roster {a.roster}: {e}") from None
+        global DENY
+        try:
+            terms = [re.escape(t.strip()) for t in (Path(a.secrets_dir) / "crew-deny.txt").read_text().splitlines()
+                     if t.strip() and not t.startswith("#")]
+        except OSError as e:
+            raise Failure(f"cannot read the private deny terms: {e}") from None
+        if not terms:
+            raise Failure("crew-deny.txt has no terms; refusing to publish")
+        DENY = re.compile("|".join([DENY_BASE, *terms]), re.IGNORECASE)
         board = read_env_value(Path(a.secrets_dir) / "paperclip-board.env", "PAPERCLIP_BOARD_KEY")
         orkey = read_env_value(Path(a.secrets_dir) / "hermes.env", "OPENROUTER_API_KEY")
         ghtok = read_env_value(Path(a.secrets_dir) / "sandbox.env", "GH_TOKEN")

@@ -44,20 +44,20 @@ class Stub:
             "in_progress": [
                 {"id": "i1", "title": "Nightly build", "status": "in_progress", "assigneeAgentId": "a-tachi",
                  "updatedAt": ago(1), "visibility": "open"},
-                {"id": "i2", "title": "Rental watch", "status": "in_progress", "assigneeAgentId": "a-ishi",
+                {"id": "i2", "title": "Errand watch", "status": "in_progress", "assigneeAgentId": "a-ishi",
                  "updatedAt": ago(1), "visibility": "open"},
             ],
             "done": [
                 {"id": "i3", "identifier": "SEC-8", "title": "Crew page: command staff", "status": "done",
                  "assigneeAgentId": "a-batou", "updatedAt": ago(30), "visibility": "open"},
-                {"id": "i4", "title": "Stockholm housing shortlist", "status": "done",
+                {"id": "i4", "title": "Gotham errand shortlist", "status": "done",
                  "assigneeAgentId": "a-ishi", "updatedAt": ago(20), "visibility": "open"},
-                {"id": "i5", "title": "Rental watch", "status": "done", "assigneeAgentId": "a-ishi",
+                {"id": "i5", "title": "Errand watch", "status": "done", "assigneeAgentId": "a-ishi",
                  "updatedAt": ago(10), "visibility": "open"},
                 # Allowlisted prefix, private content: the deny terms still keep it out.
-                {"id": "i6", "title": "Night rental scan in Stockholm", "status": "done",
+                {"id": "i6", "title": "Night errand scan in Gotham", "status": "done",
                  "assigneeAgentId": "a-ishi", "updatedAt": ago(5), "visibility": "open"},
-                {"id": "i7", "title": "Check: Petter's flat viewings", "status": "done",
+                {"id": "i7", "title": "Check: Petter's errands", "status": "done",
                  "assigneeAgentId": "a-batou", "updatedAt": ago(4), "visibility": "open"},
                 {"id": "i8", "title": "Crew page: private draft", "status": "done",
                  "assigneeAgentId": "a-batou", "updatedAt": ago(3), "visibility": "private"},
@@ -73,7 +73,7 @@ class Stub:
              "head": {"ref": "task/crew-gits95"}, "html_url": "https://github.com/petterfranzen/ghost-in-the-machine/pull/6"},
             {"title": "LOG: Petter's wishes, starting with pixel art", "merged_at": ago(27),
              "head": {"ref": "claude/log-wishes"}, "html_url": "https://github.com/petterfranzen/ghost-in-the-machine/pull/10"},
-            {"title": "Night 2026-11-01: Stockholm metro map", "merged_at": ago(2),
+            {"title": "Night 2026-11-01: Gotham metro map", "merged_at": ago(2),
              "head": {"ref": "night/2026-11-01-metro"}, "html_url": "https://github.com/petterfranzen/ghost-in-the-machine/pull/12"},
             {"title": "Crew page v2", "merged_at": None, "head": {"ref": "task/crew-live"},
              "html_url": "https://github.com/petterfranzen/ghost-in-the-machine/pull/11"},
@@ -155,6 +155,7 @@ class CrewStatusTest(unittest.TestCase):
         (d / "paperclip-board.env").write_text(f"PAPERCLIP_BOARD_KEY={BOARD}\n")
         (d / "hermes.env").write_text(f"API_SERVER_KEY=x\nOPENROUTER_API_KEY=\"{ORKEY}\"\n")
         (d / "sandbox.env").write_text(f"GH_TOKEN={GHTOK}\n")
+        (d / "crew-deny.txt").write_text("# test terms\nerrand\ngotham\n")
         self.stub = Stub()
         server = serve(self.stub)
         self.addCleanup(server.server_close)
@@ -179,7 +180,7 @@ class CrewStatusTest(unittest.TestCase):
     def test_private_titles_never_appear(self):
         doc = self.published()
         text = json.dumps(doc, ensure_ascii=False)
-        for word in ("Rental", "rental", "Stockholm", "housing", "Petter", "flat viewings", "private draft",
+        for word in ("Errand", "errand", "Gotham", "Petter", "private draft",
                      "pixel art"):
             self.assertNotIn(word, text)
         ishi = self.agent(doc, "Ishikawa")
@@ -189,11 +190,16 @@ class CrewStatusTest(unittest.TestCase):
         self.assertEqual(len(ishi["recent"]), 1)
         self.assertEqual(self.agent(doc, "Batou")["recent"][0]["text"], "On a private task")
 
+    def test_missing_deny_file_refuses_to_publish(self):
+        (Path(self.tmp.name) / "crew-deny.txt").unlink()
+        self.assertEqual(crew.main(self.args), 1)
+        self.assertEqual(self.stub.writes, [])
+
     def test_deny_terms_stop_the_publish(self):
         # A private word in an allowlisted field (here: a roster title) fails the run, writes nothing.
         roster = Path(self.tmp.name) / "roster.toml"
         roster.write_text((ROOT / "agents" / "roster.toml").read_text().replace(
-            'title = "Researcher"', 'title = "Stockholm rentals"'))
+            'title = "Researcher"', 'title = "Gotham errands"'))
         args = list(self.args)
         args[args.index("--roster") + 1] = str(roster)
         self.assertEqual(crew.main(args), 1)
