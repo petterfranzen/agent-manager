@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Daily spend report: OpenRouter's real figures into Paperclip.
+"""Spend sync: OpenRouter's real figures into Paperclip, every hour.
 
 Hermes reports tokens but no price, so Paperclip books every agent run as
-"unpriced" and its budgets see $0. Once a day this script:
+"unpriced" and its budgets see $0. Every hour this script:
   1. reads the OpenRouter key's usage (GET /api/v1/key),
   2. splits the spend since its last run across the agents by their runs'
      tokens in that window (input + 50 x output: with ~90% cache hits, output
      costs about 50 times more per token than input on our models),
   3. books each share in Paperclip as a cost event, so its budgets and
      by-agent cost views show real money,
-  4. posts one comment on the open "Spend" issue.
+  4. once a day, from 07:00 Stockholm, posts a summary on the open "Spend" issue.
 
-Runs on the VM as root (agent-manager-spend.timer). Standard library only.
+Booking hourly keeps Paperclip's budgets current, so they stop an agent
+within the hour rather than a day late. Runs on the VM as root
+(agent-manager-spend.timer). Standard library only.
 Secrets come from root-only files and are never printed:
   PAPERCLIP_BOARD_KEY  in <secrets-dir>/paperclip-board.env
   OPENROUTER_API_KEY   in <secrets-dir>/hermes.env
@@ -28,15 +30,18 @@ import urllib.parse
 import urllib.request
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 COMPANY = "Section 9"
 TITLE = "Spend"
-DESCRIPTION = "Once a day the VM posts OpenRouter's real spend here and books it per agent."
+DESCRIPTION = "The VM books OpenRouter's real spend per agent every hour and posts a summary here once a day."
 OPEN = "backlog,todo,in_progress,in_review,blocked"
 OUTPUT_WEIGHT = 50
 MODEL = "deepseek/deepseek-v4.1-flash"
 KEYS = re.compile(r"(pcp_board_|sk-or-|github_pat_)[A-Za-z0-9_-]*")
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+STOCKHOLM = ZoneInfo("Europe/Stockholm")
+COMMENT_HOUR = 7
 
 
 class Failure(Exception):
@@ -129,6 +134,8 @@ def main(argv=None):
     p.add_argument("--state", default="/var/lib/agent-manager/spend-state.json")
     p.add_argument("--paperclip", default="http://127.0.0.1:3100")
     p.add_argument("--openrouter", default="https://openrouter.ai/api/v1")
+    p.add_argument("--comment", action="store_true", help="post the summary comment now")
+    p.add_argument("--comment-hour", type=int, default=COMMENT_HOUR, help=argparse.SUPPRESS)
     a = p.parse_args(argv)
 
     try:
@@ -177,30 +184,45 @@ def main(argv=None):
             t[1] += int(r.get("outputTokens") or 0)
         shares = split(delta, {aid: i + OUTPUT_WEIGHT * o for aid, (i, o) in tokens.items()})
 
-        day = now.date().isoformat()
-        lines = [f"Spend report {day}", ""]
+        local = now.astimezone(STOCKHOLM)
+        booked = {aid: Decimal(v) for aid, v in (state.get("booked") or {}).items()}
+        for aid, share in shares.items():
+            booked[aid] = booked.get(aid, Decimal(0)) + share
+        # One summary comment a day, on the first run from 07:00 Stockholm (before
+        # the 07:47 check-in); the hourly runs in between only book.
+        comment = a.comment or (local.hour >= a.comment_hour
+                                and state.get("commentedOn") != local.date().isoformat())
+
+        lines = [f"Spend report {local:%Y-%m-%d %H:%M} Stockholm", ""]
         limit = k.get("limit")
         month = Decimal(str(k.get("usage_monthly") or 0))
         cap = f" of {usd(limit)} cap" if limit else ""
         left = f", {usd(k['limit_remaining'])} left" if k.get("limit_remaining") is not None else ""
         lines.append(f"OpenRouter this month (UTC): {usd(month)}{cap}{left}. Today so far: {usd(k.get('usage_daily') or 0)}.")
         if "usage" not in state:
-            lines.append("First report: nothing booked; from tomorrow each day's spend is booked per agent.")
+            lines.append("First report: nothing booked yet; from the next hour, spend is booked per agent every hour.")
         else:
-            lines.append(f"Since the last report ({since:%Y-%m-%d %H:%M} UTC): {usd(delta)}"
-                         + (", booked in Paperclip as:" if shares else ", no agent runs yet to book it to; it carries over."))
-            for aid, share in sorted(shares.items(), key=lambda kv: -kv[1]):
-                i, o = tokens[aid]
-                lines.append(f"- {agents[aid]}: {usd(share)} ({i / 1e6:.1f}M in, {o / 1e3:.0f}k out)")
+            since_c = state.get("commentAt") or state.get("at")
+            total = sum(booked.values(), Decimal(0))
+            lines.append(f"Booked in Paperclip since the last report ({ts(since_c):%Y-%m-%d %H:%M} UTC): {usd(total)}"
+                         + (":" if booked else "."))
+            for aid, amount in sorted(booked.items(), key=lambda kv: -kv[1]):
+                lines.append(f"- {agents.get(aid, aid)}: {usd(amount)}")
+            pending = delta if delta > 0 and not shares else Decimal(0)
+            if pending:
+                lines.append(f"Waiting to be booked (no finished run yet): {usd(pending)}.")
 
         if a.dry_run:
             print("\n".join(lines))
+            print(f"(would book {usd(sum(shares.values(), Decimal(0)))} across {len(shares)} agent(s); "
+                  f"comment: {'yes' if comment else 'no'})")
             return 0
 
+        hour = now.strftime("%Y-%m-%dT%H")
         for aid, share in shares.items():
             i, o = tokens[aid]
             http("POST", f"{pc}/api/companies/{q(cid)}/cost-events", board, {
-                "idempotencyKey": f"openrouter-{day}-{aid}",
+                "idempotencyKey": f"openrouter-{hour}-{aid}",
                 "agentId": aid,
                 "provider": "openrouter",
                 "biller": "openrouter",
@@ -213,27 +235,30 @@ def main(argv=None):
                 "occurredAt": now.isoformat().replace("+00:00", "Z"),
             })
 
-        issues = http("GET", f"{pc}/api/companies/{q(cid)}/issues?status={q(OPEN)}", board) or []
-        issue = next((i for i in issues if i.get("title") == TITLE), None)
-        if issue is None:
-            issue = http("POST", f"{pc}/api/companies/{q(cid)}/issues", board, {
-                "title": TITLE, "description": DESCRIPTION, "status": "backlog",
-                "priority": "low", "allowDuplicate": True})
-        http("POST", f"{pc}/api/issues/{q(issue['id'])}/comments", board, {"body": "\n".join(lines)})
+        if comment:
+            issues = http("GET", f"{pc}/api/companies/{q(cid)}/issues?status={q(OPEN)}", board) or []
+            issue = next((i for i in issues if i.get("title") == TITLE), None)
+            if issue is None:
+                issue = http("POST", f"{pc}/api/companies/{q(cid)}/issues", board, {
+                    "title": TITLE, "description": DESCRIPTION, "status": "backlog",
+                    "priority": "low", "allowDuplicate": True})
+            http("POST", f"{pc}/api/issues/{q(issue['id'])}/comments", board, {"body": "\n".join(lines)})
 
-        # Spend with no runs to book it to stays pending: the next report books it.
-        if delta > 0 and not shares:
-            new_state = state
-        else:
-            new_state = {"usage": str(usage), "at": now.isoformat()}
+        # Spend with no finished run to book it to stays pending: a later run books it.
+        new_state = dict(state)
+        if not (delta > 0 and not shares):
+            new_state.update(usage=str(usage), at=now.isoformat())
+        new_state["booked"] = {} if comment else {aid: str(v) for aid, v in booked.items()}
+        if comment:
+            new_state.update(commentedOn=local.date().isoformat(), commentAt=now.isoformat())
         state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(new_state))
         os.replace(tmp, state_path)
         if delta > 0 and not shares:
-            print(f"spend report posted: {usd(delta)} carried over (no agent runs yet)")
+            print(f"spend sync: {usd(delta)} carried over (no agent runs yet)")
         else:
-            print(f"spend report posted: {usd(delta)} booked across {len(shares)} agent(s)")
+            print(f"spend sync: {usd(delta)} booked across {len(shares)} agent(s)")
         return 0
     except Failure as e:
         print(f"spend report failed: {redact(str(e))}", file=sys.stderr)

@@ -1,8 +1,8 @@
 [Unit]
-Description=Daily spend report before the 07:47 check-in
+Description=Book OpenRouter spend in Paperclip every hour
 
 [Timer]
-OnCalendar=*-*-* 07:20 Europe/Stockholm
+OnCalendar=*-*-* *:05:00
 Persistent=true
 RandomizedDelaySec=2min
 

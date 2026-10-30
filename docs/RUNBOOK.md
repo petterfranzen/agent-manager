@@ -203,10 +203,12 @@ timer runs `agent-manager-sync` every 5 minutes, which:
   N GB free` plus the reclaimed space in that comment, prefixed with a
   `WARNING` once the disk is 85% full. The installer also caps the journal at
   200 MB (`/etc/systemd/journald.conf.d/agent-manager.conf`);
-- installs a second timer, `agent-manager-spend.timer` (07:20 Stockholm daily): it reads
-  the OpenRouter key's real usage, books each day's spend in Paperclip per agent
-  (cost events, split by the agents' token share), and comments on the "Spend"
-  issue. Run it by hand with `systemctl start agent-manager-spend`; preview with
+- installs a second timer, `agent-manager-spend.timer` (hourly, at :05): it reads
+  the OpenRouter key's real usage and books the spend since the last run in
+  Paperclip per agent (cost events, split by the agents' token share), so the
+  budgets in `roster.toml` enforce within the hour. Once a day, from 07:00
+  Stockholm, it comments a summary on the "Spend" issue. Run it by hand with
+  `systemctl start agent-manager-spend`; preview with
   `python3 -I /usr/local/sbin/agent-manager-spend --dry-run`;
 - re-runs the installer (`--from-sync`) when a deploy changed `deploy/`, and
   says so in the comment.

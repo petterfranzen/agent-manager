@@ -107,38 +107,62 @@ class SpendTest(unittest.TestCase):
         self.assertEqual(sum(out.values()), Decimal("1.00"))
         self.assertEqual(out["a"], Decimal("0.250000"))
 
+    def day_ago(self, usage="0.60"):
+        self.state.write_text(json.dumps({"usage": usage, "at": (dt.datetime.now(dt.timezone.utc)
+                                                                 - dt.timedelta(days=1)).isoformat()}))
+
     def test_first_run_books_nothing_and_records_state(self):
-        self.run_ok()
+        self.run_ok("--comment")
         self.assertEqual(self.events(), [])
         self.assertIn("First report", self.comments()[0])
         self.assertEqual(json.loads(self.state.read_text())["usage"], "1.0")
 
-    def test_second_run_books_the_delta_per_agent(self):
-        self.state.write_text(json.dumps({"usage": "0.60", "at": (dt.datetime.now(dt.timezone.utc)
-                                                                  - dt.timedelta(days=1)).isoformat()}))
-        self.run_ok()
+    def test_hourly_run_books_per_agent_without_a_comment(self):
+        self.day_ago()
+        self.run_ok("--comment-hour", "24")
         ev = {e["agentId"]: e for e in self.events()}
         self.assertEqual(set(ev), {"a-tachi", "a-ishi"})
-        total = sum(Decimal(e["costCents"]) for e in ev.values())
-        self.assertEqual(total, Decimal("40.0"))  # $0.40 in cents
+        self.assertEqual(sum(Decimal(e["costCents"]) for e in ev.values()), Decimal("40.0"))  # $0.40
         self.assertGreater(Decimal(ev["a-tachi"]["costCents"]), Decimal(ev["a-ishi"]["costCents"]))
-        self.assertEqual(ev["a-tachi"]["idempotencyKey"][:11], "openrouter-")
+        self.assertRegex(ev["a-tachi"]["idempotencyKey"], r"^openrouter-\d{4}-\d\d-\d\dT\d\d-a-tachi$")
+        self.assertEqual(self.comments(), [])
+        state = json.loads(self.state.read_text())
+        self.assertEqual(sum(Decimal(v) for v in state["booked"].values()), Decimal("0.40"))
+        self.assertNotIn(ORKEY, json.dumps(self.stub.posts))
+
+    def test_daily_comment_sums_the_hours_and_resets(self):
+        self.day_ago()
+        self.run_ok("--comment-hour", "24")
+        self.stub.usage = 1.10
+        state = json.loads(self.state.read_text())
+        state["at"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).isoformat()
+        self.state.write_text(json.dumps(state))
+        self.run_ok("--comment")
         body = self.comments()[0]
+        self.assertIn("Booked in Paperclip since the last report", body)
+        self.assertIn(": $0.50", body)  # 0.40 + 0.10
         self.assertIn("Tachikoma: $", body)
-        self.assertNotIn(ORKEY, body + json.dumps(self.stub.posts))
+        state = json.loads(self.state.read_text())
+        self.assertEqual(state["booked"], {})
+        self.assertIn("commentedOn", state)
+        # Same day again: no second comment.
+        self.run_ok()
+        self.assertEqual(len(self.comments()), 1)
 
     def test_spend_without_runs_carries_over(self):
         before = {"usage": "0.60", "at": dt.datetime.now(dt.timezone.utc).isoformat()}
         self.state.write_text(json.dumps(before))
-        self.run_ok()
+        self.run_ok("--comment")
         self.assertEqual(self.events(), [])
-        self.assertIn("carries over", self.comments()[0])
-        self.assertEqual(json.loads(self.state.read_text()), before)
+        self.assertIn("Waiting to be booked", self.comments()[0])
+        after = json.loads(self.state.read_text())
+        self.assertEqual((after["usage"], after["at"]), (before["usage"], before["at"]))
 
     def test_dry_run_writes_nothing(self):
-        self.run_ok("--dry-run")
+        self.day_ago()
+        self.run_ok("--dry-run", "--comment")
         self.assertEqual(self.stub.posts, [])
-        self.assertFalse(self.state.exists())
+        self.assertEqual(json.loads(self.state.read_text())["usage"], "0.60")
 
     def test_refuses_a_non_loopback_paperclip(self):
         args = list(self.args)
