@@ -39,10 +39,12 @@ The default theme is apps that are relaxing and enjoyable to use.
    fits the feedback. Prefer languages that can produce a static web build
    (Rust or Zig to WebAssembly, Gleam, Elm, ReScript, Nim, Haxe, OCaml via
    js_of_ocaml…), so the morning preview works in a browser.
-   You have three hours, so take up to 30 minutes over this: sketch three
-   ideas, try the riskiest part of the best one in a scratch file, and keep
-   the one you can finish well. Put the shortlist and why you chose in the
-   PR description.
+   You have three hours; aim to use 60–120 minutes of them. Take up to 30
+   minutes over this: sketch three ideas, try the riskiest part of the best
+   one in a scratch file, and keep the one you can finish well. Put the
+   shortlist and why you chose in the PR description. Spend the rest
+   building, then playtesting and polishing: a richer, finished small thing
+   beats a quick one. Check `LOG.md`'s "Petter's wishes" first.
 2. **Claim it straight away**, so a copy starting later sees your pick:
    `git switch -c night/YYYY-MM-DD-<slug>`, then
    `git sparse-checkout add nights/YYYY-MM-DD-<slug>`, create that folder with a

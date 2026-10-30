@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Daily spend report: OpenRouter's real figures into Paperclip.
+
+Hermes reports tokens but no price, so Paperclip books every agent run as
+"unpriced" and its budgets see $0. Once a day this script:
+  1. reads the OpenRouter key's usage (GET /api/v1/key),
+  2. splits the spend since its last run across the agents by their runs'
+     tokens in that window (input + 50 x output: with ~90% cache hits, output
+     costs about 50 times more per token than input on our models),
+  3. books each share in Paperclip as a cost event, so its budgets and
+     by-agent cost views show real money,
+  4. posts one comment on the open "Spend" issue.
+
+Runs on the VM as root (agent-manager-spend.timer). Standard library only.
+Secrets come from root-only files and are never printed:
+  PAPERCLIP_BOARD_KEY  in <secrets-dir>/paperclip-board.env
+  OPENROUTER_API_KEY   in <secrets-dir>/hermes.env
+"""
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
+
+COMPANY = "Section 9"
+TITLE = "Spend"
+DESCRIPTION = "Once a day the VM posts OpenRouter's real spend here and books it per agent."
+OPEN = "backlog,todo,in_progress,in_review,blocked"
+OUTPUT_WEIGHT = 50
+MODEL = "deepseek/deepseek-v4.1-flash"
+KEYS = re.compile(r"(pcp_board_|sk-or-|github_pat_)[A-Za-z0-9_-]*")
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+class Failure(Exception):
+    pass
+
+
+secrets = []
+
+
+def redact(text):
+    for s in secrets:
+        text = text.replace(s, "[redacted]")
+    return KEYS.sub("[redacted]", text)
+
+
+def read_env_value(path, name):
+    """Last NAME=VALUE line in an env file; quotes stripped (as paperclip-apply.py)."""
+    value = None
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as e:
+        raise Failure(f"cannot read {path}: {e.strerror}") from None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, val = line.partition("=")
+        if sep and key.strip() == name:
+            val = val.strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
+            value = val
+    if not value:
+        raise Failure(f"{name} is missing or empty in {path}")
+    return value
+
+
+def http(method, url, token, body=None):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Authorization", "Bearer " + token)
+    req.add_header("Accept", "application/json")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        detail = redact(e.read().decode("utf-8", "replace"))[:300]
+        raise Failure(f"{method} {redact(url)} -> {e.code}: {detail}") from None
+    except (urllib.error.URLError, OSError) as e:
+        raise Failure(f"{method} {redact(url)} -> no response: {redact(str(getattr(e, 'reason', e)))}") from None
+    return json.loads(raw) if raw.strip() else None
+
+
+def q(value):
+    return urllib.parse.quote(str(value), safe="")
+
+
+def ts(value):
+    return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def usd(value):
+    return f"${Decimal(value).quantize(Decimal('0.01'), ROUND_HALF_UP)}"
+
+
+def split(total, weights):
+    """total (Decimal USD) by weight; the last agent takes the rounding remainder."""
+    weighted = {k: w for k, w in weights.items() if w > 0}
+    whole = sum(weighted.values())
+    if not weighted or total <= 0:
+        return {}
+    out, left = {}, total
+    names = sorted(weighted)
+    for name in names[:-1]:
+        share = (total * weighted[name] / whole).quantize(Decimal("0.000001"))
+        out[name] = share
+        left -= share
+    out[names[-1]] = left
+    return out
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p.add_argument("--dry-run", action="store_true", help="print, write nothing")
+    p.add_argument("--secrets-dir", default="/etc/agent-manager")
+    p.add_argument("--state", default="/var/lib/agent-manager/spend-state.json")
+    p.add_argument("--paperclip", default="http://127.0.0.1:3100")
+    p.add_argument("--openrouter", default="https://openrouter.ai/api/v1")
+    a = p.parse_args(argv)
+
+    try:
+        host = urllib.parse.urlsplit(a.paperclip)
+        if host.scheme != "http" or host.hostname not in LOOPBACK:
+            raise Failure("refusing to send the board key to a non-loopback host")
+        board = read_env_value(Path(a.secrets_dir) / "paperclip-board.env", "PAPERCLIP_BOARD_KEY")
+        orkey = read_env_value(Path(a.secrets_dir) / "hermes.env", "OPENROUTER_API_KEY")
+        secrets.extend([board, orkey])
+        pc = a.paperclip.rstrip("/")
+
+        k = (http("GET", a.openrouter.rstrip("/") + "/key", orkey) or {}).get("data") or {}
+        if "usage" not in k:
+            raise Failure("OpenRouter /key reply has no usage")
+        usage = Decimal(str(k["usage"]))
+        now = dt.datetime.now(dt.timezone.utc)
+
+        state_path = Path(a.state)
+        try:
+            state = json.loads(state_path.read_text())
+        except (OSError, ValueError):
+            state = {}
+        since = ts(state["at"]) if state.get("at") else now - dt.timedelta(days=1)
+        # First run: book nothing; earlier spend predates the reporting.
+        delta = usage - Decimal(str(state["usage"])) if "usage" in state else Decimal(0)
+        if delta < 0:
+            delta = Decimal(0)
+
+        companies = http("GET", pc + "/api/companies", board) or []
+        found = [c for c in companies if c.get("name") == COMPANY and c.get("status") != "archived"]
+        if len(found) != 1:
+            raise Failure(f"expected one company named '{COMPANY}', found {len(found)}")
+        cid = found[0]["id"]
+        agents = {x["id"]: x["name"] for x in http("GET", f"{pc}/api/companies/{q(cid)}/agents", board) or []}
+
+        runs = http("GET", f"{pc}/api/companies/{q(cid)}/heartbeat-runs?limit=500", board) or []
+        if isinstance(runs, dict):
+            runs = runs.get("runs") or runs.get("data") or []
+        tokens = {}
+        for r in runs:
+            end = r.get("finishedAt") or r.get("updatedAt") or r.get("createdAt")
+            if not end or not (since < ts(end) <= now) or r.get("agentId") not in agents:
+                continue
+            t = tokens.setdefault(r["agentId"], [0, 0])
+            t[0] += int(r.get("inputTokens") or 0)
+            t[1] += int(r.get("outputTokens") or 0)
+        shares = split(delta, {aid: i + OUTPUT_WEIGHT * o for aid, (i, o) in tokens.items()})
+
+        day = now.date().isoformat()
+        lines = [f"Spend report {day}", ""]
+        limit = k.get("limit")
+        month = Decimal(str(k.get("usage_monthly") or 0))
+        cap = f" of {usd(limit)} cap" if limit else ""
+        left = f", {usd(k['limit_remaining'])} left" if k.get("limit_remaining") is not None else ""
+        lines.append(f"OpenRouter this month (UTC): {usd(month)}{cap}{left}. Today so far: {usd(k.get('usage_daily') or 0)}.")
+        if "usage" not in state:
+            lines.append("First report: nothing booked; from tomorrow each day's spend is booked per agent.")
+        else:
+            lines.append(f"Since the last report ({since:%Y-%m-%d %H:%M} UTC): {usd(delta)}"
+                         + (", booked in Paperclip as:" if shares else ", no agent runs yet to book it to; it carries over."))
+            for aid, share in sorted(shares.items(), key=lambda kv: -kv[1]):
+                i, o = tokens[aid]
+                lines.append(f"- {agents[aid]}: {usd(share)} ({i / 1e6:.1f}M in, {o / 1e3:.0f}k out)")
+
+        if a.dry_run:
+            print("\n".join(lines))
+            return 0
+
+        for aid, share in shares.items():
+            i, o = tokens[aid]
+            http("POST", f"{pc}/api/companies/{q(cid)}/cost-events", board, {
+                "idempotencyKey": f"openrouter-{day}-{aid}",
+                "agentId": aid,
+                "provider": "openrouter",
+                "biller": "openrouter",
+                "billingType": "metered_api",
+                "costStatus": "reported",
+                "model": MODEL,
+                "inputTokens": i,
+                "outputTokens": o,
+                "costCents": str(share * 100),
+                "occurredAt": now.isoformat().replace("+00:00", "Z"),
+            })
+
+        issues = http("GET", f"{pc}/api/companies/{q(cid)}/issues?status={q(OPEN)}", board) or []
+        issue = next((i for i in issues if i.get("title") == TITLE), None)
+        if issue is None:
+            issue = http("POST", f"{pc}/api/companies/{q(cid)}/issues", board, {
+                "title": TITLE, "description": DESCRIPTION, "status": "backlog",
+                "priority": "low", "allowDuplicate": True})
+        http("POST", f"{pc}/api/issues/{q(issue['id'])}/comments", board, {"body": "\n".join(lines)})
+
+        # Spend with no runs to book it to stays pending: the next report books it.
+        if delta > 0 and not shares:
+            new_state = state
+        else:
+            new_state = {"usage": str(usage), "at": now.isoformat()}
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(new_state))
+        os.replace(tmp, state_path)
+        if delta > 0 and not shares:
+            print(f"spend report posted: {usd(delta)} carried over (no agent runs yet)")
+        else:
+            print(f"spend report posted: {usd(delta)} booked across {len(shares)} agent(s)")
+        return 0
+    except Failure as e:
+        print(f"spend report failed: {redact(str(e))}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

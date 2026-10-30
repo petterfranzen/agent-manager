@@ -27,6 +27,9 @@ docker compose version >/dev/null || { echo "error: docker compose is not instal
 install -m 0755 -o root -g root "$HERE/vm-sync.sh" /usr/local/sbin/agent-manager-sync
 install -m 0644 -o root -g root "$HERE/agent-manager-sync.service" /etc/systemd/system/agent-manager-sync.service
 install -m 0644 -o root -g root "$HERE/agent-manager-sync.timer" /etc/systemd/system/agent-manager-sync.timer
+install -m 0755 -o root -g root "$HERE/spend-report.py" /usr/local/sbin/agent-manager-spend
+install -m 0644 -o root -g root "$HERE/agent-manager-spend.service" /etc/systemd/system/agent-manager-spend.service
+install -m 0644 -o root -g root "$HERE/agent-manager-spend.timer" /etc/systemd/system/agent-manager-spend.timer
 
 # Cap the journal (it had grown to ~1 GB). Restart journald only on a change.
 JOURNALD_CONF=/etc/systemd/journald.conf.d/agent-manager.conf
@@ -50,6 +53,7 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now agent-manager-sync.timer
+systemctl enable --now agent-manager-spend.timer
 
 # The sync itself is the caller with --from-sync: no first sync, no output.
 [ "$FROM_SYNC" -eq 0 ] || exit 0
