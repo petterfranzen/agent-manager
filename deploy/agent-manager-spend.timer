@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily spend report before the 07:47 check-in
+
+[Timer]
+OnCalendar=*-*-* 07:20 Europe/Stockholm
+Persistent=true
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target
