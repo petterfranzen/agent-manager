@@ -9,7 +9,10 @@ Hermes reports tokens but no price, so Paperclip books every agent run as
      costs about 50 times more per token than input on our models),
   3. books each share in Paperclip as a cost event, so its budgets and
      by-agent cost views show real money,
-  4. once a day, from 07:00 Stockholm, posts a summary on the open "Spend" issue.
+  4. keeps a live snapshot in the open "Spend" issue's description (OpenRouter's
+     month, cap, remaining, today), so anyone with Paperclip access can read the
+     true figures at most an hour old, and once a day, from 07:00 Stockholm,
+     posts a summary comment there.
 
 Booking hourly keeps Paperclip's budgets current, so they stop an agent
 within the hour rather than a day late. Runs on the VM as root
@@ -127,6 +130,31 @@ def split(total, weights):
     return out
 
 
+def snapshot(k, now, local, booked, pending, agents):
+    """The Spend issue's description: OpenRouter's own figures, then what is booked."""
+    def money(key):
+        return usd(k[key]) if k.get(key) is not None else "n/a"
+    out = [
+        f"**Live snapshot, updated hourly by the VM.** As of {now:%Y-%m-%d %H:%M} UTC ({local:%H:%M} Stockholm).",
+        "",
+        "OpenRouter (the key the agents use; true cost):",
+        f"- This month (UTC): {money('usage_monthly')}",
+        f"- Cap: {money('limit')}" + (f" ({k['limit_reset']} reset)" if k.get("limit_reset") else ""),
+        f"- Left: {money('limit_remaining')}",
+        f"- Today (UTC): {money('usage_daily')}; this week: {money('usage_weekly')}; all time: {money('usage')}",
+        "",
+        "Booked in Paperclip since the last daily summary:",
+    ]
+    if booked:
+        out += [f"- {agents.get(aid, aid)}: {usd(v)}" for aid, v in sorted(booked.items(), key=lambda kv: -kv[1])]
+    else:
+        out.append("- nothing yet")
+    if pending:
+        out.append(f"- waiting for a finished run: {usd(pending)}")
+    out += ["", DESCRIPTION]
+    return "\n".join(out)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--dry-run", action="store_true", help="print, write nothing")
@@ -235,13 +263,17 @@ def main(argv=None):
                 "occurredAt": now.isoformat().replace("+00:00", "Z"),
             })
 
+        issues = http("GET", f"{pc}/api/companies/{q(cid)}/issues?status={q(OPEN)}", board) or []
+        issue = next((i for i in issues if i.get("title") == TITLE), None)
+        if issue is None:
+            issue = http("POST", f"{pc}/api/companies/{q(cid)}/issues", board, {
+                "title": TITLE, "description": DESCRIPTION, "status": "backlog",
+                "priority": "low", "allowDuplicate": True})
+        # Every run: the issue description is the live snapshot anyone with
+        # Paperclip access can read (the Major, the check-in), at most an hour old.
+        http("PATCH", f"{pc}/api/issues/{q(issue['id'])}", board,
+             {"description": snapshot(k, now, local, booked, delta if delta > 0 and not shares else Decimal(0), agents)})
         if comment:
-            issues = http("GET", f"{pc}/api/companies/{q(cid)}/issues?status={q(OPEN)}", board) or []
-            issue = next((i for i in issues if i.get("title") == TITLE), None)
-            if issue is None:
-                issue = http("POST", f"{pc}/api/companies/{q(cid)}/issues", board, {
-                    "title": TITLE, "description": DESCRIPTION, "status": "backlog",
-                    "priority": "low", "allowDuplicate": True})
             http("POST", f"{pc}/api/issues/{q(issue['id'])}/comments", board, {"body": "\n".join(lines)})
 
         # Spend with no finished run to book it to stays pending: a later run books it.
