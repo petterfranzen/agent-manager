@@ -85,7 +85,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: paperclip-apply.py against a fake Paperclip
-        run: python3 -m unittest scripts/test_paperclip_apply.py scripts/test_spend_report.py
+        run: python3 -m unittest scripts/test_paperclip_apply.py scripts/test_spend_report.py scripts/test_crew_status.py
 
   deploy:
     name: Deploy scripts
@@ -106,7 +106,11 @@ jobs:
           fi
           # verify checks that ExecStart exists, so put the script where the unit expects it.
           sudo install -m 0755 deploy/vm-sync.sh /usr/local/sbin/agent-manager-sync
-          systemd-analyze verify deploy/agent-manager-sync.service deploy/agent-manager-sync.timer
+          sudo install -m 0755 deploy/spend-report.py /usr/local/sbin/agent-manager-spend
+          sudo install -m 0755 deploy/crew-status.py /usr/local/sbin/agent-manager-crew-status
+          systemd-analyze verify deploy/agent-manager-sync.service deploy/agent-manager-sync.timer \
+            deploy/agent-manager-spend.service deploy/agent-manager-spend.timer \
+            deploy/agent-manager-crew-status.service
 
   sandbox:
     name: Sandbox image smoke test

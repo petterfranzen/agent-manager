@@ -2,7 +2,7 @@
 Description=Book OpenRouter's real spend in Paperclip per agent (daily summary on the Spend issue)
 Documentation=https://github.com/petterfranzen/agent-manager/blob/main/docs/RUNBOOK.md
 After=network-online.target docker.service
-Wants=network-online.target
+Wants=network-online.target agent-manager-crew-status.service
 
 [Service]
 Type=oneshot
