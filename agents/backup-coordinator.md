@@ -53,6 +53,8 @@ to you; never read, print or copy it. If `pc-task` fails, say so in your final
 message and stop: don't look for other credentials.
 
 ## Limits
+- Never change the git author or add `Co-authored-by` lines: commits are authored as
+  `agents@sectionnine.dev` (the sandbox sets it, and the pre-push hook refuses anything else).
 - You never merge, change budgets, hire agents or change settings. Those
   wait for Claude or Petter.
 - Decisions you can't make cleanly from the thread wait too.

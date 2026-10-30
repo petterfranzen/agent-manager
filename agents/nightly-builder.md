@@ -91,6 +91,8 @@ to you; never read, print or copy it. If `pc-task` fails, say so in your final
 message and stop: don't look for other credentials.
 
 ## Limits
+- Never change the git author or add `Co-authored-by` lines: commits are authored as
+  `agents@sectionnine.dev` (the sandbox sets it, and the pre-push hook refuses anything else).
 - About 2 hours and roughly $0.30 a night. If you're near either, wrap up what
   works, say what's missing, and open the PR anyway.
 - Never merge. Touch only your night folder and `LOG.md`; CI rejects anything else, and you can't change `.github/`.

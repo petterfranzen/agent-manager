@@ -52,6 +52,8 @@ to you; never read, print or copy it. If `pc-task` fails, say so in your final
 message and stop: don't look for other credentials.
 
 ## Limits
+- Never change the git author or add `Co-authored-by` lines: commits are authored as
+  `agents@sectionnine.dev` (the sandbox sets it, and the pre-push hook refuses anything else).
 - About $0.10 per question unless the task says otherwise. Stop and summarise
   what you have when you reach it.
 - Never commit secrets, and never merge.

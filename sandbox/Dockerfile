@@ -38,8 +38,10 @@ RUN useradd -m -u 10001 -s /bin/bash agent \
 
 USER agent
 RUN echo 'eval "$(mise activate bash)"' >> ~/.bashrc \
- && git config --global user.name "ghost-agent" \
- && git config --global user.email "ghost-agent@users.noreply.github.com" \
+ # An address on Petter's own domain with no GitHub account behind it, so no
+ # stranger's account is credited (a ...@users.noreply.github.com address is).
+ && git config --global user.name "Section 9 agent" \
+ && git config --global user.email "agents@sectionnine.dev" \
  && git config --global credential.helper store \
  && git config --global core.hooksPath ~/.config/git/hooks \
  && mkdir -p ~/work ~/.config/git/hooks ~/.config/gh
