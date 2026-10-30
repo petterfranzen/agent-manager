@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
-# Refuses a push that would publish a secret. The repos are public.
+# Refuses a push that would publish a secret (the repos are public), or that
+# carries a commit identity other than the agents' own address.
 set -euo pipefail
+ALLOWED="agents@sectionnine.dev"
+range="@{upstream}..HEAD"
+git rev-parse -q --verify "@{upstream}" >/dev/null 2>&1 || range="origin/main..HEAD"
+bad=$(git log --format='%ae%n%ce' "$range" 2>/dev/null | sort -u | grep -vx "$ALLOWED" || true)
+bad+=$(git log --format='%b' "$range" 2>/dev/null | grep -i '^co-authored-by:' | grep -vi "$ALLOWED" || true)
+if [ -n "$bad" ]; then
+  echo "pre-push: commits must be authored as $ALLOWED, with no other Co-authored-by lines; found:" >&2
+  echo "$bad" | sort -u >&2
+  echo "Fix with: git rebase origin/main --exec 'git commit --amend --no-edit --reset-author'" >&2
+  exit 1
+fi
 if ! gitleaks git --no-banner --redact --log-opts="@{upstream}..HEAD" . 2>/dev/null; then
   # First push of a branch has no upstream: scan what's new against origin/main.
   gitleaks git --no-banner --redact --log-opts="origin/main..HEAD" . || {

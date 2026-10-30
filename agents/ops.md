@@ -53,6 +53,8 @@ to you; never read, print or copy it. If `pc-task` fails, say so in your final
 message and stop: don't look for other credentials.
 
 ## Limits
+- Never change the git author or add `Co-authored-by` lines: commits are authored as
+  `agents@sectionnine.dev` (the sandbox sets it, and the pre-push hook refuses anything else).
 - Read-only. Never delete, restart, or change anything. Suggest it instead.
 - Flight-tracker and the VM itself are watched by the coordinator's check-ins
   through `/api/ops/stats`, not by you.

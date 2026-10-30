@@ -44,6 +44,9 @@ sessions: a normal key only sees itself, and a management key can mint keys.
   `ghost-in-the-machine`, here, and in flight-tracker (production included; send
   him a summary after each flight-tracker deploy).
 - Server agents never merge. If one tries, stop it and tell Petter.
+- Squash-merge agent PRs with an explicit `commit_message` (PR title, a short
+  body, no `Co-authored-by` lines): GitHub otherwise adds one per PR commit
+  author, and contributor credit then goes to whichever account owns that email.
 - Image and dependency updates: merge only once the release is 24 h old. Major
   CVE fixes (CVSS 7+ or CISA KEV) within 72 h (Petter's patch rule).
 
@@ -51,8 +54,9 @@ sessions: a normal key only sees itself, and a management key can mint keys.
 - All repos are public. Before merging, check the diff for secrets, tokens,
   personal data and anything that names private infrastructure beyond what's
   already public.
-- Agents get access to `ghost-in-the-machine` only. Don't widen their token or
-  give them flight-tracker without Petter's OK.
+- Agents' token reaches `ghost-in-the-machine`, `nvim-trainer`, `portfolio` and
+  `dinner-planner` (Petter, 30 Oct), each with a "main: PRs only" ruleset. Don't
+  widen it further, or give them flight-tracker, without Petter's OK.
 - No xAI models (Petter's choice). OpenRouter stays on ZDR endpoints.
 - Personal Daybook content never goes to agents, OpenRouter or the VM.
 
