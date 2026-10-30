@@ -448,7 +448,7 @@ class ApplyTest(unittest.TestCase):
 
     def test_first_run_creates_everything(self):
         out = self.apply_ok().stdout
-        self.assertEqual(self.fake.company["budgetMonthlyCents"], 2000)
+        self.assertEqual(self.fake.company["budgetMonthlyCents"], 1900)
         self.assertEqual(sorted(a["name"] for a in self.fake.agents.values()),
                          ["Batou", "Ishikawa", "Saito", "Tachikoma", "Togusa"])
         tachikoma = self.agent("Tachikoma")
@@ -566,7 +566,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(len(policies), 6)
         cid = self.fake.company["id"]
         self.assertEqual((policies[("company", cid)]["amount"], policies[("company", cid)]["unpricedUsagePolicy"]),
-                         (2000, "allow"))
+                         (1900, "allow"))
         for name, cents in (("Tachikoma", 1000), ("Batou", 400), ("Ishikawa", 300), ("Togusa", 200), ("Saito", 100)):
             pol = policies[("agent", self.agent(name)["id"])]
             self.assertEqual((pol["amount"], pol["unpricedUsagePolicy"], pol["isActive"]), (cents, "allow", True), name)
@@ -574,7 +574,7 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("policy agent Tachikoma: unpriced block -> allow", out)
         body = self.policy_writes()[0]["body"]
         self.assertEqual(body, {"scopeType": "company", "scopeId": cid, "metric": "billed_cents",
-                                "windowKind": "calendar_month_utc", "amount": 2000, "isActive": True,
+                                "windowKind": "calendar_month_utc", "amount": 1900, "isActive": True,
                                 "unpricedUsagePolicy": "allow"})
 
     def test_policy_drift_is_fixed_and_a_rerun_writes_none(self):
@@ -585,7 +585,7 @@ class ApplyTest(unittest.TestCase):
         mark = len(self.fake.log)
         out = self.apply_ok().stdout
         self.assertIn("policy agent Batou: amount 1 -> 400 cents; unpriced block -> allow", out)
-        self.assertIn("policy company Section 9: amount 0 -> 2000 cents", out)
+        self.assertIn("policy company Section 9: amount 0 -> 1900 cents", out)
         self.assertEqual(len(self.policy_writes(mark)), 2)
         self.assertEqual(self.fake.policies[("agent", batou)]["unpricedUsagePolicy"], "allow")
         self.assertTrue(self.fake.policies[("company", self.fake.company["id"])]["isActive"])

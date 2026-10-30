@@ -8,11 +8,14 @@
 
 [company]
 name = "Section 9"
-budget_monthly_cents = 2000
+# $19: Paperclip pauses the agents just before the OpenRouter key's hard $20
+# cap, so a run is never cut off halfway by an empty key.
+budget_monthly_cents = 1900
 # Hermes reports tokens, not dollars, so every run is "unpriced" usage. With
 # "block" (Paperclip's default) one run pauses the agent and the whole company.
-# "allow" lets Paperclip record $0 for those runs, so the OpenRouter key's $20
-# monthly cap is the real limit and the budgets here are bookkeeping.
+# "allow" lets those runs through; the real money arrives separately, booked
+# every hour from OpenRouter by deploy/spend-report.py, and the budgets below
+# enforce against that.
 unpriced_usage = "allow"
 
 # Hermes gateway adapter settings shared by every agent. The gateway key is
