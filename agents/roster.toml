@@ -57,7 +57,7 @@ role = "researcher"
 title = "Researcher"
 brief = "agents/researcher.md"
 avatar = "agents/avatars/ishikawa.png"
-budget_monthly_cents = 300
+budget_monthly_cents = 500
 timeout_sec = 3600
 
 [[agents]]

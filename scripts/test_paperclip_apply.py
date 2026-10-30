@@ -567,7 +567,7 @@ class ApplyTest(unittest.TestCase):
         cid = self.fake.company["id"]
         self.assertEqual((policies[("company", cid)]["amount"], policies[("company", cid)]["unpricedUsagePolicy"]),
                          (1900, "allow"))
-        for name, cents in (("Tachikoma", 1000), ("Batou", 400), ("Ishikawa", 300), ("Togusa", 200), ("Saito", 100)):
+        for name, cents in (("Tachikoma", 1000), ("Batou", 400), ("Ishikawa", 500), ("Togusa", 200), ("Saito", 100)):
             pol = policies[("agent", self.agent(name)["id"])]
             self.assertEqual((pol["amount"], pol["unpricedUsagePolicy"], pol["isActive"]), (cents, "allow", True), name)
         self.assertIn("policy company Section 9: unpriced block -> allow", out)
