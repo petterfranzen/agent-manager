@@ -1,0 +1,3 @@
+Merging this file turns on the one-shot decommission in vm-sync.sh: the Hetzner
+VM stops running the agent stack (Paperclip, Hermes, sandbox, Postgres) and
+keeps flight-tracker and agent-manager-sync.timer. See docs/RUNBOOK.md.

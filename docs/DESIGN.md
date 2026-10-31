@@ -1,5 +1,10 @@
 # Design
 
+> **31 Oct 2026: Paperclip and the agent stack are being removed from the Hetzner
+> VM.** It keeps flight-tracker and `agent-manager-sync.timer` only; the agents
+> move to a VPS. This document describes the stack as it was on Hetzner. See
+> [migration-vps.md](migration-vps.md) and RUNBOOK.md, "What the VM runs now".
+
 ## What this is for
 
 Petter runs a small fleet of AI agents on the same Hetzner VM as

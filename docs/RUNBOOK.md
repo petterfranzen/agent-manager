@@ -1,5 +1,42 @@
 # Runbook: deploy the agent stack on the VM
 
+## What the Hetzner VM runs now (from 31 Oct 2026)
+
+**flight-tracker only** (its own unit, data and cloudflared), plus
+`agent-manager-sync.timer`, which stays because the VM will later pull deploys
+for agents' larger projects from it. Paperclip, Hermes, the sandbox, Postgres,
+the spend and crew-status timers and the heal step are gone. Steps 1-10 below
+describe how the stack was set up and now apply to the VPS (see
+[migration-vps.md](migration-vps.md)), not Hetzner.
+
+The removal runs from `deploy/vm-sync.sh` once `deploy/DECOMMISSIONED` is in
+the checkout. The sync logs each step to the journal
+(`journalctl -u agent-manager-sync | grep decommission`), in order:
+1. copy Paperclip's newest DB backup and `master.key` out of the
+   `paperclip-data` volume to `/var/backups/paperclip/` (root-only, files older
+   than 30 days are deleted on each run);
+2. `docker compose down --volumes --rmi all --remove-orphans` (all four services,
+   their volumes and images);
+3. stop, disable and remove the spend and crew-status units and scripts and the
+   heal step;
+4. delete the stack's files in `/etc/agent-manager/` (`postgres.env`,
+   `paperclip.env`, `hermes.env`, `sandbox.env`, `paperclip-board.env`, the
+   Hermes SSH key, the sandbox authorized keys, `bridge-keys/`, `crew-deny.txt`).
+   The sync needs none of them. Any other `.env` there is left and logged.
+
+Each step leaves a marker in `/var/lib/agent-manager/decommission/`, so a re-run
+does nothing twice and a failed step is retried on the next tick. To redo one,
+delete its marker. The old sync copy applies the merge commit first (it still
+runs `compose up`), then installs this one; the decommission starts on the tick
+after. If the old copy cannot apply (Paperclip already down), run
+`git -C /opt/agent-manager pull --ff-only && bash /opt/agent-manager/deploy/install-sync.sh` by hand.
+
+After it ran, in Cloudflare Zero Trust (not done by the sync): remove the public
+hostname `hq.sectionnine.dev` -> `localhost:3100` from the tunnel and the Access
+application `section9-hq`. Keep the `claude-ops-stats` service token (flight-tracker
+uses it). If cloudflared runs from a local `config.yml`, delete the `hq.sectionnine.dev`
+ingress rule there instead.
+
 For the Hetzner CX23 that runs flight-tracker (Ubuntu 26.04). Run everything as root in the
 Hetzner web console, or over SSH once that works. About 30–45 minutes, mostly waiting.
 
