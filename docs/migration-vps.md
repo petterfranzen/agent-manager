@@ -77,16 +77,12 @@ Spend reports keep working as now:
 - **CPU:** 1 vCPU makes Tachikoma's builds slower, so the nightly window stays 3 hours.
 
 ## Things to settle before building
-1. **A new OpenRouter key for the VPS, not the old one.**
-   - The old key also lives on Hetzner, so both machines would spend from one cap, and revoking it at cutover would break the VPS.
-   - Make a new key with its own $20 monthly cap, then revoke the old key once Hetzner is off.
+1. **Reuse the existing secrets and tokens** (Petter, 31 Oct): the OpenRouter key, the agents' GitHub token and the Cloudflare Access service token. During phase 3 both machines spend from the one $20 cap, which the spend snapshot already shows as a single figure. At cutover, delete them from Hetzner instead of revoking them.
 2. **Zero-data-retention (ZDR) routing for DeepSeek.**
    - The rule is that OpenRouter stays on ZDR endpoints. Hermes's OpenRouter provider settings must keep `data_collection: deny` and allow only providers that keep no data.
    - First step: check that DeepSeek's fast model has such a provider on OpenRouter. If none does, pick the nearest model that has one.
    - No xAI models, as before.
-3. **The agents' GitHub token.**
-   - The new private `section9-hq` is outside the token's current scope, so this needs Petter's OK.
-   - Proposal: a second, separate fine-grained token that can only write issues in `section9-hq`, used by `s9-task` only. The repo token stays as it is.
+3. **The agents' GitHub token.** `section9-hq` is a new private repo. Adding it to the existing token's scope (issues only) needs Petter's OK.
 4. **Hostinger's own Hermes install.**
    - Keep it as the reference config, but run our pinned compose: Hermes plus the sandbox, no Postgres, no Paperclip.
    - That keeps the guardrails: the sandbox user, the pre-push hook, `agents@sectionnine.dev`, digest pins, and the CI smoke test.
@@ -101,8 +97,8 @@ Spend reports keep working as now:
   - add the 4 GB swapfile.
 - **Software:** install Docker and cloudflared.
 - **Tunnel:** `cloudflared tunnel login`, create the tunnel, and add an Access app for `ops.sectionnine.dev` that allows the existing service token.
-- **The private repo:** create `section9-hq` and the issue-only token.
-- **Secrets:** put the new OpenRouter key and the tokens in `/etc/section9/*.env` (root-only). Never in chat, never in a repo.
+- **The private repo:** create `section9-hq`, and add it to the agents' existing token with issue access.
+- **Secrets:** copy the existing ones from Hetzner's `/etc/agent-manager/` into `/etc/section9/*.env` (root-only). Never in chat, never in a repo.
 - **Bootstrap:** `git clone https://github.com/petterfranzen/agent-manager /opt/agent-manager && sudo /opt/agent-manager/vps/install.sh`
 
 **Phase 2, the Major (a PR to agent-manager, reviewed with Saito):**
@@ -123,7 +119,7 @@ Spend reports keep working as now:
 **Phase 4, cutover:**
 - On Hetzner, stop and remove the Paperclip, Postgres, Hermes and sandbox containers, and the spend, heal and crew-status timers.
 - Keep Paperclip's last database backup for 30 days.
-- Revoke the old OpenRouter key and the Paperclip API keys, and retire the hq.sectionnine.dev Access app.
+- Delete the copied secrets from Hetzner, revoke the Paperclip API keys, and retire the hq.sectionnine.dev Access app.
 - Give flight-tracker back its memory headroom.
 - **Rollback during phase 3:** un-pause the agent in Paperclip. After cutover: restore the backup and compose up on Hetzner.
 
