@@ -174,6 +174,8 @@ namespace, so this is loopback.
 ## 8. Routines
 They are in the roster and are created **paused** (`active = false`). After
 the Major's first supervised run, set `active = true` in a PR and re-apply.
+Togusa's old "Backup coordinator check" routine was replaced by "QA sweep";
+archive the old one in Paperclip (the script never deletes a routine).
 The script never resumes a paused agent: unpause Saito in Paperclip then too.
 
 ## 9. Give Claude access
@@ -271,3 +273,21 @@ To run it by hand, use `systemctl start agent-manager-sync`.
   removed: `docker compose exec hermes ssh-keygen -R sandbox`.
 - **Memory tight** (flight-tracker slowing, swap in use): `docker stats`. Lower a
   container's `mem_limit` or stop the stack; flight-tracker keeps running either way.
+- **Every agent paused, budget incidents that won't resolve** ("Completed runs
+  must finish accounting before resuming"): a run ended without its usage
+  receipt (`process_lost` after a restart or OOM kill, or cancelled), so
+  Paperclip keeps its accounting pending and hard-stops the budgets. There is
+  no API to close it. The sync fixes it by itself every 5 minutes, an hour
+  after the run ended (`/usr/local/sbin/agent-manager-heal-accounting`,
+  `deploy/heal-accounting.py`; its lines in `journalctl -u agent-manager-sync`
+  start with `heal:`). To do it at once, run it by hand:
+  `/usr/local/sbin/agent-manager-heal-accounting`. Its SQL is the only write to
+  Paperclip's database outside Paperclip: it marks only receipt-less
+  `process_lost`/cancelled runs as accounted and releases their held
+  reservations. The real money is booked by the spend sync anyway. Then it
+  resolves the open hard-stop incidents at the same amount; Paperclip refuses
+  any whose booked spend has reached its budget.
+- **Why a run's process was lost:** `docker inspect -f '{{.Name}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} started={{.State.StartedAt}}' $(docker compose ps -q)`
+  and `journalctl -k --since '<time>' | grep -i -E 'oom|killed process'`.
+- **A browser hangs or the sandbox is short of memory:** `shoot` kills its
+  browser after 90 s. Anything else: `docker compose exec -u agent sandbox pkill -x chrome-headless`.

@@ -211,7 +211,7 @@ class CrewStatusTest(unittest.TestCase):
         self.assertEqual(doc["budget"], {"usedPercent": 7, "month": NOW.strftime("%Y-%m")})  # 133 / 1900
         tachi = self.agent(doc, "Tachikoma")
         self.assertEqual((tachi["role"], tachi["state"], tachi["now"]), ("Nightly builder", "working", "Nightly build"))
-        self.assertEqual(tachi["budgetPercent"], 12)  # 120.4 / 1000
+        self.assertEqual(tachi["budgetPercent"], 30)  # 120.4 / 400
         self.assertEqual(tachi["recent"], [{"at": crew.iso(crew.ts(ago(26))),
                                             "text": "Night 2026-10-31: Koi Drift in Gleam",
                                             "url": crew.PAGES + "2026-10-31-koi-drift/"}])

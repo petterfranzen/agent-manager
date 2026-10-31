@@ -12,8 +12,14 @@ on OpenRouter do the bulk of the work:
   link for the morning.
 - **Ishikawa, researcher:** research tasks and reports.
 - **Batou, coder:** small fixes and first drafts in `ghost-in-the-machine`.
-- **Saito, ops:** read-only watch over the VM; reports to the coordinator.
-- **Togusa, backup coordinator:** keeps work moving when Claude is unavailable.
+- **Saito, senior thinker:** plans hard tasks and reviews and audits code with
+  Ponytail; also keeps a read-only watch over the stack.
+- **Togusa, QA and UI/UX reviewer:** builds every agent PR, uses it in a
+  headless browser on desktop and phone, and gives the verdict the merge
+  waits for. Also the backup coordinator when Claude is unavailable.
+
+Tachikoma works overnight only; everyone else works whenever a task arrives
+(Petter, 30 Oct).
 
 Names come from Section 9 in *Ghost in the Shell* (Claude is the Major, Petter
 the Chief); see [agents/README.md](../agents/README.md) for avatars and personalities.
@@ -38,7 +44,7 @@ flowchart TD
 | `postgres` | `postgres:17-alpine` (digest pinned) | 256 MB | Paperclip's database |
 | `paperclip` | `ghcr.io/paperclipai/paperclip:2026.1023.0` (digest pinned) | 768 MB | UI and API on `127.0.0.1:3100`; cloudflared publishes it as `hq.sectionnine.dev` |
 | `hermes` | `nousresearch/hermes-agent:v0.22.5` (digest pinned) | 512 MB | Gateway API on port 8642. It shares `paperclip`'s network namespace, so Paperclip reaches it on loopback, the only plain-HTTP target Paperclip allows. |
-| `sandbox` | built from `sandbox/Dockerfile` | 1.5 GB, 1.5 CPU | Where agent commands run, reached over SSH. Holds the GitHub token, never the OpenRouter key. |
+| `sandbox` | built from `sandbox/Dockerfile` | 1.5 GB (+0.5 GB swap), 1.5 CPU | Where agent commands run, reached over SSH. Holds the GitHub token, never the OpenRouter key. Has Node, Playwright with headless Chromium (`shoot`), and the pinned Ponytail and Impeccable skills. |
 
 **Memory.** The VM has 3.8 GB of RAM and 4 GB of swap. Flight-tracker uses about
 0.6–0.8 GB after #132, and the OS plus cloudflared about 0.4 GB. The caps add
@@ -47,6 +53,16 @@ up to 3 GB, but they are ceilings, not usage: idle, the stack should sit around
 RAM. Every container is capped, so a runaway build is OOM-killed inside its
 container and can't take flight-tracker with it. The coordinator watches
 `/api/ops/stats` and flags pressure.
+
+**The browser.** The sandbox has Playwright's headless Chromium shell, one
+browser at a time: `shoot` (and anything else, through
+`flock /tmp/browser.lock`) waits for the one before. It runs headless with
+`--no-sandbox --disable-dev-shm-usage`, a 90 s limit that kills the whole
+process group, and `nice`. Measured: a `shoot` of a night's app peaks at about
+0.25 GB for the whole container, well inside its 1.5 GB cap. Deploys showed
+1.5 of 3.7 GB available with the stack idle, so a browser leaves about 1.2 GB.
+The sandbox's swap is capped at 0.5 GB, so a runaway page is OOM-killed in
+the sandbox instead of pushing flight-tracker out of RAM.
 
 ## Deploys
 
@@ -112,6 +128,40 @@ upstream's and that the CLIs are gone, and on `main` pushes it to
 `ghcr.io/petterfranzen/paperclip-slim`. Once it is published, `compose.yaml`
 pins it by digest. To bump Paperclip, follow the comment at the top of the Dockerfile.
 
+## Review and QA
+
+```mermaid
+flowchart LR
+  A[Agent opens PR<br/>self-checks with shoot,<br/>attaches screenshots] -->|ready| T[Togusa: QA<br/>build, shoot desktop + phone,<br/>use it, Impeccable audit,<br/>house rules]
+  A -.->|hard or risky code| SA[Saito: Ponytail review]
+  T -->|QA: changes needed| A
+  T -->|QA: pass| M[The Major reviews<br/>CI green]
+  SA -.-> M
+  M -->|squash-merge| G[main → Pages]
+```
+
+1. The author self-checks with `shoot` on desktop and a 390 px phone, puts both
+   screenshots in the PR and marks it ready.
+2. Togusa's sweep (05:40 and 16:40 Stockholm, or a task from the Major) picks
+   up ready agent PRs, builds each, opens it with `shoot`, taps through it,
+   runs Impeccable's audit and critique, and checks the house rules: calm
+   palette, no timers or scores, sound off until tapped, one-handed on a
+   phone. He posts one comment with screenshots, findings ranked blocker /
+   should-fix / nit, and `QA: pass` or `QA: changes needed`.
+3. The Major merges only after `QA: pass` and green CI, unless Petter waives it.
+4. Saito reviews code with Ponytail when the Major asks (risky logic, larger
+   changes) and audits one repo each Monday. His review is advice, not a gate.
+
+Screenshots live on per-PR `shots/...` branches and are linked from the PR,
+because GitHub's API can't attach images.
+
+**Skills.** Ponytail (v5.3.3) and Impeccable (4.8.0) are installed in the
+sandbox image under `/opt/skills`, read-only, and the briefs tell Saito,
+Batou and Togusa when to read them. Neither is installed in Hermes itself: as
+Hermes plugins they would be gateway-wide, so every agent would pay
+Ponytail's per-turn rules and Impeccable's design hook would scan every
+agent's writes (Ishikawa, SEC-19).
+
 ## Rules
 
 - **Server agents never merge.** They push branches and open PRs, and the
@@ -132,7 +182,8 @@ pins it by digest. To bump Paperclip, follow the comment at the top of the Docke
   Dependabot PRs, merged only once the release is 24 h old.
 - **Budgets:** the OpenRouter key stops at $20 a month. Paperclip budgets are set
   per agent (see `agents/README.md`), so one agent can't use up the month.
-- **Ops is read-only.** It reports; changes go through the coordinator and Petter.
+- **Saito and Togusa change no one's code.** They plan, review and report;
+  changes go through the authors, the coordinator and Petter.
 
 ## Nightly builder routine
 
@@ -146,8 +197,9 @@ At 01:00 Stockholm, a Paperclip routine creates a task for the nightly builder:
 3. Build in `nights/YYYY-MM-DD-<slug>/` with a README (idea, language, how
    to run), a build script, and a static web build if the language allows it
    (WebAssembly, JS output), so it can be previewed on Pages.
-4. Open a PR with a summary and screenshots. The coordinator's morning
-   check-in reviews it, merges if it's sound, and sends Petter the preview link.
+4. Open a PR with a summary and desktop and phone screenshots from `shoot`.
+   Togusa's 05:40 QA sweep reviews it; after `QA: pass` the coordinator
+   reviews it, merges if it's sound, and sends Petter the preview link.
 5. Append the night to `LOG.md` and stop. If it runs out of budget, it stops
    and says why.
 

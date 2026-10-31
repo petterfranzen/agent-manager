@@ -18,6 +18,7 @@ LOCK_FILE=${AM_LOCK_FILE:-/run/agent-manager-sync.lock}
 SECRETS_DIR=${AM_SECRETS_DIR:-/etc/agent-manager}
 GITHUB_API=${AM_GITHUB_API:-https://api.github.com}
 PAPERCLIP_URL=${AM_PAPERCLIP_URL:-http://127.0.0.1:3100}
+HEAL=${AM_HEAL:-/usr/local/sbin/agent-manager-heal-accounting}
 GH_REPO=petterfranzen/agent-manager
 STATE_FILE=$STATE_DIR/sync-state.json
 
@@ -343,6 +344,13 @@ cd "$REPO_DIR"
 if [ -n "$(git status --porcelain)" ]; then
   err "refusing to sync: $REPO_DIR has local changes (hand edits would be overwritten); commit or discard them"
   exit 1
+fi
+
+# Every tick, deploy or not: close the accounting of runs that lost their usage
+# receipt and resume the budgets they paused (deploy/heal-accounting.py).
+if [ -x "$HEAL" ]; then
+  "$HEAL" --repo-dir "$REPO_DIR" --secrets-dir "$SECRETS_DIR" --paperclip-url "$PAPERCLIP_URL" 2>&1 \
+    | redact | sed 's/^/agent-manager-sync: heal: /' || true
 fi
 
 git fetch --quiet origin main || { err "git fetch failed"; exit 1; }

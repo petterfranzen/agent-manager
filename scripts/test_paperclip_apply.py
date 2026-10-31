@@ -454,14 +454,14 @@ class ApplyTest(unittest.TestCase):
         tachikoma = self.agent("Tachikoma")
         self.assertEqual(tachikoma["role"], "engineer")
         self.assertEqual(tachikoma["title"], "Nightly builder")
-        self.assertEqual(tachikoma["budgetMonthlyCents"], 1000)
+        self.assertEqual(tachikoma["budgetMonthlyCents"], 400)
         cfg = tachikoma["adapterConfig"]
         self.assertEqual(cfg["timeoutSec"], 10800)
         self.assertEqual(cfg["apiBaseUrl"], "http://127.0.0.1:8642")
         self.assertEqual(cfg["paperclipApiUrl"], "http://127.0.0.1:3100")
         self.assertEqual(cfg["sessionKeyStrategy"], "issue")
         self.assertEqual(cfg["instructions"], (ROOT / "agents/nightly-builder.md").read_text())
-        self.assertEqual(self.agent("Togusa")["adapterConfig"]["timeoutSec"], 600)
+        self.assertEqual(self.agent("Togusa")["adapterConfig"]["timeoutSec"], 3600)
         self.assertEqual(self.fake.secrets[tachikoma["id"]], self.hermes_key)
         self.assertEqual(len(self.fake.avatars), 5)
 
@@ -470,7 +470,7 @@ class ApplyTest(unittest.TestCase):
         by_title = {r["title"]: r for r in self.fake.routines.values()}
         saito = by_title["Morning ops report"]
         self.assertEqual(saito["assigneeAgentId"], self.agent("Saito")["id"])
-        self.assertEqual(saito["description"], "Write the morning ops report, following your brief.")
+        self.assertEqual(saito["description"], "Write the morning ops report, following your brief; on Mondays, also run the weekly audit.")
         trig = [t for t in self.fake.triggers.values() if t["routineId"] == saito["id"]]
         self.assertEqual([(t["cronExpression"], t["timezone"], t["enabled"]) for t in trig],
                          [("30 6 * * *", "Europe/Stockholm", True)])
@@ -530,7 +530,7 @@ class ApplyTest(unittest.TestCase):
         out = self.apply_ok().stdout
         self.assertIn("agent Saito: switch adapter claude_local -> hermes_gateway", out)
         self.assertEqual(old["adapterType"], "hermes_gateway")
-        self.assertEqual(old["title"], "Ops (read-only)")
+        self.assertEqual(old["title"], "Senior thinker and ops (read-only)")
         self.assertNotIn("model", old["adapterConfig"])
         self.assertEqual(old["adapterConfig"]["instructions"], (ROOT / "agents/ops.md").read_text())
         patches = [r for r in self.fake.log if r["method"] == "PATCH" and r["path"] == f"/api/agents/{old['id']}"]
@@ -567,7 +567,7 @@ class ApplyTest(unittest.TestCase):
         cid = self.fake.company["id"]
         self.assertEqual((policies[("company", cid)]["amount"], policies[("company", cid)]["unpricedUsagePolicy"]),
                          (1900, "allow"))
-        for name, cents in (("Tachikoma", 1000), ("Batou", 400), ("Ishikawa", 500), ("Togusa", 200), ("Saito", 100)):
+        for name, cents in (("Tachikoma", 400), ("Batou", 400), ("Ishikawa", 500), ("Togusa", 300), ("Saito", 300)):
             pol = policies[("agent", self.agent(name)["id"])]
             self.assertEqual((pol["amount"], pol["unpricedUsagePolicy"], pol["isActive"]), (cents, "allow", True), name)
         self.assertIn("policy company Section 9: unpriced block -> allow", out)
@@ -744,7 +744,7 @@ class ApplyTest(unittest.TestCase):
     def test_dry_run_on_an_empty_paperclip_plans_the_policies(self):
         out = self.apply_ok("--dry-run").stdout
         self.assertEqual(self.writes(), [])
-        self.assertIn("[dry-run] policy agent Tachikoma: create 1000 cents, unpriced allow", out)
+        self.assertIn("[dry-run] policy agent Tachikoma: create 400 cents, unpriced allow", out)
 
     def test_roster_unpriced_usage_must_be_allow_or_block(self):
         roster = (ROOT / "agents" / "roster.toml").read_text().replace('unpriced_usage = "allow"', 'unpriced_usage = "maybe"')

@@ -4,7 +4,8 @@
 # Routines stay `active = false` (created paused) until the Major has done a
 # supervised first run. Then flip them to true in a PR and re-apply.
 #
-# The budgets add up to $20, the OpenRouter key's monthly cap.
+# The agents' budgets add up to the company's $19 (Petter, 30 Oct), under the
+# OpenRouter key's $20 cap.
 
 [company]
 name = "Section 9"
@@ -32,7 +33,9 @@ role = "engineer"
 title = "Nightly builder"
 brief = "agents/nightly-builder.md"
 avatar = "agents/avatars/tachikoma.png"
-budget_monthly_cents = 1000
+# What's left of the $19 after the others. Real nights cost cents (about $1.50
+# for the whole team in October's first busy week), so $4 is ample.
+budget_monthly_cents = 400
 timeout_sec = 10800
 
 [agents.routine]
@@ -63,29 +66,35 @@ timeout_sec = 3600
 [[agents]]
 name = "Togusa"
 role = "general"
-title = "Backup coordinator"
+title = "QA and UI/UX reviewer"
 brief = "agents/backup-coordinator.md"
 avatar = "agents/avatars/togusa.png"
-budget_monthly_cents = 200
+budget_monthly_cents = 300
+timeout_sec = 3600
 
+# GitHub can't wake Paperclip (it sits behind Cloudflare Access), so Togusa
+# sweeps for ready agent PRs twice a day: after the nightly build, before the
+# morning check-in, and again before the evening one. The Major assigns him a
+# PR directly when it can't wait.
 [agents.routine]
-title = "Backup coordinator check"
-description = "Check whether the Major is active; act only per your brief."
-cron = "0 */6 * * *"
+title = "QA sweep"
+description = "Review every ready agent PR that has no QA verdict since its last push, following your brief. Also check whether the Major has been silent for 12 hours."
+cron = "40 5,16 * * *"
 timezone = "Europe/Stockholm"
 active = false
 
 [[agents]]
 name = "Saito"
 role = "devops"
-title = "Ops (read-only)"
+title = "Senior thinker and ops (read-only)"
 brief = "agents/ops.md"
 avatar = "agents/avatars/saito.png"
-budget_monthly_cents = 100
+budget_monthly_cents = 300
+timeout_sec = 3600
 
 [agents.routine]
 title = "Morning ops report"
-description = "Write the morning ops report, following your brief."
+description = "Write the morning ops report, following your brief; on Mondays, also run the weekly audit."
 cron = "30 6 * * *"
 timezone = "Europe/Stockholm"
 active = false

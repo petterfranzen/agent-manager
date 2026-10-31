@@ -28,6 +28,7 @@ install -m 0755 -o root -g root "$HERE/vm-sync.sh" /usr/local/sbin/agent-manager
 install -m 0644 -o root -g root "$HERE/agent-manager-sync.service" /etc/systemd/system/agent-manager-sync.service
 install -m 0644 -o root -g root "$HERE/agent-manager-sync.timer" /etc/systemd/system/agent-manager-sync.timer
 install -m 0755 -o root -g root "$HERE/spend-report.py" /usr/local/sbin/agent-manager-spend
+install -m 0755 -o root -g root "$HERE/heal-accounting.py" /usr/local/sbin/agent-manager-heal-accounting
 install -m 0644 -o root -g root "$HERE/agent-manager-spend.service" /etc/systemd/system/agent-manager-spend.service
 install -m 0644 -o root -g root "$HERE/agent-manager-spend.timer" /etc/systemd/system/agent-manager-spend.timer
 install -m 0755 -o root -g root "$HERE/crew-status.py" /usr/local/sbin/agent-manager-crew-status

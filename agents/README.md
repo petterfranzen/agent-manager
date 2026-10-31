@@ -10,19 +10,18 @@ Chief**, Claude (the coordinator) is **the Major** (avatar: `avatars/major.png`;
 
 | | Name | Role | Brief | Reports to | Monthly budget | Wakes on |
 |---|---|---|---|---|---|---|
-| <img src="avatars/tachikoma.png" width="48"> | **Tachikoma** | Nightly builder | [nightly-builder.md](nightly-builder.md) | The Major | $10 | Routine, 01:00 Stockholm |
+| <img src="avatars/tachikoma.png" width="48"> | **Tachikoma** | Nightly builder | [nightly-builder.md](nightly-builder.md) | The Major | $4 | Routine, 01:00 Stockholm (overnight only) |
 | <img src="avatars/batou.png" width="48"> | **Batou** | Coder | [coder.md](coder.md) | The Major | $4 | Assigned tasks |
-| <img src="avatars/ishikawa.png" width="48"> | **Ishikawa** | Researcher | [researcher.md](researcher.md) | The Major | $3 | Assigned tasks |
-| <img src="avatars/togusa.png" width="48"> | **Togusa** | Backup coordinator | [backup-coordinator.md](backup-coordinator.md) | The Chief | $2 | Routine, every 6 h, acts only if the Major is silent |
-| <img src="avatars/saito.png" width="48"> | **Saito** | Ops (read-only) | [ops.md](ops.md) | The Major | $1 | Routine, 06:30 Stockholm |
+| <img src="avatars/ishikawa.png" width="48"> | **Ishikawa** | Researcher | [researcher.md](researcher.md) | The Major | $5 | Assigned tasks; Rental watch 05:30 |
+| <img src="avatars/togusa.png" width="48"> | **Togusa** | QA and UI/UX reviewer; backup coordinator | [backup-coordinator.md](backup-coordinator.md) | The Major | $3 | QA sweep 05:40 and 16:40 Stockholm; assigned PRs |
+| <img src="avatars/saito.png" width="48"> | **Saito** | Senior thinker and ops (read-only) | [ops.md](ops.md) | The Major | $3 | Routine, 06:30 Stockholm; assigned plans and reviews |
 
 **Copying Tachikoma:**
 - Hire another agent with the same brief and adapter settings, named
   `Tachikoma 2`, `Tachikoma 3` and so on, reporting to the Major.
 - Give each copy its own routine, staggered (for example 01:00, 01:20 and 01:40
-  Stockholm), and its own budget. The copies share the nightly builder's $10
-  unless Petter raises the OpenRouter key's $20 cap. Each night costs roughly
-  $0.30.
+  Stockholm), and its own budget. The copies share the nightly builder's $4
+  unless Petter raises the OpenRouter key's $20 cap.
 - Copies are safe in parallel: separate run folders, separate branches, and the
   Major merges.
 
@@ -33,8 +32,11 @@ comments and PRs, never its quality bar or rules.
 `make.py`, rendered to 512 px PNGs by `render.js`). The roster
 script uploads them through Paperclip's API (runbook step 7).
 
-The budgets add up to $20, the OpenRouter key's monthly cap. Paperclip stops
-an agent at its budget, and the key stops everything at $20.
+The budgets add up to the company's $19, under the OpenRouter key's $20 cap.
+Paperclip stops an agent at its budget, and the key stops everything at $20.
+
+Everyone but Tachikoma works whenever a task arrives. Agent PRs merge only
+after Togusa's `QA: pass` (docs/DESIGN.md, "Review and QA").
 
 **Rules every agent follows (repeated in each brief):**
 - Never merge. Open a PR and stop. The coordinator merges.

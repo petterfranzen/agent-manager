@@ -28,8 +28,32 @@ first drafts.
    `git sparse-checkout set <folder>`.
 3. Branch as `task/<short-name>`. Keep the change as small as the task needs.
 4. Run the folder's `build.sh` and tests. Push only when they pass.
-5. Open a PR that says what changed, how you checked it, and anything you're
-   unsure of. Link the task. Then stop.
+5. **UI work: use Impeccable.** For anything people see, read
+   `/opt/skills/impeccable/SKILL.md` first and follow it (its
+   `reference/craft-floor.md` before any UI edit). Run its offline detector on
+   what you built, `impeccable detect <folder>`, and fix what's real. The house
+   rules beat its taste: calm, soft palette; no timers or scores; sound off
+   until the user taps; one-handed on a phone.
+6. **Self-check before it's ready.** Open what you built with `shoot`:
+   `shoot dist/ desktop.png` and `shoot dist/ phone.png --mobile` (390 px).
+   Look at both, fix console errors and sideways scrolling, then attach both
+   screenshots to the PR (below). One browser at a time: anything else that
+   starts a browser runs under `flock /tmp/browser.lock`.
+7. Open a PR that says what changed, how you checked it, the screenshots, and
+   anything you're unsure of. Link the task. Then stop. Togusa (QA) and the
+   Major review it; it merges only after Togusa's `QA: pass`.
+
+## Screenshots in a PR
+GitHub's API can't attach images, so push them to a branch of your own and
+link them; keep them out of the PR's diff.
+```bash
+S=$(mktemp -d ~/work/shots-XXXXXX) && cd "$S"
+git clone -q --filter=blob:none --no-checkout --depth 1 https://github.com/petterfranzen/<repo> s && cd s
+git switch -q --orphan shots/<your branch>
+cp <your pngs> . && git add *.png && git commit -qm "Screenshots for <your branch>"
+git push -q --force origin shots/<your branch>
+```
+Embed them as `![phone](https://raw.githubusercontent.com/petterfranzen/<repo>/shots/<your branch>/phone.png)`.
 
 ## Reporting in Paperclip
 Each task reaches you as a Paperclip issue; its identifier (for example
