@@ -27,12 +27,16 @@ docker compose version >/dev/null || { echo "error: docker compose is not instal
 install -m 0755 -o root -g root "$HERE/vm-sync.sh" /usr/local/sbin/agent-manager-sync
 install -m 0644 -o root -g root "$HERE/agent-manager-sync.service" /etc/systemd/system/agent-manager-sync.service
 install -m 0644 -o root -g root "$HERE/agent-manager-sync.timer" /etc/systemd/system/agent-manager-sync.timer
-install -m 0755 -o root -g root "$HERE/spend-report.py" /usr/local/sbin/agent-manager-spend
-install -m 0755 -o root -g root "$HERE/heal-accounting.py" /usr/local/sbin/agent-manager-heal-accounting
-install -m 0644 -o root -g root "$HERE/agent-manager-spend.service" /etc/systemd/system/agent-manager-spend.service
-install -m 0644 -o root -g root "$HERE/agent-manager-spend.timer" /etc/systemd/system/agent-manager-spend.timer
-install -m 0755 -o root -g root "$HERE/crew-status.py" /usr/local/sbin/agent-manager-crew-status
-install -m 0644 -o root -g root "$HERE/agent-manager-crew-status.service" /etc/systemd/system/agent-manager-crew-status.service
+# Once deploy/DECOMMISSIONED exists the agent-stack units are not installed
+# again (the sync removes them); only the sync itself stays.
+if [ ! -e "$HERE/DECOMMISSIONED" ]; then
+  install -m 0755 -o root -g root "$HERE/spend-report.py" /usr/local/sbin/agent-manager-spend
+  install -m 0755 -o root -g root "$HERE/heal-accounting.py" /usr/local/sbin/agent-manager-heal-accounting
+  install -m 0644 -o root -g root "$HERE/agent-manager-spend.service" /etc/systemd/system/agent-manager-spend.service
+  install -m 0644 -o root -g root "$HERE/agent-manager-spend.timer" /etc/systemd/system/agent-manager-spend.timer
+  install -m 0755 -o root -g root "$HERE/crew-status.py" /usr/local/sbin/agent-manager-crew-status
+  install -m 0644 -o root -g root "$HERE/agent-manager-crew-status.service" /etc/systemd/system/agent-manager-crew-status.service
+fi
 
 # Cap the journal (it had grown to ~1 GB). Restart journald only on a change.
 JOURNALD_CONF=/etc/systemd/journald.conf.d/agent-manager.conf
@@ -50,13 +54,13 @@ chmod 0700 "$STATE_DIR"
 # the roster script are idempotent), so a change pulled by hand but never
 # applied, such as a roster edit, still lands. An existing state file is kept.
 
-if [ ! -r /etc/agent-manager/paperclip-board.env ]; then
+if [ ! -e "$HERE/DECOMMISSIONED" ] && [ ! -r /etc/agent-manager/paperclip-board.env ]; then
   echo "warning: /etc/agent-manager/paperclip-board.env is missing; the sync can't run paperclip-apply.py without it (RUNBOOK step 7b)" >&2
 fi
 
 systemctl daemon-reload
 systemctl enable --now agent-manager-sync.timer
-systemctl enable --now agent-manager-spend.timer
+[ -e "$HERE/DECOMMISSIONED" ] || systemctl enable --now agent-manager-spend.timer
 
 # The sync itself is the caller with --from-sync: no first sync, no output.
 [ "$FROM_SYNC" -eq 0 ] || exit 0

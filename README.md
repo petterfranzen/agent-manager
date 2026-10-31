@@ -1,6 +1,6 @@
 # agent-manager
 
-Self-hosted AI agents on the Hetzner VM that also runs flight-tracker, with
+Self-hosted AI agents (moving from the Hetzner VM, which keeps only flight-tracker, to a VPS: see docs/RUNBOOK.md), with
 Claude (Claude Code, on Petter's plan) as coordinator.
 
 - **Paperclip** is the manager: org chart, tasks, budgets, approvals, routines, dashboard.

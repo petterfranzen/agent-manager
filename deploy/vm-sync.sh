@@ -19,6 +19,12 @@ SECRETS_DIR=${AM_SECRETS_DIR:-/etc/agent-manager}
 GITHUB_API=${AM_GITHUB_API:-https://api.github.com}
 PAPERCLIP_URL=${AM_PAPERCLIP_URL:-http://127.0.0.1:3100}
 HEAL=${AM_HEAL:-/usr/local/sbin/agent-manager-heal-accounting}
+SBIN_DIR=${AM_SBIN_DIR:-/usr/local/sbin}
+UNIT_DIR=${AM_UNIT_DIR:-/etc/systemd/system}
+BACKUP_DIR=${AM_BACKUP_DIR:-/var/backups/paperclip}
+BACKUP_KEEP_DAYS=30
+# The stack's secrets are moved here, not deleted: the VPS reuses them. Never pruned.
+SECRETS_KEEP_DIR=${AM_SECRETS_KEEP_DIR:-/var/backups/agent-manager-secrets}
 GH_REPO=petterfranzen/agent-manager
 STATE_FILE=$STATE_DIR/sync-state.json
 
@@ -336,6 +342,125 @@ self_update() {
   return 0
 }
 
+
+# ---------------------------------------------------------------------------
+# Decommission (docs/migration-vps.md): once deploy/DECOMMISSIONED is in the
+# checked-out tree, this VM runs flight-tracker only. The agent stack is
+# removed here, in order, by the sync itself, and the sync timer stays.
+# Journal only: the Deploys issue is gone with Paperclip.
+#
+# Each step leaves a marker in $STATE_DIR/decommission/, so a re-run skips what
+# is done and a failed step stops the rest (the next tick retries it). The
+# commands name only the agent stack's compose project, its volumes, images and
+# units, and /etc/agent-manager files: never flight-tracker's unit, data or
+# cloudflared (scripts/test_decommission.py checks that).
+# ---------------------------------------------------------------------------
+decommissioned() { [ -e "$REPO_DIR/deploy/DECOMMISSIONED" ]; }
+
+dstep() { # dstep <name> <function>: run once, mark done, stop on failure
+  local marker="$STATE_DIR/decommission/$1.done"
+  if [ -e "$marker" ]; then return 0; fi
+  log "decommission: $1"
+  local out rc=0
+  out=$("$2" 2>&1) || rc=$?
+  if [ -n "$out" ]; then echo "$out" | redact | sed 's/^/agent-manager-sync:   /'; fi
+  if [ "$rc" -ne 0 ]; then
+    err "decommission: step '$1' failed (exit $rc); it is retried on the next run"
+    return 1
+  fi
+  : >"$marker"
+}
+
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
+decom_backup() {
+  local vol mount src dest
+  install -d -m 0700 "$BACKUP_DIR"
+  vol=$(docker volume ls -q --filter label=com.docker.compose.volume=paperclip-data) || return 1
+  if [ -z "$vol" ]; then
+    log "no paperclip-data volume; nothing to back up"
+    return 0
+  fi
+  vol=$(echo "$vol" | head -n 1)
+  mount=$(docker volume inspect -f '{{.Mountpoint}}' "$vol") || return 1
+  src=$(find "$mount/instances/default/data/backups" -maxdepth 1 -name 'paperclip-*.sql.gz' 2>/dev/null | sort | tail -n 1 || true)
+  if [ -z "$src" ]; then
+    log "volume $vol has no database backup file"
+  else
+    dest=$BACKUP_DIR/$(basename "$src")
+    cp -p "$src" "$dest" || return 1
+    chmod 0600 "$dest"
+    log "copied $(basename "$src") to $BACKUP_DIR"
+  fi
+  # Needed to read the secrets in the dump.
+  if [ -f "$mount/instances/default/secrets/master.key" ]; then
+    install -m 0600 "$mount/instances/default/secrets/master.key" "$BACKUP_DIR/master.key" || return 1
+    log "copied master.key to $BACKUP_DIR"
+  fi
+}
+
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
+decom_compose_down() {
+  # The compose project is the agent stack: postgres, paperclip, hermes, sandbox.
+  docker compose down --volumes --rmi all --remove-orphans
+}
+
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
+decom_units() {
+  local u
+  for u in agent-manager-spend.timer agent-manager-spend.service agent-manager-crew-status.service; do
+    systemctl stop "$u" || true
+    systemctl disable "$u" || true
+    rm -f "$UNIT_DIR/$u"
+  done
+  # The heal step and the two report scripts the units ran.
+  rm -f "$SBIN_DIR/agent-manager-heal-accounting" "$SBIN_DIR/agent-manager-spend" "$SBIN_DIR/agent-manager-crew-status"
+  rm -f "$STATE_DIR/hermes-probe.json" "$STATE_DIR/spend-state.json"
+  systemctl daemon-reload
+  systemctl reset-failed || true
+}
+
+# Only the agent stack's own files, moved (not deleted) to $SECRETS_KEEP_DIR
+# (0700, files 0600, root-only, no expiry) because the new VPS reuses these
+# secrets and the providers can't show them again. Another *.env here is left
+# alone and logged, because it may belong to something else on the VM. The
+# sync needs none of them (it reads the public GitHub API without a token).
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
+decom_secrets() {
+  local f
+  install -d -m 0700 "$SECRETS_KEEP_DIR" || return 1
+  chmod 0700 "$SECRETS_KEEP_DIR" || return 1
+  for f in postgres.env paperclip.env hermes.env sandbox.env paperclip-board.env \
+           hermes_ssh_key sandbox_authorized_keys crew-deny.txt bridge-keys; do
+    [ -e "$SECRETS_DIR/$f" ] || continue
+    rm -rf "${SECRETS_KEEP_DIR:?}/$f"
+    mv "$SECRETS_DIR/$f" "$SECRETS_KEEP_DIR/$f" || return 1
+    log "moved $f to $SECRETS_KEEP_DIR"
+  done
+  chmod -R go-rwx "$SECRETS_KEEP_DIR" || return 1
+  for f in "$SECRETS_DIR"/*.env; do
+    [ -e "$f" ] || continue
+    log "left in place: $f"
+  done
+}
+
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
+decom_prune_backups() {
+  find "$BACKUP_DIR" -maxdepth 1 -type f -mtime +"$BACKUP_KEEP_DAYS" -delete 2>/dev/null || true
+}
+
+decommission() {
+  install -d -m 0700 "$STATE_DIR/decommission"
+  dstep backup decom_backup || return 1
+  dstep compose-down decom_compose_down || return 1
+  dstep units decom_units || return 1
+  dstep secrets decom_secrets || return 1
+  decom_prune_backups
+  if [ ! -e "$STATE_DIR/decommission/finished" ]; then
+    : >"$STATE_DIR/decommission/finished"
+    log "decommission finished: the agent stack is gone; the sync timer stays"
+  fi
+}
+
 # Only one sync at a time (a deploy can outlast the 5 minute timer).
 exec 9>"$LOCK_FILE"
 flock -n 9 || exit 0
@@ -346,10 +471,16 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
+DECOM=0
+if decommissioned; then
+  DECOM=1
+  decommission || exit 1
+fi
+
 # Every tick, deploy or not: close the accounting of runs that lost their usage
 # receipt, resume the budgets they paused, and restart Hermes if its gateway
-# stopped answering (deploy/heal-accounting.py).
-if [ -x "$HEAL" ]; then
+# stopped answering (deploy/heal-accounting.py). Not once decommissioned.
+if [ "$DECOM" -eq 0 ] && [ -x "$HEAL" ]; then
   "$HEAL" --repo-dir "$REPO_DIR" --secrets-dir "$SECRETS_DIR" --paperclip-url "$PAPERCLIP_URL" --state-dir "$STATE_DIR" 2>&1 \
     | redact | sed 's/^/agent-manager-sync: heal: /' || true
 fi
@@ -403,6 +534,13 @@ STEP=""
 # No rollback: a failed step stays as it is for a human to look at.
 # Every step needs "|| return 1": set -e is off inside a function in an "if".
 apply() {
+  if [ "$DECOM" -eq 1 ]; then
+    # No agent stack any more: only keep the checkout current.
+    STEP="git merge"
+    git merge --ff-only --quiet "$TARGET" || return 1
+    STEP=""
+    return 0
+  fi
   STEP="snapshot"
   OLD_PAPERCLIP=$(docker compose ps -q paperclip) || return 1
   STEP="git merge"
@@ -424,6 +562,12 @@ apply() {
 }
 
 if apply >"$OUT" 2>&1; then
+  if [ "$DECOM" -eq 1 ]; then
+    self_update || true
+    state_write "$TARGET" "$TARGET" "$NEXT_ATTEMPT" success ""
+    log "applied ${TARGET:0:7} \"$SUBJECT\" (checkout only; decommissioned)"
+    exit 0
+  fi
   cleanup || true
   if measure_disk; then
     # First line of the file, so the comment reads "Disk:" then the reclaimed space.
@@ -458,5 +602,7 @@ tail -n 30 "$TAIL_FILE" | redact >"$TAIL_FILE.tail"
 mv "$TAIL_FILE.tail" "$TAIL_FILE"
 err "FAILED ${TARGET:0:7} \"$SUBJECT\" at step '$FAILED_STEP' after ${DURATION}s; nothing was rolled back"
 sed 's/^/agent-manager-sync:   /' "$TAIL_FILE" >&2
-report failure "$FAILED_STEP" "$DURATION" "$TAIL_FILE" || log "could not post to Paperclip (ignored)"
+if [ "$DECOM" -eq 0 ]; then
+  report failure "$FAILED_STEP" "$DURATION" "$TAIL_FILE" || log "could not post to Paperclip (ignored)"
+fi
 exit 1

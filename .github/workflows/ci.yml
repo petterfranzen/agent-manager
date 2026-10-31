@@ -85,7 +85,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: paperclip-apply.py against a fake Paperclip
-        run: python3 -m unittest scripts/test_paperclip_apply.py scripts/test_spend_report.py scripts/test_crew_status.py scripts/test_heal_accounting.py
+        run: python3 -m unittest scripts/test_paperclip_apply.py scripts/test_spend_report.py scripts/test_crew_status.py scripts/test_heal_accounting.py scripts/test_decommission.py
 
   deploy:
     name: Deploy scripts
