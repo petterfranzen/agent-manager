@@ -450,7 +450,7 @@ class ApplyTest(unittest.TestCase):
         out = self.apply_ok().stdout
         self.assertEqual(self.fake.company["budgetMonthlyCents"], 1900)
         self.assertEqual(sorted(a["name"] for a in self.fake.agents.values()),
-                         ["Batou", "Ishikawa", "Saito", "Tachikoma", "Togusa"])
+                         ["Batou", "Ishikawa", "Jev", "Saito", "Tachikoma", "Togusa"])
         tachikoma = self.agent("Tachikoma")
         self.assertEqual(tachikoma["role"], "engineer")
         self.assertEqual(tachikoma["title"], "Nightly builder")
@@ -463,7 +463,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(cfg["instructions"], (ROOT / "agents/nightly-builder.md").read_text())
         self.assertEqual(self.agent("Togusa")["adapterConfig"]["timeoutSec"], 3600)
         self.assertEqual(self.fake.secrets[tachikoma["id"]], self.hermes_key)
-        self.assertEqual(len(self.fake.avatars), 5)
+        self.assertEqual(len(self.fake.avatars), 6)
 
         self.assertEqual(len(self.fake.routines), 3)
         self.assertEqual({r["title"]: r["status"] for r in self.fake.routines.values()}, WANT)
@@ -476,7 +476,7 @@ class ApplyTest(unittest.TestCase):
                          [("30 6 * * *", "Europe/Stockholm", True)])
         self.assertIn("agent Tachikoma: create", out)
         self.assertIn(f"routine Nightly build: create ({WANT['Nightly build']})", out)
-        self.assertEqual(len(self.key_sends()), 5)
+        self.assertEqual(len(self.key_sends()), 6)
 
     def test_second_run_changes_nothing_and_sends_no_key(self):
         self.apply_ok()
@@ -501,7 +501,7 @@ class ApplyTest(unittest.TestCase):
         self.apply_ok()
         mark = len(self.fake.log)
         out = self.apply_ok("--set-api-key").stdout
-        self.assertEqual(len(self.key_sends(mark)), 5)
+        self.assertEqual(len(self.key_sends(mark)), 6)
         self.assertIn("agent Batou: api key", out)
 
     def test_changes_are_sent_without_the_key(self):
@@ -563,7 +563,7 @@ class ApplyTest(unittest.TestCase):
     def test_first_run_sets_a_policy_for_the_company_and_every_agent(self):
         out = self.apply_ok().stdout
         policies = self.fake.policies
-        self.assertEqual(len(policies), 6)
+        self.assertEqual(len(policies), 7)
         cid = self.fake.company["id"]
         self.assertEqual((policies[("company", cid)]["amount"], policies[("company", cid)]["unpricedUsagePolicy"]),
                          (1900, "allow"))
@@ -630,7 +630,7 @@ class ApplyTest(unittest.TestCase):
             row["appearance"] = {}
         out = self.apply_ok().stdout
         self.assertEqual(self.fake.company["status"], "active")
-        self.assertEqual(len(self.fake.avatars), 5)
+        self.assertEqual(len(self.fake.avatars), 6)
         self.assertIn("avatar Tachikoma: upload", out)
 
     def test_avatars_skipped_while_the_company_stays_paused(self):
@@ -766,10 +766,10 @@ class ApplyTest(unittest.TestCase):
     def test_board_approval_hires_then_approves(self):
         self.fake.company["requireBoardApprovalForNewAgents"] = True
         out = self.apply_ok().stdout
-        self.assertEqual(len(self.fake.agents), 5)
+        self.assertEqual(len(self.fake.agents), 6)
         self.assertTrue(all(a["status"] == "idle" for a in self.fake.agents.values()))
         self.assertEqual(len([r for r in self.fake.log if r["path"].endswith("/agent-hires")]), 5)
-        self.assertEqual(len(self.fake.avatars), 5)
+        self.assertEqual(len(self.fake.avatars), 6)
         self.assertIn("agent Saito: create (hire, approve)", out)
 
     def test_keys_never_reach_the_output(self):
