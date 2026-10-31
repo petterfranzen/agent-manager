@@ -768,7 +768,7 @@ class ApplyTest(unittest.TestCase):
         out = self.apply_ok().stdout
         self.assertEqual(len(self.fake.agents), 6)
         self.assertTrue(all(a["status"] == "idle" for a in self.fake.agents.values()))
-        self.assertEqual(len([r for r in self.fake.log if r["path"].endswith("/agent-hires")]), 5)
+        self.assertEqual(len([r for r in self.fake.log if r["path"].endswith("/agent-hires")]), 6)
         self.assertEqual(len(self.fake.avatars), 6)
         self.assertIn("agent Saito: create (hire, approve)", out)
 
