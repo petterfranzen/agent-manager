@@ -16,7 +16,9 @@ vm-sync runs this on every tick (every 5 minutes). It:
   2. acknowledges the cancellation of cancelled runs that never got their stop
      proof, when their agent has been stuck "pausing" for over an hour, and
      asks Paperclip to resume that agent (see STOP_SQL);
-  3. resolves each open hard-stop budget incident with "raise_budget_and_resume"
+  3. probes the Hermes gateway from Paperclip's network namespace and restarts
+     Hermes when it refuses on two ticks in a row (see probe_gateway);
+  4. resolves each open hard-stop budget incident with "raise_budget_and_resume"
      at the same amount, so nothing is raised. Paperclip itself refuses this
      when booked spend has reached the budget, so a real overspend stays paused.
 
@@ -27,6 +29,7 @@ and is never printed.
 """
 
 import argparse
+import datetime as dt
 import json
 import re
 import subprocess
@@ -84,6 +87,18 @@ with acked as (
 )
 select coalesce(json_agg(json_build_object('run', id, 'agent', agent_id)), '[]') from acked;
 """
+
+# Hermes shares Paperclip's network namespace (compose: network_mode
+# "service:paperclip"). When Paperclip's container restarts in place, Hermes
+# keeps the old, dead namespace and every agent run fails with ECONNREFUSED on
+# 127.0.0.1:8642 until Hermes is restarted. Exit 3 = refused; anything else
+# (Paperclip down, docker error) is not counted against Hermes.
+PROBE_JS = ("const s=require('net').connect(8642,'127.0.0.1');"
+            "s.setTimeout(5000,()=>process.exit(3));"
+            "s.on('connect',()=>{s.end();process.exit(0)});"
+            "s.on('error',()=>process.exit(3));")
+REFUSALS_BEFORE_RESTART = 2
+RESTART_EVERY = dt.timedelta(minutes=30)
 
 
 class Failure(Exception):
@@ -155,6 +170,65 @@ def unstick_pausing(run_sql, api):
     return acked, resumed
 
 
+def probe_gateway(probe, restart, state_file, now=None):
+    """One tick: probe() -> "up" | "refused" | "unknown"; restart() restarts Hermes.
+
+    Restarts after REFUSALS_BEFORE_RESTART refusals in a row, at most once per
+    RESTART_EVERY. Keeps its count in state_file. Returns a line to report, or None.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    try:
+        state = json.loads(Path(state_file).read_text())
+    except (OSError, ValueError):
+        state = {}
+    result = probe()
+    note = None
+    if result == "up":
+        state["refusals"] = 0
+    elif result == "refused":
+        state["refusals"] = int(state.get("refusals", 0)) + 1
+        last = state.get("lastRestart")
+        recent = last and now - dt.datetime.fromisoformat(last) < RESTART_EVERY
+        if state["refusals"] >= REFUSALS_BEFORE_RESTART and not recent:
+            ok = restart()
+            state["lastRestart"] = now.isoformat()
+            state["refusals"] = 0
+            note = (f"Hermes gateway refused on {REFUSALS_BEFORE_RESTART} checks in a row; "
+                    + ("restarted Hermes." if ok else "`docker compose restart hermes` FAILED; needs a look."))
+    Path(state_file).write_text(json.dumps(state))
+    return note
+
+
+def docker_probe(repo_dir):
+    try:
+        res = subprocess.run(["docker", "compose", "exec", "-T", "paperclip", "node", "-e", PROBE_JS],
+                             cwd=repo_dir, capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    return {0: "up", 3: "refused"}.get(res.returncode, "unknown")
+
+
+def docker_restart_hermes(repo_dir):
+    try:
+        return subprocess.run(["docker", "compose", "restart", "hermes"], cwd=repo_dir,
+                              capture_output=True, timeout=180).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def post_deploys_note(api, text):
+    """Adds a comment to the open "Deploys" issue, if there is one."""
+    companies = api.call("GET", "/api/companies") or []
+    company = next((c for c in companies if c.get("name") == COMPANY), None)
+    if company is None:
+        return
+    cid = urllib.parse.quote(company["id"], safe="")
+    issues = api.call("GET", f"/api/companies/{cid}/issues?status=backlog,todo,in_progress,in_review,blocked") or []
+    deploys = next((i for i in issues if i.get("title") == "Deploys"), None)
+    if deploys:
+        api.call("POST", f"/api/issues/{urllib.parse.quote(deploys['id'], safe='')}/comments", {"body": text})
+
+
 def resume_incidents(api):
     """Resolves open hard-stop incidents at their current amount. Returns (resumed, refused)."""
     companies = api.call("GET", "/api/companies") or []
@@ -187,14 +261,23 @@ def main(argv=None):
     p.add_argument("--repo-dir", default="/opt/agent-manager")
     p.add_argument("--secrets-dir", default="/etc/agent-manager")
     p.add_argument("--paperclip-url", default="http://127.0.0.1:3100")
+    p.add_argument("--state-dir", default="/var/lib/agent-manager")
     a = p.parse_args(argv)
     try:
         key = read_env_value(Path(a.secrets_dir) / "paperclip-board.env", "PAPERCLIP_BOARD_KEY")
         secrets.append(key)
+        api = Api(a.paperclip_url, key)
+        note = probe_gateway(lambda: docker_probe(a.repo_dir), lambda: docker_restart_hermes(a.repo_dir),
+                             Path(a.state_dir) / "hermes-probe.json")
+        if note:
+            print(note)
+            try:
+                post_deploys_note(api, "Hermes watchdog: " + note)
+            except Failure as e:
+                print(f"heal-accounting: deploys note: {redact(str(e))}", file=sys.stderr)
         closed = close_lost_runs(lambda sql: psql(a.repo_dir, sql))
         for c in closed:
             print(f"closed accounting of {c['status']} run {c['run']} (no receipt)")
-        api = Api(a.paperclip_url, key)
         try:
             acked, unstuck = unstick_pausing(lambda sql: psql(a.repo_dir, sql), api)
         except Failure as e:  # never block the budget step below
