@@ -19,10 +19,14 @@ the checkout. The sync logs each step to the journal
    their volumes and images);
 3. stop, disable and remove the spend and crew-status units and scripts and the
    heal step;
-4. delete the stack's files in `/etc/agent-manager/` (`postgres.env`,
+4. move the stack's files in `/etc/agent-manager/` (`postgres.env`,
    `paperclip.env`, `hermes.env`, `sandbox.env`, `paperclip-board.env`, the
-   Hermes SSH key, the sandbox authorized keys, `bridge-keys/`, `crew-deny.txt`).
-   The sync needs none of them. Any other `.env` there is left and logged.
+   Hermes SSH key, the sandbox authorized keys, `bridge-keys/`, `crew-deny.txt`)
+   to `/var/backups/agent-manager-secrets/` (dir 0700, files 0600, root-only,
+   never pruned), because the VPS reuses these secrets and the providers can't
+   show them again. Each move is logged. The sync needs none of them. Any other
+   `.env` there is left and logged. Delete that directory by hand once the VPS
+   has its own copies.
 
 Each step leaves a marker in `/var/lib/agent-manager/decommission/`, so a re-run
 does nothing twice and a failed step is retried on the next tick. To redo one,

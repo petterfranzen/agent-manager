@@ -23,6 +23,8 @@ SBIN_DIR=${AM_SBIN_DIR:-/usr/local/sbin}
 UNIT_DIR=${AM_UNIT_DIR:-/etc/systemd/system}
 BACKUP_DIR=${AM_BACKUP_DIR:-/var/backups/paperclip}
 BACKUP_KEEP_DAYS=30
+# The stack's secrets are moved here, not deleted: the VPS reuses them. Never pruned.
+SECRETS_KEEP_DIR=${AM_SECRETS_KEEP_DIR:-/var/backups/agent-manager-secrets}
 GH_REPO=petterfranzen/agent-manager
 STATE_FILE=$STATE_DIR/sync-state.json
 
@@ -417,17 +419,24 @@ decom_units() {
   systemctl reset-failed || true
 }
 
-# Only the agent stack's own files. Another *.env here is left alone and
-# logged, because it may belong to something else on the VM. The sync needs
-# none of them (it reads the public GitHub API without a token).
+# Only the agent stack's own files, moved (not deleted) to $SECRETS_KEEP_DIR
+# (0700, files 0600, root-only, no expiry) because the new VPS reuses these
+# secrets and the providers can't show them again. Another *.env here is left
+# alone and logged, because it may belong to something else on the VM. The
+# sync needs none of them (it reads the public GitHub API without a token).
 # shellcheck disable=SC2317,SC2329  # called indirectly through dstep
 decom_secrets() {
   local f
+  install -d -m 0700 "$SECRETS_KEEP_DIR" || return 1
+  chmod 0700 "$SECRETS_KEEP_DIR" || return 1
   for f in postgres.env paperclip.env hermes.env sandbox.env paperclip-board.env \
-           hermes_ssh_key sandbox_authorized_keys crew-deny.txt; do
-    rm -f "$SECRETS_DIR/$f"
+           hermes_ssh_key sandbox_authorized_keys crew-deny.txt bridge-keys; do
+    [ -e "$SECRETS_DIR/$f" ] || continue
+    rm -rf "${SECRETS_KEEP_DIR:?}/$f"
+    mv "$SECRETS_DIR/$f" "$SECRETS_KEEP_DIR/$f" || return 1
+    log "moved $f to $SECRETS_KEEP_DIR"
   done
-  rm -rf "$SECRETS_DIR/bridge-keys"
+  chmod -R go-rwx "$SECRETS_KEEP_DIR" || return 1
   for f in "$SECRETS_DIR"/*.env; do
     [ -e "$f" ] || continue
     log "left in place: $f"

@@ -99,7 +99,7 @@ class Decommission(unittest.TestCase):
             "AM_REPO_DIR": str(self.repo), "AM_STATE_DIR": str(t / "state"),
             "AM_LOCK_FILE": str(t / "lock"), "AM_SECRETS_DIR": str(t / "secrets"),
             "AM_SBIN_DIR": str(t / "sbin"), "AM_UNIT_DIR": str(t / "units"),
-            "AM_BACKUP_DIR": str(t / "backups"), "AM_HEAL": str(t / "no-heal"),
+            "AM_BACKUP_DIR": str(t / "backups"), "AM_SECRETS_KEEP_DIR": str(t / "kept"), "AM_HEAL": str(t / "no-heal"),
             "FAKE_LOG": str(self.log), "FAKE_MOUNT": str(t / "mount"),
             **extra,
         }
@@ -148,8 +148,17 @@ class Decommission(unittest.TestCase):
         self.assertTrue((self.t / "sbin" / "agent-manager-sync").exists())
         self.assertNotIn("systemctl stop agent-manager-sync.timer", calls)
         self.assertNotIn("systemctl disable agent-manager-sync.timer", calls)
+        # Moved, not deleted: root-only, same content, and never pruned.
+        kept = self.t / "kept"
+        self.assertEqual(kept.stat().st_mode & 0o777, 0o700)
+        for f in ("postgres.env", "hermes.env", "sandbox.env", "hermes_ssh_key"):
+            self.assertEqual((kept / f).read_text(), "x", f)
+            self.assertEqual((kept / f).stat().st_mode & 0o777, 0o600, f)
+        self.assertEqual((kept / "bridge-keys" / "batou.key").read_text(), "x")
+        self.assertIn("moved hermes.env", r.stdout)
         # An .env the stack does not own is kept, and said so.
         self.assertEqual(self.left("other-app.env"), ["other-app.env"])
+        self.assertFalse((self.t / "kept" / "other-app.env").exists())
         self.assertIn("left in place", r.stdout)
 
     def test_backup_comes_before_volumes_are_removed(self):
@@ -178,6 +187,7 @@ class Decommission(unittest.TestCase):
         r = self.run_sync()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.left("postgres.env"), [])
+        self.assertTrue((self.t / "kept" / "postgres.env").exists())
         backups = [c for c in self.calls() if c.startswith("docker volume ls")]
         self.assertEqual(len(backups), 1, "the finished backup step is not repeated")
 
@@ -189,6 +199,7 @@ class Decommission(unittest.TestCase):
         self.run_sync()
         self.assertFalse(old.exists())
         self.assertTrue((self.t / "backups" / "paperclip-20261031-020000.sql.gz").exists())
+        self.assertTrue((self.t / "kept" / "hermes.env").exists(), "secrets are never pruned")
 
     def test_flight_tracker_is_never_touched(self):
         self.mark_decommissioned()
