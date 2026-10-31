@@ -6,7 +6,7 @@ this repo. This file is the source to recreate them from.
 | Setting | Value |
 |---|---|
 | Name | `Daily check-in` |
-| Schedule | `CRON_TZ=Europe/Stockholm 47 7,11,18 * * *` |
+| Schedule | `CRON_TZ=Europe/Stockholm 47 7 * * *` |
 | Runs in | a fresh cloud session each time, in the environment that holds `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` |
 | Notifications | push on, email off |
 
