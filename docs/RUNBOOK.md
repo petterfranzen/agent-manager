@@ -1,5 +1,75 @@
 # Runbook: deploy the agent stack on the VM
 
+## Section 9 on the VPS: Monday 2 Nov (do these in order)
+
+Paperclip is gone. On the VPS, Hermes and the sandbox run from `vps/compose.yaml`;
+`dispatch.py` (systemd timers, every 2 min) feeds them GitHub issues from the
+private repo `section9-hq`. Plan and reasons: [migration-vps.md](migration-vps.md).
+You need: root SSH to the VPS (`ssh vps` below) and to the Hetzner VM (`ssh hetzner`),
+and the `gh` CLI on your computer. Nothing here is typed into chat.
+
+**1. Create the private repo and its labels** (on your computer)
+```bash
+gh repo create petterfranzen/section9-hq --private --description "Section 9 task board"
+for l in agent:batou agent:tachikoma agent:ishikawa agent:togusa agent:saito \
+         status:todo status:working status:review status:done status:blocked; do
+  gh label create "$l" -R petterfranzen/section9-hq
+done
+```
+
+**2. Let the agents' token reach it.** github.com, Settings, Developer settings,
+Fine-grained tokens, `agents-ghost`, Edit. Under *Repository access* add
+`section9-hq`. Under *Repository permissions* set **Issues: Read and write**
+(Metadata stays read-only). Change nothing else. Save.
+
+**3. Copy the secrets Hetzner → VPS** (on your computer; the secrets pass through
+the pipe and are never written to your disk)
+```bash
+ssh hetzner 'cd /var/backups/agent-manager-secrets && tar cf - hermes.env sandbox.env hermes_ssh_key sandbox_authorized_keys' \
+  | ssh vps 'umask 077 && mkdir -p /etc/section9 && tar xf - -C /etc/section9 --numeric-owner'
+ssh vps 'chown root:root /etc/section9/*.env && chmod 600 /etc/section9/*.env && ls -ln /etc/section9'
+```
+The listing must show four files: both `.env` files `-rw-------` owned by 0;
+`hermes_ssh_key` `-r--------` owned by 10000.
+
+**4. Install** (on the VPS: `ssh vps`)
+```bash
+git clone https://github.com/petterfranzen/agent-manager /opt/agent-manager
+/opt/agent-manager/vps/install.sh
+```
+It stops at the first problem and says what is missing; fix that and run it again
+(it is safe to repeat). It adds 4 GB of swap, builds and starts Hermes and the
+sandbox, removes Hostinger's Hermes and Traefik (cloudflared stays), and starts
+the two timers. The first build takes several minutes.
+
+**5. Check** (on the VPS)
+1. `python3 -I /opt/agent-manager/vps/dispatch.py status` shows
+   `queue: 0 todo`, `spend: ok` and `hermes: reachable`.
+2. `docker ps` lists exactly `section9-hermes-1` and `section9-sandbox-1`
+   (plus cloudflared if it runs in Docker). No Hostinger or Traefik.
+3. `ss -ltn | grep -E ':8642|:2222'` shows both on `127.0.0.1` only.
+4. `systemctl list-timers 'section9-*'` shows both timers.
+5. End to end, on your computer:
+   ```bash
+   gh issue create -R petterfranzen/section9-hq -t "Hello" -b "Reply with one line saying hi, then set the status to done." -l agent:ishikawa -l status:todo
+   ```
+   Within about 5 minutes the issue gets a comment from Ishikawa and the label
+   `status:done` (closed). If it turns `status:blocked`, the dispatcher's comment
+   says why. Logs: `journalctl -u section9-dispatch -n 40` on the VPS.
+
+If step 5.5 works, tell the Major. Then the Major moves the agents over one by one
+(phase 3 of the plan).
+
+**Later.** Update: `git -C /opt/agent-manager pull --ff-only && /opt/agent-manager/vps/install.sh`.
+Stop everything: `systemctl disable --now section9-dispatch.timer section9-routines.timer`.
+A private routine (rental watch) goes in the root-only `/etc/section9/routines.private.toml`
+as `[[routines]]` with `agent`, `title`, `description`, `cron`, `timezone`.
+Delete `/var/backups/agent-manager-secrets/` on Hetzner once the VPS works.
+
+---
+
+## Older: the Hetzner stack (steps 1-10 below are history)
+
 ## What the Hetzner VM runs now (from 31 Oct 2026)
 
 **flight-tracker only** (its own unit, data and cloudflared), plus

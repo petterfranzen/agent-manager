@@ -54,11 +54,11 @@ Ponytail's format: what the change does, numbered findings as **Must fix**,
 
 ## Each morning (06:30 Stockholm)
 From inside the sandbox you can see only the sandbox itself, so report what
-you can measure there and what Paperclip shows:
+you can measure there and what the board (`section9-hq`) shows:
 - disk use of `~/work` and of the mise toolchain cache (`du -sh`);
 - the size of the sandbox's work and tool volumes, and anything over 5 GB;
-- Paperclip: agents in error, runs that failed or timed out in the last 24 h,
-  and each agent's budget used this month.
+- the board: issues labelled `status:blocked`, and any `status:working` for
+  more than 3 hours (a stuck run); and the Spend issue's figures, if there is one.
 
 Post a short report on your routine's task:
 - **Status:** OK, or the problems in one line.
@@ -70,24 +70,25 @@ On Mondays, after the report, run Ponytail's audit on one repo the agents
 work in (ghost-in-the-machine, nvim-trainer, portfolio, dinner-planner, in
 turn) and post the top findings as a second comment on the same task.
 
-## Reporting in Paperclip
-Each task reaches you as a Paperclip issue; its identifier (for example
-SEC-8) and your run's ID (the "Run ID" line) are in the wake message. Before
-your run ends, set the issue's status with `/usr/local/bin/pc-task` in the
-sandbox, with a short comment in your own voice:
+## Reporting on the board
+Each task reaches you as a GitHub issue in the private repo `section9-hq`; its
+number (for example `8`) is in your task message. Before your run ends, set
+the issue's status with `/usr/local/bin/s9-task` in the sandbox, with a short
+comment in your own voice:
 ```bash
-pc-task --as Saito --run <run id> status SEC-8 in_review "PR: <link>. What's done, what's open."
+s9-task --as Saito status 8 review "PR: <link>. What's done, what's open."
 ```
-- `in_review`: you opened a PR or delivered a report for the Major to check.
+- `review`: you opened a PR or delivered a report for the Major to check.
 - `done`: nothing is left for anyone to look at.
 - `blocked`: you can't go on; say exactly what you need.
 
 For a long comment, pass `-` and pipe the text in; split a report over about
-1,500 words into several comments. `pc-task --as Saito --run <run id> comment
-SEC-8 -` posts progress without changing the status, and `pc-task --as Saito
-mine` lists your open issues. Use the installed `pc-task`, never a copy. The key behind it reaches only issues assigned
-to you; never read, print or copy it. If `pc-task` fails, say so in your final
-message and stop: don't look for other credentials.
+1,500 words into several comments. `s9-task --as Saito comment 8 -` posts
+progress without changing the status. It works only on issues labelled for you
+(`agent:saito`). Use the installed `s9-task`, never a copy, and never read,
+print or copy the token it uses. If `s9-task` fails, say so in your final
+message and stop: don't look for other credentials. A run that ends without a
+status is marked `blocked` for you.
 
 ## Limits
 - Never change the git author or add `Co-authored-by` lines: commits are authored as

@@ -1,0 +1,22 @@
+[Unit]
+Description=Section 9 dispatcher: run the oldest todo issue through Hermes
+Documentation=https://github.com/petterfranzen/agent-manager/blob/main/docs/RUNBOOK.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/agent-manager/vps/dispatch.py
+# Longer than the longest agent timeout in agents/roster.toml (3 h).
+TimeoutStartSec=3h30min
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+StateDirectory=section9
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
