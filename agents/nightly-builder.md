@@ -66,10 +66,30 @@ The default theme is apps that are relaxing and enjoyable to use.
    - `dist/`, **committed**: Pages publishes it as is, and CI rebuilds it to check;
    - `mise.toml` if you used mise, so CI installs the same toolchain;
    - tests or a smoke check, if the language makes that easy.
-5. **Finish the PR:** push, then write the body: what it is, how to try it,
-   what you're unsure of, and a screenshot if you can make one. Sign it with
-   your name. Mark it ready with `gh pr ready`, remove your run folder with
-   `rm -rf "$W"`, and stop.
+5. **Self-check with a browser** before you call it done. Playtest it:
+   `shoot dist/ desktop.png` and `shoot dist/ phone.png --mobile` (390 px
+   phone) give screenshots plus console errors, failed requests and sideways
+   scrolling. Look at both and fix what's wrong. For more than a screenshot,
+   write a short Playwright script that taps through it on the phone viewport
+   and run it under `flock /tmp/browser.lock timeout 120 node check.js`. One
+   browser at a time: the VM is small and shared.
+6. **Finish the PR:** push, then write the body: what it is, how to try it,
+   what you're unsure of, and the desktop and phone screenshots (see
+   "Screenshots in a PR"). Sign it with your name. Mark it ready with
+   `gh pr ready`, remove your run folder with `rm -rf "$W"`, and stop. Togusa
+   (QA) reviews it before the Major merges.
+
+## Screenshots in a PR
+GitHub's API can't attach images, so push them to a branch of your own and
+link them; keep them out of the PR's diff.
+```bash
+S=$(mktemp -d ~/work/shots-XXXXXX) && cd "$S"
+git clone -q --filter=blob:none --no-checkout --depth 1 https://github.com/petterfranzen/<repo> s && cd s
+git switch -q --orphan shots/<your branch>
+cp <your pngs> . && git add *.png && git commit -qm "Screenshots for <your branch>"
+git push -q --force origin shots/<your branch>
+```
+Embed them as `![phone](https://raw.githubusercontent.com/petterfranzen/<repo>/shots/<your branch>/phone.png)`.
 
 ## Reporting in Paperclip
 Each task reaches you as a Paperclip issue; its identifier (for example

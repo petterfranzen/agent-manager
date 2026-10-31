@@ -85,7 +85,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: paperclip-apply.py against a fake Paperclip
-        run: python3 -m unittest scripts/test_paperclip_apply.py scripts/test_spend_report.py scripts/test_crew_status.py
+        run: python3 -m unittest scripts/test_paperclip_apply.py scripts/test_spend_report.py scripts/test_crew_status.py scripts/test_heal_accounting.py
 
   deploy:
     name: Deploy scripts
@@ -163,6 +163,18 @@ jobs:
           out=$(s 'pc-task --as Batou status SEC-1 done x 2>&1' || true)
           echo "$out" | grep -q 'changes need --run'
           ! s 'echo x > /run/paperclip-keys/batou.key' 2>/dev/null
+          # Browser: shoot renders a local page to a non-empty PNG at desktop and
+          # phone width and reports its console errors (SSH sessions get the env via pam_env).
+          s 'node --version && impeccable --version && test -r /opt/skills/ponytail/ponytail-review/SKILL.md && test -r /opt/skills/impeccable/SKILL.md'
+          [ "$(s 'echo $PLAYWRIGHT_BROWSERS_PATH')" = /opt/ms-playwright ]
+          s 'mkdir -p /tmp/page && printf "%s\n" "<!doctype html><meta name=viewport content=\"width=device-width\"><h1>QA smoke</h1><script>console.error(\"ci-boom\")</script>" > /tmp/page/index.html'
+          out=$(s 'shoot /tmp/page /tmp/page/desktop.png && shoot /tmp/page/index.html /tmp/page/phone.png --mobile')
+          echo "$out"
+          echo "$out" | grep -q 'console.error: ci-boom'
+          s 'test -s /tmp/page/desktop.png && test -s /tmp/page/phone.png'
+          [ "$(s 'python3 -c "import struct,sys; print(struct.unpack(\">I\", open(sys.argv[1],\"rb\").read()[16:20])[0])" /tmp/page/phone.png')" = 390 ]
+          # No browser left behind (the kernel's process name is cut to 15 characters).
+          [ -z "$(s 'pgrep -x chrome-headless || true')" ]
           # No root login, no password login.
           ! ssh -i /tmp/ci_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes root@127.0.0.1 true
           echo "sandbox ok"

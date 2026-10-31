@@ -99,7 +99,12 @@ services:
       - sandbox-hostkeys:/etc/ssh/hostkeys
       - sandbox-work:/home/agent/work
       - sandbox-tools:/home/agent/.local/share/mise
+    # One headless browser at a time (shoot's lock) fits inside this with a
+    # build: a shoot peaks at ~0.2 GB. Swap is capped at 0.5 GB on top, so a
+    # runaway page or build is OOM-killed here instead of pushing
+    # flight-tracker's page cache out (docs/DESIGN.md, Memory).
     mem_limit: 1536m
+    memswap_limit: 2g
     cpus: 1.5
     pids_limit: 512
     logging: *logging
