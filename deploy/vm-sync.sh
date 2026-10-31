@@ -347,9 +347,10 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 # Every tick, deploy or not: close the accounting of runs that lost their usage
-# receipt and resume the budgets they paused (deploy/heal-accounting.py).
+# receipt, resume the budgets they paused, and restart Hermes if its gateway
+# stopped answering (deploy/heal-accounting.py).
 if [ -x "$HEAL" ]; then
-  "$HEAL" --repo-dir "$REPO_DIR" --secrets-dir "$SECRETS_DIR" --paperclip-url "$PAPERCLIP_URL" 2>&1 \
+  "$HEAL" --repo-dir "$REPO_DIR" --secrets-dir "$SECRETS_DIR" --paperclip-url "$PAPERCLIP_URL" --state-dir "$STATE_DIR" 2>&1 \
     | redact | sed 's/^/agent-manager-sync: heal: /' || true
 fi
 

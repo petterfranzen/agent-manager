@@ -4,7 +4,9 @@ Run: python3 -m unittest scripts/test_heal_accounting.py
 """
 
 import importlib.util
+import datetime as dt
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -89,6 +91,56 @@ class UnstickPausing(unittest.TestCase):
 
     def test_nothing_stuck(self):
         self.assertEqual(heal.unstick_pausing(lambda sql: "[]", None), ([], []))
+
+
+class HermesProbe(unittest.TestCase):
+    def setUp(self):
+        self.state = Path(tempfile.mkdtemp()) / "hermes-probe.json"
+        self.restarts = 0
+        self.t = dt.datetime(2026, 10, 31, 20, 0, tzinfo=dt.timezone.utc)
+
+    def tick(self, result, minutes=5, ok=True):
+        self.t += dt.timedelta(minutes=minutes)
+
+        def restart():
+            self.restarts += 1
+            return ok
+        return heal.probe_gateway(lambda: result, restart, self.state, now=self.t)
+
+    def test_restarts_after_two_refusals_in_a_row(self):
+        self.assertIsNone(self.tick("refused"))
+        note = self.tick("refused")
+        self.assertEqual(self.restarts, 1)
+        self.assertIn("restarted Hermes", note)
+
+    def test_an_answer_resets_the_count(self):
+        self.tick("refused")
+        self.tick("up")
+        self.assertIsNone(self.tick("refused"))
+        self.assertEqual(self.restarts, 0)
+
+    def test_unknown_is_not_counted(self):
+        # Paperclip itself down, or docker failing: not Hermes's fault.
+        for _ in range(4):
+            self.assertIsNone(self.tick("unknown"))
+        self.assertEqual(self.restarts, 0)
+
+    def test_at_most_once_per_30_minutes(self):
+        self.tick("refused")
+        self.tick("refused")
+        for _ in range(4):  # 20 more minutes of refusals
+            self.assertIsNone(self.tick("refused"))
+        self.assertEqual(self.restarts, 1)
+        self.tick("refused", minutes=15)  # 35 minutes after the restart
+        self.assertEqual(self.restarts, 2)
+
+    def test_failed_restart_is_reported(self):
+        self.tick("refused")
+        self.assertIn("FAILED", self.tick("refused", ok=False))
+
+    def test_probe_script_exits_3_on_refusal(self):
+        self.assertIn("process.exit(3)", heal.PROBE_JS)
+        self.assertIn("8642", heal.PROBE_JS)
 
 
 class ResumeIncidents(unittest.TestCase):

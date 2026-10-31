@@ -263,7 +263,11 @@ To run it by hand, use `systemctl start agent-manager-sync`.
 | Disk used by Docker | `docker system df` |
 
 ## Troubleshooting
-- **Paperclip says the Hermes gateway is unreachable:** `docker compose logs hermes`.
+- **Paperclip says the Hermes gateway is unreachable** (runs fail with
+  `hermes_gateway_connect_failed`, ECONNREFUSED 127.0.0.1:8642): the sync's
+  heal step restarts Hermes by itself after two refused checks in a row, at
+  most every 30 minutes, and notes it on the Deploys issue. Its count is in
+  `/var/lib/agent-manager/hermes-probe.json`. By hand: `docker compose logs hermes`.
   The gateway must listen on 127.0.0.1:8642 inside the shared namespace. Restart
   both: `docker compose restart paperclip hermes`.
 - **Hermes can't SSH to the sandbox:** check the key mount
