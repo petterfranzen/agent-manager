@@ -1,0 +1,67 @@
+# Section 9 on the VPS: Hermes + the sandbox. See docs/migration-vps.md.
+# Secrets live in /etc/section9/ (root-only), never in this public repo.
+# Images are pinned by digest; updates only once a release is 24 h old.
+
+name: section9
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  hermes:
+    image: nousresearch/hermes-agent:v0.22.5@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d
+    restart: unless-stopped
+    command: ["gateway", "run"]
+    depends_on:
+      - sandbox
+    # Host network so the API can listen on the host's loopback only: from a
+    # bridge network it would have to bind 0.0.0.0, where the sandbox could
+    # reach it. The sandbox's sshd is published on 127.0.0.1:2222 for it.
+    network_mode: host
+    env_file: /etc/section9/hermes.env   # OPENROUTER_API_KEY, API_SERVER_KEY
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "127.0.0.1"
+      HERMES_DASHBOARD: "0"
+      WEBHOOK_ENABLED: "false"
+      # Commands run in the sandbox over SSH; Hermes never forwards provider
+      # credentials over SSH, so the OpenRouter key can't reach agent commands.
+      TERMINAL_SSH_HOST: "127.0.0.1"
+      TERMINAL_SSH_PORT: "2222"
+      TERMINAL_SSH_USER: agent
+      TERMINAL_SSH_KEY: /opt/data/ssh/id_ed25519
+    volumes:
+      - hermes-data:/opt/data
+      - ../hermes/config.yaml:/opt/data/config.yaml:ro
+      # Owned by UID 10000 (the image's hermes user), mode 0400.
+      - /etc/section9/hermes_ssh_key:/opt/data/ssh/id_ed25519:ro
+    mem_limit: 512m
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  sandbox:
+    build: ../sandbox
+    restart: unless-stopped
+    env_file: /etc/section9/sandbox.env   # GH_TOKEN (fine-grained)
+    ports:
+      - "127.0.0.1:2222:22"
+    volumes:
+      - /etc/section9/sandbox_authorized_keys:/etc/ssh/authorized_keys/agent:ro
+      - sandbox-hostkeys:/etc/ssh/hostkeys
+      - sandbox-work:/home/agent/work
+      - sandbox-tools:/home/agent/.local/share/mise
+    # A runaway build or page is OOM-killed here, not allowed to starve the host.
+    mem_limit: 2g
+    memswap_limit: 3g
+    cpus: 1
+    pids_limit: 512
+    logging: *logging
+
+volumes:
+  hermes-data:
+  sandbox-hostkeys:
+  sandbox-work:
+  sandbox-tools:

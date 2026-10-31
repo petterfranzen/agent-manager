@@ -103,7 +103,7 @@ RUN chown -R root:root /home/agent/.hermes/skills/impeccable \
  && ln -s /home/agent/.hermes/skills/impeccable /opt/skills/impeccable
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
-# Agents report on their own Paperclip issues with it (task_bridge keys, read-only mount).
-COPY --chmod=0755 pc-task /usr/local/bin/pc-task
+# Agents report on their own section9-hq issues with it (uses the GitHub token).
+COPY --chmod=0755 s9-task /usr/local/bin/s9-task
 EXPOSE 22
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

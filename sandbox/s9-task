@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Report on your own tasks (issues in the private repo section9-hq).
+
+Usage:
+  s9-task --as <Name> comment <n> <text | ->
+  s9-task --as <Name> status <n> <todo|working|review|done|blocked> [<text | ->]
+
+<Name> is your name (Batou, Tachikoma, ...), or set S9_AGENT. <n> is the issue
+number from your task. "-" reads the text from stdin. It acts only on issues
+labelled agent:<name>, and never prints the GitHub token it uses (GH_TOKEN, or
+the sandbox's ~/.git-credentials). "done" also closes the issue.
+"""
+
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+REPO = os.environ.get("S9_REPO", "petterfranzen/section9-hq")
+API = os.environ.get("S9_API_URL", "https://api.github.com").rstrip("/")
+STATUSES = ("todo", "working", "review", "done", "blocked")
+TOKEN = ""
+
+
+def fail(msg, code=2):
+    print(f"s9-task: {msg.replace(TOKEN, '[token]') if TOKEN else msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def find_token():
+    token = os.environ.get("GH_TOKEN", "").strip()
+    if not token:
+        try:
+            with open(os.path.expanduser("~/.git-credentials")) as f:
+                m = re.search(r"https://[^:\s]+:([^@\s]+)@github\.com", f.read())
+            token = m.group(1) if m else ""
+        except OSError:
+            pass
+    if not token:
+        fail("no GitHub token here; tell the Major")
+    return token
+
+
+def call(method, path, body=None):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(f"{API}/repos/{REPO}{path}", data=data, method=method)
+    req.add_header("Authorization", "Bearer " + TOKEN)
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("User-Agent", "s9-task")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        fail(f"{method} {path} -> {e.code}: {e.read().decode('utf-8', 'replace')[:300]}", 1)
+    except (urllib.error.URLError, OSError) as e:
+        fail(f"{method} {path} -> no response: {getattr(e, 'reason', e)}", 1)
+    return json.loads(raw) if raw.strip() else None
+
+
+def text_arg(value):
+    text = sys.stdin.read() if value == "-" else value
+    if not text or not text.strip():
+        fail("empty text")
+    return text
+
+
+def main(argv):
+    global TOKEN
+    agent = os.environ.get("S9_AGENT")
+    while len(argv) >= 2 and argv[0] == "--as":
+        agent, argv = argv[1], argv[2:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,40}", agent or ""):
+        fail("say who you are: --as <Name>, or set S9_AGENT")
+    cmd, args = argv[0], argv[1:]
+    ok = (cmd == "comment" and len(args) == 2) or (cmd == "status" and len(args) in (2, 3))
+    if not ok or not re.fullmatch(r"[0-9]{1,9}", args[0]):
+        fail("unknown command or wrong arguments; see s9-task --help")
+    if cmd == "status" and args[1] not in STATUSES:
+        fail(f"status must be one of: {', '.join(STATUSES)}")
+    if not API.startswith("https://") and urllib.parse.urlsplit(API).hostname not in ("127.0.0.1", "localhost", "::1"):
+        fail("S9_API_URL must be https (or loopback)")
+    TOKEN = find_token()
+    n = args[0]
+    issue = call("GET", f"/issues/{n}")
+    labels = [l["name"] for l in issue.get("labels", [])]
+    if "pull_request" in issue or f"agent:{agent.lower()}" not in [l.lower() for l in labels]:
+        fail(f"issue {n} is not labelled agent:{agent.lower()}; you can only act on your own tasks")
+    if cmd == "comment":
+        call("POST", f"/issues/{n}/comments", {"body": text_arg(args[1])})
+        print(f"commented on {n}")
+        return
+    if len(args) == 3:
+        call("POST", f"/issues/{n}/comments", {"body": text_arg(args[2])})
+    labels = [l for l in labels if not l.startswith("status:")] + ["status:" + args[1]]
+    body = {"labels": labels}
+    if args[1] == "done":
+        body.update(state="closed", state_reason="completed")
+    call("PATCH", f"/issues/{n}", body)
+    print(json.dumps({"issue": int(n), "status": args[1]}))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

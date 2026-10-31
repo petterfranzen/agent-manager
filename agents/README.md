@@ -1,6 +1,6 @@
 # Agents
 
-Each file here is a Paperclip agent's instructions. `roster.toml` lists the
+Each file here is a Section 9 agent's instructions. `roster.toml` lists the
 agents, their budgets, avatars and routines; `scripts/paperclip-apply.py`
 applies it to Paperclip with the **Hermes gateway** adapter, sending each brief
 as the agent's instructions (see docs/RUNBOOK.md, step 7).
