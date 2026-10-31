@@ -369,6 +369,7 @@ dstep() { # dstep <name> <function>: run once, mark done, stop on failure
   : >"$marker"
 }
 
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
 decom_backup() {
   local vol mount src dest
   install -d -m 0700 "$BACKUP_DIR"
@@ -395,11 +396,13 @@ decom_backup() {
   fi
 }
 
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
 decom_compose_down() {
   # The compose project is the agent stack: postgres, paperclip, hermes, sandbox.
   docker compose down --volumes --rmi all --remove-orphans
 }
 
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
 decom_units() {
   local u
   for u in agent-manager-spend.timer agent-manager-spend.service agent-manager-crew-status.service; do
@@ -417,6 +420,7 @@ decom_units() {
 # Only the agent stack's own files. Another *.env here is left alone and
 # logged, because it may belong to something else on the VM. The sync needs
 # none of them (it reads the public GitHub API without a token).
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
 decom_secrets() {
   local f
   for f in postgres.env paperclip.env hermes.env sandbox.env paperclip-board.env \
@@ -430,6 +434,7 @@ decom_secrets() {
   done
 }
 
+# shellcheck disable=SC2317,SC2329  # called indirectly through dstep
 decom_prune_backups() {
   find "$BACKUP_DIR" -maxdepth 1 -type f -mtime +"$BACKUP_KEEP_DAYS" -delete 2>/dev/null || true
 }
