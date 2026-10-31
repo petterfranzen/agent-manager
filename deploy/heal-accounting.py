@@ -13,7 +13,10 @@ vm-sync runs this on every tick (every 5 minutes). It:
   1. closes the accounting of runs that ended as process_lost or cancelled more
      than an hour ago and are still waiting for a receipt, and releases their
      held budget reservations (one guarded UPDATE in Paperclip's database);
-  2. resolves each open hard-stop budget incident with "raise_budget_and_resume"
+  2. acknowledges the cancellation of cancelled runs that never got their stop
+     proof, when their agent has been stuck "pausing" for over an hour, and
+     asks Paperclip to resume that agent (see STOP_SQL);
+  3. resolves each open hard-stop budget incident with "raise_budget_and_resume"
      at the same amount, so nothing is raised. Paperclip itself refuses this
      when booked spend has reached the budget, so a real overspend stays paused.
 
@@ -53,6 +56,33 @@ with closed as (
 )
 select coalesce(json_agg(json_build_object('run', c.id, 'agent', c.agent_id, 'status', c.status)), '[]')
   from closed c;
+"""
+
+# A cancelled legacy (Hermes gateway) run that never reached its process and
+# never had its cancellation acknowledged has no "stop proof", so Paperclip's
+# lifecycle driver keeps its agent "pausing" for ever
+# (agent-execution-stop.ts, agentExecutionsHaveStopped). There is no API for
+# it. Only for agents stuck pausing for an hour, on runs that ended an hour ago,
+# with no process and no live controller lease.
+STOP_SQL = """
+with acked as (
+  update heartbeat_runs r
+     set result_json = coalesce(r.result_json, '{}'::jsonb)
+           || '{"executionCancellation": {"state": "acknowledged", "by": "agent-manager-sync"}}'::jsonb
+    from agents a
+   where a.id = r.agent_id
+     and a.lifecycle_state = 'pausing'
+     and a.updated_at < now() - interval '1 hour'
+     and r.status = 'cancelled'
+     and r.runtime_mode = 'legacy'
+     and r.process_pid is null and r.process_group_id is null
+     and coalesce(r.execution_stage, '') <> 'settled'
+     and coalesce(r.result_json->'executionCancellation'->>'state', '') <> 'acknowledged'
+     and coalesce(r.finished_at, r.created_at) < now() - interval '1 hour'
+     and (r.controller_lease_expires_at is null or r.controller_lease_expires_at < now())
+  returning r.id, r.agent_id
+)
+select coalesce(json_agg(json_build_object('run', id, 'agent', agent_id)), '[]') from acked;
 """
 
 
@@ -111,6 +141,20 @@ def close_lost_runs(run_sql):
     return json.loads(out or "[]")
 
 
+def unstick_pausing(run_sql, api):
+    """Acknowledges stop proof for stuck agents' cancelled runs, then resumes them."""
+    acked = json.loads(run_sql(STOP_SQL) or "[]")
+    resumed = []
+    for agent in sorted({a["agent"] for a in acked}):
+        try:
+            api.call("POST", f"/api/agents/{urllib.parse.quote(agent, safe='')}/resume", {})
+            resumed.append(agent)
+        except Failure as e:
+            # The lifecycle driver may need a moment; the Major or the next deploy resumes it.
+            print(f"resume agent {agent}: {e}")
+    return acked, resumed
+
+
 def resume_incidents(api):
     """Resolves open hard-stop incidents at their current amount. Returns (resumed, refused)."""
     companies = api.call("GET", "/api/companies") or []
@@ -150,7 +194,17 @@ def main(argv=None):
         closed = close_lost_runs(lambda sql: psql(a.repo_dir, sql))
         for c in closed:
             print(f"closed accounting of {c['status']} run {c['run']} (no receipt)")
-        resumed, refused = resume_incidents(Api(a.paperclip_url, key))
+        api = Api(a.paperclip_url, key)
+        try:
+            acked, unstuck = unstick_pausing(lambda sql: psql(a.repo_dir, sql), api)
+        except Failure as e:  # never block the budget step below
+            print(f"heal-accounting: unstick: {redact(str(e))}", file=sys.stderr)
+            acked, unstuck = [], []
+        for r in acked:
+            print(f"acknowledged cancellation of run {r['run']} (agent stuck pausing)")
+        for r in unstuck:
+            print(f"asked to resume agent {r}")
+        resumed, refused = resume_incidents(api)
         for r in resumed:
             print(f"resumed budget: {r}")
         for r in refused:

@@ -287,6 +287,14 @@ To run it by hand, use `systemctl start agent-manager-sync`.
   reservations. The real money is booked by the spend sync anyway. Then it
   resolves the open hard-stop incidents at the same amount; Paperclip refuses
   any whose booked spend has reached its budget.
+- **An agent stuck "pausing"** (status paused, `lifecycleState` "pausing", resume
+  does nothing): a cancelled run never got its cancellation acknowledged, so
+  Paperclip waits for stop proof for ever. There is no API for it. The same
+  heal step marks such runs' cancellation acknowledged once the agent has been
+  pausing for an hour and the run ended an hour ago with no process and no live
+  lease, then asks Paperclip to resume the agent (lines start `heal:`). If the
+  resume doesn't take, `POST /api/agents/{id}/resume` once the agent shows
+  lifecycle "paused".
 - **Why a run's process was lost:** `docker inspect -f '{{.Name}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} started={{.State.StartedAt}}' $(docker compose ps -q)`
   and `journalctl -k --since '<time>' | grep -i -E 'oom|killed process'`.
 - **A browser hangs or the sandbox is short of memory:** `shoot` kills its

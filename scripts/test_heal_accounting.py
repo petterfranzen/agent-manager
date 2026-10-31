@@ -64,6 +64,33 @@ class CloseLostRuns(unittest.TestCase):
         self.assertEqual(heal.close_lost_runs(lambda sql: "[]"), [])
 
 
+class UnstickPausing(unittest.TestCase):
+    def test_sql_is_guarded(self):
+        sql = heal.STOP_SQL
+        for guard in ("lifecycle_state = 'pausing'", "a.updated_at < now() - interval '1 hour'",
+                      "status = 'cancelled'", "runtime_mode = 'legacy'", "process_pid is null",
+                      "process_group_id is null", "<> 'settled'", "<> 'acknowledged'",
+                      "controller_lease_expires_at < now()"):
+            self.assertIn(guard, sql)
+        self.assertNotIn("delete", sql.lower())
+
+    def test_resumes_each_agent_once(self):
+        calls = []
+
+        class Api:
+            def call(self, method, path, body=None):
+                calls.append((method, path))
+
+        out = json.dumps([{"run": "r1", "agent": "a1"}, {"run": "r2", "agent": "a1"}])
+        acked, resumed = heal.unstick_pausing(lambda sql: out, Api())
+        self.assertEqual(len(acked), 2)
+        self.assertEqual(resumed, ["a1"])
+        self.assertEqual(calls, [("POST", "/api/agents/a1/resume")])
+
+    def test_nothing_stuck(self):
+        self.assertEqual(heal.unstick_pausing(lambda sql: "[]", None), ([], []))
+
+
 class ResumeIncidents(unittest.TestCase):
     def test_resumes_at_same_amount_and_leaves_overspend_paused(self):
         api = StubApi([incident("i1", "Batou", 400, 19), incident("i2", "Ishikawa", 500, 500),
