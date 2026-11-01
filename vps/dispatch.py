@@ -4,6 +4,7 @@
   dispatch.py            run the oldest `agent:<name>` + `status:todo` issue
   dispatch.py routines   open the issues for routines whose cron time has come
   dispatch.py status     queue, spend and Hermes reachability (for the runbook)
+  dispatch.py spend      update the open "Spend" issue with OpenRouter's figures (hourly)
 
 Run by systemd timers on the VPS (vps/systemd). One run at a time (lock file).
 Standard library only. Secrets come from root-only files and are never printed:
@@ -251,6 +252,37 @@ def status(a, board, hermes_key, orkey, log):
         log("hermes: " + ("NOT reachable (" + str(e) + ")" if "no response" in str(e) else "reachable"))
 
 
+def spend(a, board, orkey, log):
+    """Keep one open issue titled "Spend" current: OpenRouter's own month, cap, left and today."""
+    k = (http("GET", a.openrouter.rstrip("/") + "/key", orkey, timeout=20) or {}).get("data") or {}
+    if "usage_monthly" not in k:
+        raise Failure("OpenRouter /key reply has no usage_monthly")
+    money = lambda key: f"${Decimal(str(k[key])):.2f}" if k.get(key) is not None else "n/a"
+    now = dt.datetime.now(dt.timezone.utc)
+    body = "\n".join([
+        f"**Live snapshot, updated hourly by the VPS.** As of {now:%Y-%m-%d %H:%M} UTC.", "",
+        "OpenRouter (the key the agents use; true cost):",
+        f"- This month (UTC): {money('usage_monthly')}",
+        f"- Cap: {money('limit')}" + (f" ({k['limit_reset']} reset)" if k.get("limit_reset") else ""),
+        f"- Left: {money('limit_remaining')}",
+        f"- Today (UTC): {money('usage_daily')}", "",
+        "Rewritten every hour; don't edit. Leave this issue open and pinned."])
+    open_ = board.call("GET", "/issues?state=open&sort=created&direction=asc&per_page=100") or []
+    issue = next((i for i in open_ if i["title"] == "Spend" and "pull_request" not in i), None)
+    if issue:
+        board.call("PATCH", f"/issues/{issue['number']}", {"body": body})
+        log(f"spend: updated #{issue['number']}")
+        return
+    issue = board.call("POST", "/issues", {"title": "Spend", "body": body})
+    log(f"spend: opened #{issue['number']}")
+    try:        # pinning is GraphQL-only and needs more than issue access; best effort
+        http("POST", f"{board.api}/graphql", board.token, {
+            "query": "mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }",
+            "variables": {"id": issue["node_id"]}})
+    except (Failure, KeyError) as e:
+        log(f"spend: could not pin #{issue['number']} (pin it by hand): {e}")
+
+
 def local_only(url, what):
     u = urllib.parse.urlsplit(url)
     if u.scheme != "https" and u.hostname not in LOOPBACK:
@@ -259,7 +291,7 @@ def local_only(url, what):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("cmd", nargs="?", default="run", choices=["run", "routines", "status"])
+    p.add_argument("cmd", nargs="?", default="run", choices=["run", "routines", "status", "spend"])
     p.add_argument("--secrets-dir", default="/etc/section9")
     p.add_argument("--state-dir", default="/var/lib/section9")
     p.add_argument("--repo-root", default=str(ROOT))
@@ -287,6 +319,9 @@ def main(argv=None):
             return 0
         if a.cmd == "status":
             status(a, board, hkey, orkey, log)
+            return 0
+        if a.cmd == "spend":
+            spend(a, board, orkey, log)
             return 0
         Path(a.state_dir).mkdir(parents=True, exist_ok=True)
         with open(Path(a.state_dir) / "dispatch.lock", "w") as lock:

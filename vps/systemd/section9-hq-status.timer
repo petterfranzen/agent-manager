@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 HQ: write status.json for the crew page, on a timer
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=2min
+
+[Install]
+WantedBy=timers.target

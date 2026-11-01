@@ -57,8 +57,45 @@ the two timers. The first build takes several minutes.
    `status:done` (closed). If it turns `status:blocked`, the dispatcher's comment
    says why. Logs: `journalctl -u section9-dispatch -n 40` on the VPS.
 
-If step 5.5 works, tell the Major. Then the Major moves the agents over one by one
+If step 5.5 works, tell the Major (then step 6). Then the Major moves the agents over one by one
 (phase 3 of the plan).
+
+**6. Pick up the HQ page, sync and spend (one time, after the VPS is already running)**
+
+On the VPS, or in the darkstar session:
+```bash
+cd /opt/agent-manager && git pull && vps/install.sh
+```
+From then on `section9-sync.timer` (every 5 min) fast-forwards `/opt/agent-manager` to
+`main` once all CI checks are green on that commit, and re-runs what changed: compose up
+for changes to `vps/compose.yaml`, `sandbox/` or `hermes/`; the systemd units for changes
+to `vps/systemd/`. It logs to the journal: `journalctl -u section9-sync -n 20`. It refuses
+a checkout with local changes and stops retrying a commit after 3 failed applies.
+`install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
+the sandbox refuses the `0600` file).
+
+**hq.sectionnine.dev** is wired by hand once, in Cloudflare Zero Trust:
+- Networks, Tunnels, `section9-vps`, Public hostname: `hq.sectionnine.dev` →
+  `HTTP` `http://localhost:8090` (cloudflared runs on the host network).
+- Access, Applications: a self-hosted app for `hq.sectionnine.dev` with the same policy as the
+  other hostnames (your email, plus the service token for the Major). Without the Access app the
+  page is public: don't publish the hostname first.
+- The Paperclip page used this hostname. Retire that Access app and its DNS record first, or
+  edit it instead of adding a second one.
+
+What serves it: the `hq` container (Caddy, 64 MB, `127.0.0.1:8090` only) reads `/var/lib/section9/hq`.
+Two timers fill that folder: `section9-hq-crew` (10 min) mirrors `crew/` from
+ghost-in-the-machine `main` (public, no token), and `section9-hq-status` (2 min) writes the live
+`status.json` from `section9-hq` issues, OpenRouter's usage (a percentage, no dollars) and
+the model in `hermes/config.yaml`. Check: `curl -s localhost:8090/status.json | head`.
+
+Private tasks show as "On a private task": any issue labelled `private`, and any title containing
+a term in `/etc/section9/crew-deny.txt` (one per line, root-only). Without that file only agent
+states and "On a task" are published. Create the file before you expect titles on the page.
+
+`section9-spend.timer` (hourly) keeps the open `Spend` issue in `section9-hq` current: month, cap,
+left and today from OpenRouter, with an "As of" time. Pin it in the GitHub UI if the automatic pin
+failed (the log says so). If "As of" is over 3 hours old, check `systemctl status section9-spend.timer`.
 
 **Later.** Update: `git -C /opt/agent-manager pull --ff-only && /opt/agent-manager/vps/install.sh`.
 Stop everything: `systemctl disable --now section9-dispatch.timer section9-routines.timer`.

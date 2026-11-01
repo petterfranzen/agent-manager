@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 sync, 5 minutes after the last run ended
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target
