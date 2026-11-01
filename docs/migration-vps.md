@@ -68,7 +68,7 @@ Spend reports keep working as now:
 | | Limit |
 |---|---|
 | OS, sshd, cloudflared, dispatcher | ~400 MB |
-| Hermes | 512 MB |
+| Hermes | 1 GB (512 MB until 1 Nov: too small with the dashboard) |
 | Sandbox (builds, one Chromium) | 2 GB, plus up to 2 GB swap |
 | Free for page cache | ~1 GB |
 
