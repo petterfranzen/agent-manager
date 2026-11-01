@@ -21,11 +21,21 @@ services:
     # bridge network it would have to bind 0.0.0.0, where the sandbox could
     # reach it. The sandbox's sshd is published on 127.0.0.1:2222 for it.
     network_mode: host
-    env_file: /etc/section9/hermes.env   # OPENROUTER_API_KEY, API_SERVER_KEY
+    # OPENROUTER_API_KEY, API_SERVER_KEY, and the dashboard's basic-auth login
+    # (HERMES_DASHBOARD_BASIC_AUTH_USERNAME/_PASSWORD/_SECRET, made by install.sh).
+    env_file: /etc/section9/hermes.env
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "127.0.0.1"
-      HERMES_DASHBOARD: "0"
+      # The web dashboard (hq.sectionnine.dev): loopback only, cloudflared and
+      # Cloudflare Access in front, basic auth as the second layer. It can edit
+      # .env and open a shell, so treat it like SSH. The login is demanded
+      # because dashboard.public_url (hermes/config.yaml) is set: Hermes v0.22.5
+      # gates a non-loopback bind or a non-loopback public_url. Don't bind
+      # 0.0.0.0 here: with host networking that listens on every interface.
+      HERMES_DASHBOARD: "1"
+      HERMES_DASHBOARD_HOST: "127.0.0.1"
+      HERMES_DASHBOARD_PORT: "9119"
       WEBHOOK_ENABLED: "false"
       # Commands run in the sandbox over SSH; Hermes never forwards provider
       # credentials over SSH, so the OpenRouter key can't reach agent commands.
@@ -36,6 +46,9 @@ services:
     volumes:
       - hermes-data:/opt/data
       - ../hermes/config.yaml:/opt/data/config.yaml:ro
+      # Dashboard themes, written by section9-hq-crew (hq/*.yaml from
+      # ghost-in-the-machine, else the starter in vps/dashboard-themes/).
+      - /var/lib/section9/dashboard-themes:/opt/data/dashboard-themes:ro
       # Owned by UID 10000 (the image's hermes user), mode 0400.
       - /etc/section9/hermes_ssh_key:/opt/data/ssh/id_ed25519:ro
     mem_limit: 512m
@@ -60,9 +73,9 @@ services:
     pids_limit: 512
     logging: *logging
 
-  # HQ page: the crew page plus a live status.json, static files only, on
-  # loopback. cloudflared (on the host) maps hq.sectionnine.dev to it; Cloudflare
-  # Access sits in front. The files come from vps/hq-status.py (host timers).
+  # Crew page: the crew page plus a live status.json, static files only, on
+  # loopback, kept for later public use. hq.sectionnine.dev now points at the
+  # Hermes dashboard (port 9119) instead. The files come from vps/hq-status.py.
   hq:
     image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
     restart: unless-stopped
