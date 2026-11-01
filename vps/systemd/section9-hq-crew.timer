@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 HQ: fetch the crew page from ghost-in-the-machine, on a timer
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=10min
+
+[Install]
+WantedBy=timers.target

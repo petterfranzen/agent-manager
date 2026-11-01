@@ -108,8 +108,10 @@ jobs:
           python3 - <<'EOF'
           import json
           svc = json.load(open("/tmp/vps.json"))["services"]
-          assert set(svc) == {"hermes", "sandbox"}, set(svc)
-          h, s = svc["hermes"], svc["sandbox"]
+          assert set(svc) == {"hermes", "sandbox", "hq"}, set(svc)
+          h, s, q = svc["hermes"], svc["sandbox"], svc["hq"]
+          assert q["mem_limit"] == str(64 * 2**20), q["mem_limit"]
+          assert [(p["host_ip"], p["target"], p["published"]) for p in q["ports"]] == [("127.0.0.1", 8090, "8090")], q["ports"]
           assert h["mem_limit"] == str(512 * 2**20) and s["mem_limit"] == str(2 * 2**30) and s["memswap_limit"] == str(3 * 2**30)
           assert h["network_mode"] == "host" and "ports" not in h
           assert h["environment"]["API_SERVER_HOST"] == "127.0.0.1"
@@ -121,12 +123,12 @@ jobs:
       - name: install.sh and the systemd units
         run: |
           set -euo pipefail
-          bash -n vps/install.sh
-          shellcheck vps/install.sh
+          for f in vps/*.sh; do bash -n "$f"; done
+          shellcheck vps/*.sh
           if ! command -v systemd-analyze >/dev/null; then echo "no systemd-analyze; skipping"; exit 0; fi
-          sudo mkdir -p /opt/agent-manager/vps && sudo install -m 0755 vps/dispatch.py /opt/agent-manager/vps/dispatch.py
-          systemd-analyze verify vps/systemd/section9-dispatch.service vps/systemd/section9-dispatch.timer \
-            vps/systemd/section9-routines.service vps/systemd/section9-routines.timer
+          sudo mkdir -p /opt/agent-manager/vps
+          sudo install -m 0755 vps/dispatch.py vps/hq-status.py vps/sync.sh /opt/agent-manager/vps/
+          systemd-analyze verify vps/systemd/section9-*.service vps/systemd/section9-*.timer
 
   deploy:
     name: Deploy scripts

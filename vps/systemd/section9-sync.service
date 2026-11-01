@@ -1,0 +1,10 @@
+[Unit]
+Description=Section 9 sync: fast-forward /opt/agent-manager to main once CI is green, then apply it
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/agent-manager/vps/sync.sh
+TimeoutStartSec=30min
+Nice=10

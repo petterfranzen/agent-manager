@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 spend: update the Spend issue from OpenRouter, on a timer
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1h
+
+[Install]
+WantedBy=timers.target

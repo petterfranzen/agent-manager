@@ -60,6 +60,27 @@ services:
     pids_limit: 512
     logging: *logging
 
+  # HQ page: the crew page plus a live status.json, static files only, on
+  # loopback. cloudflared (on the host) maps hq.sectionnine.dev to it; Cloudflare
+  # Access sits in front. The files come from vps/hq-status.py (host timers).
+  hq:
+    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    restart: unless-stopped
+    command: ["caddy", "file-server", "--root", "/srv", "--listen", ":8090"]
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - /var/lib/section9/hq:/srv:ro
+    tmpfs:
+      - /data
+      - /config
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    pids_limit: 64
+    logging: *logging
+
 volumes:
   hermes-data:
   sandbox-hostkeys:

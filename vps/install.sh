@@ -23,6 +23,10 @@ for f in hermes_ssh_key sandbox_authorized_keys; do
 done
 [[ $missing -eq 0 ]] || { echo "Copy the secrets first (docs/RUNBOOK.md, VPS step 1)." >&2; exit 1; }
 
+# sshd in the sandbox refuses a key file it can't read as the agent user: root-owned, 0644.
+chown root:root "$secrets/sandbox_authorized_keys"
+chmod 0644 "$secrets/sandbox_authorized_keys"
+
 # 2. 4 GB swap.
 if ! swapon --show=NAME --noheadings | grep -qx "$swapfile"; then
   if [[ ! -f $swapfile ]]; then
@@ -34,7 +38,8 @@ if ! swapon --show=NAME --noheadings | grep -qx "$swapfile"; then
 fi
 grep -qE "^$swapfile\s" /etc/fstab || echo "$swapfile none swap sw 0 0" >> /etc/fstab
 
-# 3. Our Hermes + sandbox.
+# 3. Our Hermes + sandbox + the HQ page server. The page's files are written here by timers.
+install -d -m 0755 /var/lib/section9/hq
 docker compose -f "$here/compose.yaml" up -d --build
 
 # 4. Retire Hostinger's Hermes and Traefik (cloudflared stays).
@@ -47,9 +52,7 @@ if [[ -n $old ]]; then
   echo "Removed Hostinger's containers: $(echo "$old" | wc -l)"
 fi
 
-# 5. Dispatcher and routine timers.
-install -m 0644 "$here"/systemd/section9-* /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now section9-dispatch.timer section9-routines.timer
+# 5. Timers: dispatcher, routines, sync (pulls main once CI is green), HQ page, spend.
+"$here/install-units.sh"
 
 echo "Done. Check: python3 -I $here/dispatch.py status"

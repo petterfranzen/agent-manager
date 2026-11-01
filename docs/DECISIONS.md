@@ -66,6 +66,7 @@ public).
 | 2026-10-26 | flight-tracker: keep data fresh headless; load the UI on request; update the active view first and the rest eventually. No availability target. | It's a personal app, shown to people now and then. |
 | 2026-10-26 | flight-tracker stays on Spring Boot (4.1.2, 384 MB heap, SQLite cache 8 MB); Rust rewrite rejected, native image deferred. | The idle disk reads came from cgroup page-cache pressure, which #132 fixed; Rust would save memory, not I/O, at weeks of cost. |
 | 2026-10-26 | `/api/ops/stats` behind Cloudflare Access with JWT verification; field names reveal no technology. | Monitoring without fingerprinting the stack. |
+| 2026-11-01 | The VPS keeps itself current (`section9-sync.timer`, 5 min: fast-forward to `main` once CI is green, then apply what changed) and serves HQ at `hq.sectionnine.dev` from a 64 MB static container on 127.0.0.1:8090 behind Cloudflare Access: the crew page from ghost-in-the-machine `crew/` plus a live `status.json` (agent states, month usage as a percent, model; private titles hidden). The hourly Spend snapshot moves to a `Spend` issue in section9-hq. | No inbound deploys; one page for the crew; money figures stay with the coordinator. |
 
 ## Open
 - Paperclip plugins: none for now. The Cloudflare sandbox plugin doesn't support the Hermes adapter, and plugin code runs unsandboxed in the Paperclip container. Revisit when that changes (`docs/paperclip-plugins.md`).
