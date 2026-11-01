@@ -27,6 +27,9 @@ done
 chown root:root "$secrets/sandbox_authorized_keys"
 chmod 0644 "$secrets/sandbox_authorized_keys"
 
+# Dashboard login and themes folder (also done by sync.sh before it applies a compose change).
+"$here/dashboard-prep.sh"
+
 # 2. 4 GB swap.
 if ! swapon --show=NAME --noheadings | grep -qx "$swapfile"; then
   if [[ ! -f $swapfile ]]; then
@@ -39,7 +42,7 @@ fi
 grep -qE "^$swapfile\s" /etc/fstab || echo "$swapfile none swap sw 0 0" >> /etc/fstab
 
 # 3. Our Hermes + sandbox + the HQ page server. The page's files are written here by timers.
-install -d -m 0755 /var/lib/section9/hq
+install -d -m 0755 /var/lib/section9/hq /var/lib/section9/dashboard-themes
 docker compose -f "$here/compose.yaml" up -d --build
 
 # 4. Retire Hostinger's Hermes and Traefik (cloudflared stays).

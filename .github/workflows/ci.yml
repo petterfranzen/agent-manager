@@ -115,8 +115,10 @@ jobs:
           assert h["mem_limit"] == str(512 * 2**20) and s["mem_limit"] == str(2 * 2**30) and s["memswap_limit"] == str(3 * 2**30)
           assert h["network_mode"] == "host" and "ports" not in h
           assert h["environment"]["API_SERVER_HOST"] == "127.0.0.1"
-          for k in ("HERMES_DASHBOARD", "WEBHOOK_ENABLED"):
-              assert h["environment"][k] in ("0", "false"), k
+          assert h["environment"]["WEBHOOK_ENABLED"] in ("0", "false")
+          e = h["environment"]    # the dashboard: on, loopback only
+          assert (e["HERMES_DASHBOARD"], e["HERMES_DASHBOARD_HOST"], e["HERMES_DASHBOARD_PORT"]) == ("1", "127.0.0.1", "9119"), e
+          assert any(v["target"] == "/opt/data/dashboard-themes" and v.get("read_only") for v in h["volumes"]), h["volumes"]
           assert [(p["host_ip"], p["target"]) for p in s["ports"]] == [("127.0.0.1", 22)]
           print("vps compose ok")
           EOF

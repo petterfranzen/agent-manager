@@ -48,6 +48,7 @@ class Stub:
         self.next = 1
         self.gh_comments, self.pinned, self.crew_auth = [], None, "unset"
         self.crew_sha, self.checks = "tree1", []
+        self.hq_sha, self.hq = "hq1", {"ghost.yaml": "name: ghost\nlabel: Batou's\n", "notes.md": "x", "sub/deep.yaml": "name: no\n"}
         self.crew = {"index.html": "<h1>crew</h1>", "status.json": "SAMPLE", "css/app.css": "a{}"}
 
     def add(self, labels, title="Do a thing", state="open"):
@@ -101,6 +102,14 @@ class Stub:
     def handle(self, method, path, query, body, auth, headers):
         if path.startswith("/gh/repos/petterfranzen/ghost-in-the-machine/git/"):
             self.crew_auth = auth
+            if path.endswith("/trees/main%3Ahq"):
+                if self.hq is None:
+                    return 404, {"message": "Not Found"}
+                return 200, {"sha": self.hq_sha, "truncated": False, "tree": [
+                    {"path": n, "type": "blob", "sha": "sha-hq-" + n.replace("/", "-"), "size": len(c)} for n, c in self.hq.items()]}
+            if "/blobs/sha-hq-" in path:
+                name = path.rsplit("/sha-hq-", 1)[1]
+                return 200, {"content": base64.b64encode(next(c for n, c in self.hq.items() if n.replace("/", "-") == name).encode()).decode()}
             if path.endswith("/trees/main%3Acrew"):
                 return 200, {"sha": self.crew_sha, "truncated": False, "tree": [
                     {"path": n, "type": "blob", "sha": "sha-" + n.replace("/", "-"), "size": len(c)} for n, c in self.crew.items()]}
@@ -424,7 +433,8 @@ class TestSync(unittest.TestCase):
         (t / "bin" / "docker").write_text(f'#!/bin/sh\necho "docker $@" >> {t}/calls\n[ ! -e {t}/docker-fails ]\n')
         (t / "bin" / "docker").chmod(0o755)
         self.git("init", "-q", "-b", "main", str(t / "origin"), cwd=t)
-        self.commit({"vps/install-units.sh": f'#!/bin/sh\necho "install-units" >> {t}/calls\n', "README.md": "x"})
+        self.commit({"vps/install-units.sh": f'#!/bin/sh\necho "install-units" >> {t}/calls\n',
+                     "vps/dashboard-prep.sh": f'#!/bin/sh\necho "dashboard-prep $S9_STATE_DIR" >> {t}/prep\n', "README.md": "x"})
         self.git("clone", "-q", str(t / "origin"), str(t / "repo"), cwd=t)
         self.checks = [{"name": n, "status": "completed", "conclusion": "success"} for n in (
             "Secret scan", "Compose and config", "Sandbox image smoke test", "Roster script tests", "Deploy scripts", "VPS stack")]
@@ -479,6 +489,7 @@ class TestSync(unittest.TestCase):
         p, calls = self.sync()
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(len(calls), 1)
+        self.assertEqual((self.t / "prep").read_text().split(), ["dashboard-prep", str(self.t / "state")])   # the login exists before Hermes starts
         self.assertTrue(calls[0].startswith("docker compose -f ") and calls[0].endswith("vps/compose.yaml up -d --build --remove-orphans"))
         self.assertEqual(self.head(), subprocess.run(["git", "rev-parse", "main"], cwd=self.t / "origin", capture_output=True, text=True).stdout.strip())
         self.assertIn("applied", p.stdout)
@@ -524,7 +535,7 @@ class TestSync(unittest.TestCase):
 class TestHq(Base):
     def run_hq(self, cmd, site=None):
         argv = [cmd, "--secrets-dir", str(self.t / "secrets"), "--state-dir", str(self.t / "state"),
-                "--site-dir", str(site or self.t / "site"), "--repo-root", str(ROOT),
+                "--site-dir", str(site or self.t / "site"), "--themes-dir", str(self.t / "themes"), "--repo-root", str(ROOT),
                 "--github", self.url + "/gh", "--openrouter", self.url + "/or"]
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -629,6 +640,107 @@ class TestHq(Base):
         code, err = self.run_hq("crew")
         self.assertEqual(code, 1)
         self.assertEqual((site / "index.html").read_text(), "kept")
+
+    def themes(self):
+        return {p.name: p.read_text() for p in (self.t / "themes").glob("*")}
+
+    def test_themes_come_from_hq_yaml_on_main_and_only_top_level_yaml(self):
+        (self.t / "themes").mkdir()
+        (self.t / "themes" / "stale.yaml").write_text("name: stale\n")
+        self.assertEqual(self.run_hq("crew")[0], 0)
+        self.assertEqual(self.themes(), {"ghost.yaml": "name: ghost\nlabel: Batou's\n"})   # no .md, no sub/, stale removed
+        self.assertEqual(oct((self.t / "themes" / "ghost.yaml").stat().st_mode & 0o777), "0o644")
+        self.stub.hq_sha, self.stub.hq["ghost.yaml"] = "hq2", "name: ghost\nlabel: new\n"
+        self.run_hq("crew")
+        self.assertIn("label: new", self.themes()["ghost.yaml"])
+
+    def test_without_hq_on_main_the_starter_ghost_theme_is_used(self):
+        self.stub.hq = None                                  # GitHub answers 404
+        code, err = self.run_hq("crew")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.themes(), {"ghost.yaml": (ROOT / "vps" / "dashboard-themes" / "ghost.yaml").read_text()})
+        self.assertTrue((self.t / "site" / "index.html").exists())      # the crew page was fetched as well
+
+    def test_a_bad_theme_keeps_what_is_served_and_does_not_stop_the_crew_page(self):
+        self.run_hq("crew")
+        self.stub.hq_sha, self.stub.hq["ghost.yaml"] = "hq2", "just text"
+        self.stub.crew_sha, self.stub.crew["index.html"] = "tree2", "<h1>new</h1>"
+        code, err = self.run_hq("crew")
+        self.assertEqual(code, 1)
+        self.assertIn("no `name:`", err)
+        self.assertIn("label: Batou", self.themes()["ghost.yaml"])
+        self.assertEqual((self.t / "site" / "index.html").read_text(), "<h1>new</h1>")
+
+    def test_starter_theme_is_a_valid_ghost_theme(self):
+        text = (ROOT / "vps" / "dashboard-themes" / "ghost.yaml").read_text()
+        self.assertRegex(text, r"(?m)^name: ghost$")
+        for part in ("palette:", "typography:", "customCSS: |", "repeating-linear-gradient", "monospace"):
+            self.assertIn(part, text)
+        self.assertLess(len(text), 32 << 10)                 # Hermes caps customCSS at 32 KiB
+
+
+class TestDashboard(unittest.TestCase):
+    def test_compose_enables_the_dashboard_on_loopback_with_themes_read_only(self):
+        text = (ROOT / "vps" / "compose.yaml").read_text()
+        for line in ('HERMES_DASHBOARD: "1"', 'HERMES_DASHBOARD_HOST: "127.0.0.1"', 'HERMES_DASHBOARD_PORT: "9119"',
+                     "/var/lib/section9/dashboard-themes:/opt/data/dashboard-themes:ro"):
+            self.assertIn(line, text)
+        self.assertNotIn("9119:", text)                      # never published; host networking, bound to 127.0.0.1
+
+    def test_config_has_the_documented_dashboard_keys(self):
+        text = (ROOT / "hermes" / "config.yaml").read_text()
+        self.assertRegex(text, r"(?m)^dashboard:\n  public_url: https://hq\.sectionnine\.dev$")
+        self.assertIn('trusted_proxies: ["127.0.0.1"]', text)
+        self.assertNotIn("0.0.0.0", text)
+        self.assertRegex(text, r"(?m)^  theme: ghost$")
+
+    def test_prep_makes_the_login_once_and_never_prints_it(self):
+        text = (ROOT / "vps" / "dashboard-prep.sh").read_text()
+        for k in ("USERNAME", "PASSWORD", "SECRET"):
+            self.assertIn("HERMES_DASHBOARD_BASIC_AUTH_$k", text)
+        self.assertEqual(text.count("openssl rand"), 1)
+        for line in text.splitlines():                       # the only line with the key writes to the file
+            if "openssl rand" in line:
+                self.assertTrue(line.rstrip().endswith('>> "$secrets/hermes.env"'), line)
+
+    def test_prep_runs_before_compose_in_install_and_sync(self):
+        for name, anchor in (("install.sh", "docker compose -f"), ("sync.sh", "docker compose -f")):
+            text = (ROOT / "vps" / name).read_text()
+            self.assertIn("dashboard-prep.sh", text, name)
+            self.assertLess(text.index("dashboard-prep.sh"), text.index(anchor), name)
+
+    def test_prep_script_run_for_real(self):
+        with tempfile.TemporaryDirectory() as d:
+            sec, state = Path(d, "sec"), Path(d, "state")
+            sec.mkdir()
+            (sec / "hermes.env").write_text("OPENROUTER_API_KEY=abc")          # no trailing newline
+            env = {**os.environ, "S9_SECRETS_DIR": str(sec), "S9_STATE_DIR": str(state)}
+            run = lambda: subprocess.run([str(ROOT / "vps" / "dashboard-prep.sh")], env=env, capture_output=True, text=True, check=True)
+            first = run()
+            lines = (sec / "hermes.env").read_text().splitlines()
+            self.assertEqual(lines[0], "OPENROUTER_API_KEY=abc")
+            made = dict(l.split("=", 1) for l in lines[1:])
+            self.assertEqual(set(made), {f"HERMES_DASHBOARD_BASIC_AUTH_{k}" for k in ("USERNAME", "PASSWORD", "SECRET")})
+            self.assertTrue(all(len(v) == 32 for v in made.values()))
+            for v in made.values():
+                self.assertNotIn(v, first.stdout + first.stderr)
+            self.assertIn("sudo grep DASHBOARD", first.stdout)
+            (state / "dashboard-themes" / "ghost.yaml").write_text("name: mine\n")
+            second = run()                                                       # nothing changes, nothing printed
+            self.assertEqual((sec / "hermes.env").read_text().splitlines()[1:], [f"{k}={v}" for k, v in made.items()])
+            self.assertEqual(second.stdout, "")
+            self.assertEqual((state / "dashboard-themes" / "ghost.yaml").read_text(), "name: mine\n")
+            (state / "dashboard-themes" / "ghost.yaml").unlink()
+            run()
+            self.assertIn("name: ghost", (state / "dashboard-themes" / "ghost.yaml").read_text())
+
+    def test_check_in_has_no_paperclip_and_runs_once_at_eight(self):
+        text = (ROOT / "docs" / "check-in.md").read_text()
+        self.assertNotIn("aperclip", text)
+        self.assertIn("CRON_TZ=Europe/Stockholm 0 8 * * *", text)
+        for repo in ("flight-tracker", "ghost-in-the-machine", "agent-manager", "section9-hq"):
+            self.assertIn(f"repo {repo}", text)
+        self.assertNotIn("Midday", text)
 
 
 if __name__ == "__main__":
