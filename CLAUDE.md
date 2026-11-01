@@ -57,9 +57,11 @@ sessions: a normal key only sees itself, and a management key can mint keys.
 - All repos are public. Before merging, check the diff for secrets, tokens,
   personal data and anything that names private infrastructure beyond what's
   already public.
-- Agents' token reaches `ghost-in-the-machine`, `nvim-trainer`, `portfolio` and
-  `dinner-planner` (Petter, 30 Oct), each with a "main: PRs only" ruleset. Don't
-  widen it further, or give them flight-tracker, without Petter's OK.
+- Agents' token reaches `ghost-in-the-machine`, `nvim-trainer`, `portfolio`,
+  `dinner-planner` (Petter, 30 Oct) and `flight-tracker` (Petter, 1 Nov), each
+  with a "main: PRs only" ruleset. flight-tracker deploys on merge, so its agent
+  PRs need Togusa's `QA: pass` and the Major's review like any other. Don't widen
+  it further, or give them agent-manager, without Petter's OK.
 - No xAI models (Petter's choice). OpenRouter stays on ZDR endpoints.
 - Personal Daybook content never goes to agents, OpenRouter or the VM.
 
