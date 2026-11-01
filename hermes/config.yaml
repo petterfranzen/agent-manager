@@ -31,7 +31,9 @@ delegation:
     - provider: openrouter
       model: z-ai/glm-5.3-flash
   max_spawn_depth: 1
-  max_concurrent_children: 2
+  # One child at a time: the whole stack now shares 0.70 of one vCPU (section9-hq #34),
+  # and two concurrent children only lengthen a night. They share the sandbox either way.
+  max_concurrent_children: 1
 
 terminal:
   backend: ssh              # the sandbox container; host/user/key come from env

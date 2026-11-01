@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 CPU: credit snapshot, on a timer
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1h
+
+[Install]
+WantedBy=timers.target

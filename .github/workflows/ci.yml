@@ -113,6 +113,9 @@ jobs:
           assert q["mem_limit"] == str(64 * 2**20), q["mem_limit"]
           assert [(p["host_ip"], p["target"], p["published"]) for p in q["ports"]] == [("127.0.0.1", 8090, "8090")], q["ports"]
           assert h["mem_limit"] == str(2**30) and s["mem_limit"] == str(2 * 2**30) and s["memswap_limit"] == str(3 * 2**30)
+          # Hostinger's credit budget: 0.40 (sandbox) + 0.30 (hermes) = 0.45 over baseline. Keep
+          # SANDBOX_CORES/HERMES_CORES in vps/dispatch.py in step.
+          assert (str(h.get("cpus")), str(s.get("cpus"))) == ("0.3", "0.4"), (h.get("cpus"), s.get("cpus"))
           assert h["network_mode"] == "host" and "ports" not in h
           assert h["environment"]["API_SERVER_HOST"] == "127.0.0.1"
           assert h["environment"]["WEBHOOK_ENABLED"] in ("0", "false")

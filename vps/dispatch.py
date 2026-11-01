@@ -5,6 +5,7 @@
   dispatch.py routines   open the issues for routines whose cron time has come
   dispatch.py status     queue, spend and Hermes reachability (for the runbook)
   dispatch.py spend      update the open "Spend" issue with OpenRouter's figures (hourly)
+  dispatch.py cpu        update the open "CPU credits" issue with this VPS's own CPU figures (hourly)
 
 Run by systemd timers on the VPS (vps/systemd). One run at a time (lock file).
 Standard library only. Secrets come from root-only files and are never printed:
@@ -18,6 +19,7 @@ import fcntl
 import json
 import re
 import sys
+import time
 import tomllib
 import urllib.error
 import urllib.parse
@@ -34,6 +36,11 @@ LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 STATUSES = ("todo", "working", "review", "done", "blocked")
 DEFAULT_TIMEOUT = 3600       # an agent without timeout_sec in the roster
 GRACE = 600                  # a working issue is stale this long after its agent's timeout
+SAMPLE_SECONDS = 5.0         # window for the /proc/stat sample behind the CPU credits snapshot
+PROBE_SECONDS = 1.0          # length of the throttling probe; ~18 credits a day at this size
+BASELINE = 0.25              # share of one vCPU a Hostinger VPS uses without spending credits
+BALANCE_MAX = 8100.0         # core-seconds in a full balance: 3 h x 3600 x (1 vCPU - 25%)
+SANDBOX_CORES, HERMES_CORES = 0.4, 0.3    # keep in step with vps/compose.yaml
 PER_PAGE, MAX_PAGES = 100, 20     # board reads follow Link: rel="next" up to this; more than that is refused
 
 
@@ -348,6 +355,83 @@ def spend(a, board, orkey, log):
         log(f"spend: could not pin #{issue['number']} (pin it by hand): {e}")
 
 
+def cpu_fields():
+    """The first ``cpu`` line of /proc/stat as ints: user nice system idle iowait irq softirq steal."""
+    for line in Path("/proc/stat").read_text(encoding="utf-8").splitlines():
+        if line.startswith("cpu "):
+            return [int(v) for v in line.split()[1:]]
+    raise Failure("/proc/stat has no cpu line")
+
+
+def busy_seconds(fields):
+    """Core-seconds this VPS actually used in a ``cpu`` line (idle, iowait and steal are not ours)."""
+    return float(sum(fields[:3]) + sum(fields[5:7]))
+
+
+def cpu_ceiling():
+    """CPU one thread gets per second of wall clock: ~1.0 uncapped, ~0.25 while Hostinger's
+    limit is on. One second of load, so the snapshot costs ~18 credits a day at worst."""
+    started = time.process_time()
+    until = time.monotonic() + PROBE_SECONDS
+    while time.monotonic() < until:
+        pass
+    return time.process_time() - started
+
+
+def credits(a, board, log):
+    """Keep one open issue titled "CPU credits" current: steal, the measured ceiling and the draw
+    on Hostinger's balance. Read from this VPS only; no Hostinger API key is used or needed."""
+    first = cpu_fields()
+    time.sleep(SAMPLE_SECONDS)
+    second = cpu_fields()
+    total = float(sum(y - x for x, y in zip(first, second))) or 1.0
+    share = lambda i: 100.0 * (second[i] - first[i]) / total if i < len(second) else 0.0  # noqa: E731
+    ceiling = cpu_ceiling()
+    now = dt.datetime.now(dt.timezone.utc)
+    Path(a.state_dir).mkdir(parents=True, exist_ok=True)
+    state = Path(a.state_dir) / "cpu-credit.json"
+    try:
+        before = json.loads(state.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        before = {}
+    draw = None
+    if before.get("at") and before.get("busy") is not None:
+        hours = max((now.timestamp() - float(before["at"])) / 3600.0, 0.01)
+        draw = (busy_seconds(second) - float(before["busy"]) - BASELINE * hours * 3600.0) / hours
+    state.write_text(json.dumps({"at": now.timestamp(), "busy": busy_seconds(second)}), encoding="utf-8")
+    try:
+        some = next(l for l in Path("/proc/pressure/cpu").read_text(encoding="utf-8").splitlines()
+                    if l.startswith("some"))
+        psi = next((f for f in some.split() if f.startswith("avg60=")), "n/a")
+    except (OSError, StopIteration):
+        psi = "n/a"
+    lines = [
+        f"**Live snapshot, updated hourly by the VPS.** As of {now:%Y-%m-%d %H:%M} UTC.", "",
+        f"- **Limit: {'ON' if ceiling < 0.9 else 'off'}** — one thread gets {ceiling:.2f} of a core.",
+        f"- **Steal: {share(7):.1f}%** of the last {SAMPLE_SECONDS:.0f} s"
+        " (Hostinger took that time; the temporary limit is what does it).",
+        f"- Busy: {100.0 - share(3) - share(4) - share(7):.1f}% of one vCPU, iowait {share(4):.1f}%, PSI cpu {psi}.",
+    ]
+    if draw is not None:
+        lines.append(f"- **Draw: ~{draw:.0f} credits/hour** ({100.0 * draw / BALANCE_MAX:.0f}% of the "
+                     f"{BALANCE_MAX:.0f}-credit balance an hour) since the previous snapshot.")
+    rate = 3600.0 * (SANDBOX_CORES + HERMES_CORES - BASELINE)
+    lines += ["",
+              f"Caps in force: sandbox {SANDBOX_CORES} + hermes {HERMES_CORES} = "
+              f"{SANDBOX_CORES + HERMES_CORES:.2f} of one vCPU = {rate:.0f} credits/hour, so a full "
+              f"balance is {BALANCE_MAX / rate:.1f} h at the cap.",
+              "", "Rewritten every hour; don't edit. Leave this issue open."]
+    body = "\n".join(lines)
+    open_ = board.pages("/issues?state=open&sort=created&direction=asc")
+    issue = next((i for i in open_ if i["title"] == "CPU credits" and "pull_request" not in i), None)
+    if issue:
+        board.call("PATCH", f"/issues/{issue['number']}", {"body": body})
+        log(f"cpu: updated #{issue['number']}")
+        return
+    issue = board.call("POST", "/issues", {"title": "CPU credits", "body": body})
+    log(f"cpu: opened #{issue['number']}")
+
+
 def local_only(url, what):
     u = urllib.parse.urlsplit(url)
     if u.scheme != "https" and u.hostname not in LOOPBACK:
@@ -356,7 +440,7 @@ def local_only(url, what):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("cmd", nargs="?", default="run", choices=["run", "routines", "status", "spend"])
+    p.add_argument("cmd", nargs="?", default="run", choices=["run", "routines", "status", "spend", "cpu"])
     p.add_argument("--secrets-dir", default="/etc/section9")
     p.add_argument("--state-dir", default="/var/lib/section9")
     p.add_argument("--repo-root", default=str(ROOT))
@@ -387,6 +471,9 @@ def main(argv=None):
             return 0
         if a.cmd == "spend":
             spend(a, board, orkey, log)
+            return 0
+        if a.cmd == "cpu":
+            credits(a, board, log)
             return 0
         Path(a.state_dir).mkdir(parents=True, exist_ok=True)
         with open(Path(a.state_dir) / "dispatch.lock", "w") as lock:

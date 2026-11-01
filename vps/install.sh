@@ -44,6 +44,9 @@ grep -qE "^$swapfile\s" /etc/fstab || echo "$swapfile none swap sw 0 0" >> /etc/
 # 3. Our Hermes + sandbox + the HQ page server. The page's files are written here by timers.
 install -d -m 0755 /var/lib/section9/hq /var/lib/section9/dashboard-themes
 docker compose -f "$here/compose.yaml" up -d --build
+# A leftover Impeccable skill on the Hermes volume (#50 removed it from the sandbox) is pushed
+# into the sandbox by Hermes's file sync, ~24 MB each time. Idempotent.
+docker compose -f "$here/compose.yaml" exec -T hermes rm -rf /opt/data/skills/impeccable
 
 # 4. Retire Hostinger's Hermes and Traefik (cloudflared stays).
 old=$(docker ps -a --format '{{.ID}} {{.Image}}' | grep -E 'hostinger/hvps-hermes-agent|traefik' | cut -d' ' -f1 || true)
@@ -55,7 +58,7 @@ if [[ -n $old ]]; then
   echo "Removed Hostinger's containers: $(echo "$old" | wc -l)"
 fi
 
-# 5. Timers: dispatcher, routines, sync (pulls main once CI is green), HQ page, spend.
+# 5. Timers: dispatcher, routines, sync (pulls main once CI is green), HQ page, spend, CPU.
 "$here/install-units.sh"
 
-echo "Done. Check: python3 -I $here/dispatch.py status"
+echo "Done. Check: python3 -I $here/dispatch.py status && python3 -I $here/dispatch.py cpu"
