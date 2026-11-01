@@ -407,7 +407,8 @@ def credits(a, board, log):
         psi = "n/a"
     lines = [
         f"**Live snapshot, updated hourly by the VPS.** As of {now:%Y-%m-%d %H:%M} UTC.", "",
-        f"- **Limit: {'ON' if ceiling < 0.9 else 'off'}** — one thread gets {ceiling:.2f} of a core.",
+        # A short ceiling alone can be our own agents' load; Hostinger's limit shows as steal too.
+        f"- **Limit: {'ON' if ceiling < 0.9 and share(7) > 10 else 'off'}** — one thread gets {ceiling:.2f} of a core.",
         f"- **Steal: {share(7):.1f}%** of the last {SAMPLE_SECONDS:.0f} s"
         " (Hostinger took that time; the temporary limit is what does it).",
         f"- Busy: {100.0 - share(3) - share(4) - share(7):.1f}% of one vCPU, iowait {share(4):.1f}%, PSI cpu {psi}.",
