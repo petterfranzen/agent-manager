@@ -71,7 +71,7 @@ apply() {
   changed=$(git diff --name-only "$1" "$2")
   if grep -qE '^(vps/compose\.yaml|sandbox/|hermes/)' <<<"$changed"; then
     log "compose up (compose, sandbox or Hermes config changed)"
-    install -d -m 0755 /var/lib/section9/hq || return 1
+    install -d -m 0755 "$STATE_DIR/hq" || return 1
     docker compose -f "$REPO_DIR/vps/compose.yaml" up -d --build --remove-orphans || return 1
   fi
   if grep -qE '^vps/(systemd/|install-units\.sh)' <<<"$changed"; then

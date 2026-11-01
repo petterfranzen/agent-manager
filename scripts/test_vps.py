@@ -542,7 +542,7 @@ class TestHq(Base):
 
     def board(self):
         self.stub.add(["agent:batou", "status:working"], "Fix the crew page layout")
-        self.stub.add(["agent:ishikawa", "status:working", "private"], "Look at Stockholm flats")
+        self.stub.add(["agent:ishikawa", "status:working", "private"], "Look at private errand")
         self.stub.add(["agent:togusa", "status:working"], "Check the secret-garden flow")
         pr = self.stub.add(["agent:batou", "status:review"], "Add dark mode")
         self.stub.issues[pr]["closed_at"] = None
@@ -573,7 +573,7 @@ class TestHq(Base):
         self.assertEqual(self.agent(doc, "Saito")["recent"][0]["text"], "On a private task")
         self.assertNotIn("url", self.agent(doc, "Saito")["recent"][0])
         raw = json.dumps(doc)
-        for leak in ("Stockholm", "secret-garden", "Morning ops", "$", "sk-or", "section9-hq"):
+        for leak in ("private errand", "secret-garden", "Morning ops", "$", "sk-or", "section9-hq"):
             self.assertNotIn(leak, raw)
 
     def test_without_a_deny_file_only_states_and_on_a_task(self):
