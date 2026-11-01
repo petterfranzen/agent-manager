@@ -54,6 +54,12 @@ services:
     # 512m ran at 98% once the dashboard shared the container (1 Nov), and the host
     # paged it (36% iowait). 1g still leaves the sandbox its 2g on a 3.9 GB host with 4 GB swap.
     mem_limit: 1g
+    # Hostinger bills core-seconds above a 25% baseline. 0.40 (sandbox) + 0.30 (here) =
+    # 0.70 core, i.e. 0.45 over baseline = 1,620 credits/hour: a full 8,100-credit
+    # balance is 5 h at the cap, and Tachikoma's 3 h night is 4,860 (60% of it). Uncapped,
+    # the 1 Nov night burned the balance and the panel took the limit back
+    # (section9-hq #34). Keep SANDBOX_CORES/HERMES_CORES in vps/dispatch.py in step.
+    cpus: "0.3"
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 
@@ -71,7 +77,10 @@ services:
     # A runaway build or page is OOM-killed here, not allowed to starve the host.
     mem_limit: 2g
     memswap_limit: 3g
-    cpus: 1
+    # A CFS quota, not a hint: a single-threaded build that used a whole core runs ~2.5x
+    # slower in its CPU-bound stretches. Tachikoma's 3 h night at this cap is 4,860
+    # credits; three long nights in a row is the signal to raise it and cut the build.
+    cpus: "0.4"
     pids_limit: 512
     logging: *logging
 

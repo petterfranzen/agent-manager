@@ -74,6 +74,8 @@ apply() {
     install -d -m 0755 "$STATE_DIR/hq" || return 1
     S9_STATE_DIR="$STATE_DIR" "$REPO_DIR/vps/dashboard-prep.sh" || return 1
     docker compose -f "$REPO_DIR/vps/compose.yaml" up -d --build --remove-orphans || return 1
+    # Leftover Impeccable skill on the Hermes volume (see install.sh); idempotent.
+    docker compose -f "$REPO_DIR/vps/compose.yaml" exec -T hermes rm -rf /opt/data/skills/impeccable || return 1
   fi
   if grep -qE '^vps/(systemd/|install-units\.sh)' <<<"$changed"; then
     log "re-installing systemd units"

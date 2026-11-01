@@ -423,8 +423,20 @@ To run it by hand, use `systemctl start agent-manager-sync`.
 | Update after a merged PR | Nothing: the sync applies it within ~5 minutes of green CI (step 10). By hand: `systemctl start agent-manager-sync` |
 | Stop everything (data kept) | `docker compose down` |
 | Disk used by Docker | `docker system df` |
+| CPU credits and the Hostinger limit | `python3 -I /opt/agent-manager/vps/dispatch.py cpu`; the figures are also on the hourly **CPU credits** issue in section9-hq |
+| Sync traffic (should be near zero when nothing runs) | `docker compose exec -u agent sandbox sh -c "awk '/eth0/{print \$2}' /proc/net/dev"` twice, ~10 s apart |
 
 ## Troubleshooting
+- **CPU caps and the credit balance** (1 Nov): the sandbox is capped at 0.4 vCPU and Hermes at
+  0.3 (`vps/compose.yaml`), one child agent at a time. A full 8,100-credit balance is 5 h at the
+  cap; Tachikoma's 3 h night is about 60%. CPU-bound builds run ~2.5x slower, and dashboard pages
+  opened during a run are slower. Three long nights in a row: raise the sandbox to 0.45 and cut
+  the build, rather than lifting the cap. Change the caps in compose and in `SANDBOX_CORES` /
+  `HERMES_CORES` in `vps/dispatch.py` together (CI checks compose). Roll back with
+  `systemctl disable --now section9-cpu.timer` (snapshot only) or by editing compose back.
+- **A leftover `skills/impeccable` on the Hermes volume** is deleted by `install.sh` and by
+  the sync after a compose/Hermes change; by hand:
+  `docker compose exec -T hermes rm -rf /opt/data/skills/impeccable`.
 - **Paperclip says the Hermes gateway is unreachable** (runs fail with
   `hermes_gateway_connect_failed`, ECONNREFUSED 127.0.0.1:8642): the sync's
   heal step restarts Hermes by itself after two refused checks in a row, at

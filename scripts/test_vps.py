@@ -437,6 +437,19 @@ class TestSpend(Base):
         self.assertEqual(self.stub.hermes_calls, [])
 
 
+class TestCredits(Base):
+    def test_one_issue_with_steal_the_ceiling_and_the_caps_no_agent_labels(self):
+        with mock.patch.object(dispatch, "SAMPLE_SECONDS", 0.01), \
+                mock.patch.object(dispatch, "PROBE_SECONDS", 0.01):
+            self.run_dispatch("cpu")
+            self.run_dispatch("cpu")
+        (n, issue), = self.stub.issues.items()
+        self.assertEqual((issue["title"], self.stub.labels(n)), ("CPU credits", set()))
+        for line in ("Limit:", "Steal:", "Busy:", "Caps in force:", "As of "):
+            self.assertIn(line, issue["body"])
+        self.assertEqual(self.stub.todo_count(), 0)      # a snapshot, not a task
+
+
 class TestTimeout(Base):
     timeout = 1
 
@@ -610,9 +623,11 @@ class TestSync(unittest.TestCase):
         self.commit({"vps/compose.yaml": "x"})
         p, calls = self.sync()
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
         self.assertEqual((self.t / "prep").read_text().split(), ["dashboard-prep", str(self.t / "state")])   # the login exists before Hermes starts
         self.assertTrue(calls[0].startswith("docker compose -f ") and calls[0].endswith("vps/compose.yaml up -d --build --remove-orphans"))
+        # then the leftover Impeccable skill goes from the Hermes volume
+        self.assertTrue(calls[1].endswith("vps/compose.yaml exec -T hermes rm -rf /opt/data/skills/impeccable"), calls[1])
         self.assertEqual(self.head(), subprocess.run(["git", "rev-parse", "main"], cwd=self.t / "origin", capture_output=True, text=True).stdout.strip())
         self.assertIn("applied", p.stdout)
         self.assertEqual(self.sync()[1], calls)     # applied: next tick is a no-op
@@ -628,9 +643,9 @@ class TestSync(unittest.TestCase):
 
     def test_hermes_or_sandbox_change_rebuilds(self):
         self.commit({"sandbox/Dockerfile": "x"})
-        self.assertEqual(len(self.sync()[1]), 1)
+        self.assertEqual(len(self.sync()[1]), 2)        # up, then the Impeccable prune
         self.commit({"hermes/config.yaml": "x"})
-        self.assertEqual(len(self.sync()[1]), 2)
+        self.assertEqual(len(self.sync()[1]), 4)
 
     def test_failed_apply_is_retried_three_times_then_stops_until_main_moves(self):
         (self.t / "docker-fails").write_text("")
@@ -644,7 +659,7 @@ class TestSync(unittest.TestCase):
         (self.t / "docker-fails").unlink()
         self.commit({"vps/compose.yaml": "y"})      # main moves: tries again, from the last applied commit
         p, calls = self.sync()
-        self.assertEqual((p.returncode, len(calls)), (0, 4))
+        self.assertEqual((p.returncode, len(calls)), (0, 5))
 
     def test_dirty_checkout_is_refused(self):
         (self.t / "repo" / "README.md").write_text("hand edit")

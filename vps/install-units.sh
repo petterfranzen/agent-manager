@@ -9,4 +9,4 @@ unit_dir=${S9_UNIT_DIR:-/etc/systemd/system}
 install -m 0644 "$here"/systemd/section9-* "$unit_dir"/
 systemctl daemon-reload
 systemctl enable --now section9-dispatch.timer section9-routines.timer section9-sync.timer \
-  section9-hq-status.timer section9-hq-crew.timer section9-spend.timer
+  section9-hq-status.timer section9-hq-crew.timer section9-spend.timer section9-cpu.timer
