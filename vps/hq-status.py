@@ -3,7 +3,8 @@
 
   hq-status.py status   write status.json (every 2 min): what each agent is doing,
                         from the issues in section9-hq, plus the month's OpenRouter usage
-  hq-status.py crew     fetch main's crew/ folder from ghost-in-the-machine (every 10 min)
+  hq-status.py crew     fetch main's crew/ folder from ghost-in-the-machine (every 10 min),
+                        and its hq/*.yaml dashboard themes into --themes-dir
 
 The page is behind Cloudflare Access, but its text is still allowlisted by default:
 an issue labelled `private`, or whose title matches a term in <secrets-dir>/crew-deny.txt
@@ -40,6 +41,8 @@ PRIVATE, ON_TASK = "On a private task", "On a task"
 RECENT, TEXT_MAX = 5, 90
 ZULU = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 MAX_FILE, MAX_TOTAL = 5 << 20, 50 << 20
+THEME_FILE, MAX_THEME = re.compile(r"^[A-Za-z0-9][\w.-]*\.yaml$"), 64 << 10
+THEME_NAME = re.compile(r"^name:\s*\S", re.MULTILINE)
 
 
 class Failure(Exception):
@@ -259,18 +262,73 @@ def do_crew(a):
     print(f"hq crew: {len(files)} files")
 
 
+def do_themes(a):
+    """Mirror main's hq/*.yaml (Hermes dashboard themes); ghost falls back to the starter in this repo."""
+    api = f"{a.github.rstrip('/')}/repos/{CREW_REPO}/git"
+    try:
+        tree = http(f"{api}/trees/main%3Ahq")
+    except Failure as e:
+        if "-> 404" not in str(e):
+            raise
+        tree = {"sha": "none", "tree": []}          # no hq/ folder yet
+    if tree.get("truncated"):
+        raise Failure("hq/ listing is truncated")
+    out, state = Path(a.themes_dir), Path(a.state_dir) / "hq-themes.sha"
+    try:
+        if state.read_text().strip() == tree["sha"] and (out / "ghost.yaml").exists():
+            print("hq themes: unchanged")
+            return
+    except OSError:
+        pass
+    files = {}
+    for e in tree["tree"]:
+        if e["type"] == "blob" and THEME_FILE.match(e["path"]):
+            if e.get("size", 0) > MAX_THEME:
+                raise Failure(f"hq/{e['path']} is too large")
+            blob = http(f"{api}/blobs/{e['sha']}")
+            data = base64.b64decode(blob["content"])
+            if not THEME_NAME.search(data.decode("utf-8", "replace")):
+                raise Failure(f"hq/{e['path']} has no `name:`; keeping what is served")
+            files[e["path"]] = data
+    if "ghost.yaml" not in files:
+        try:
+            files["ghost.yaml"] = (Path(a.repo_root) / "vps" / "dashboard-themes" / "ghost.yaml").read_bytes()
+        except OSError as e:
+            raise Failure(f"no ghost theme and no starter: {e}") from None
+    for rel, data in files.items():
+        write_atomic(out / rel, data)
+    for p in out.glob("*"):
+        if p.is_file() and p.name not in files and not p.name.endswith(".tmp"):
+            p.unlink()
+    write_atomic(state, tree["sha"].encode())
+    print(f"hq themes: {len(files)} files")
+
+
+def do_crew_and_themes(a):
+    """Two independent jobs on one timer: a failure in one doesn't stop the other."""
+    errors = []
+    for job in (do_crew, do_themes):
+        try:
+            job(a)
+        except Failure as e:
+            errors.append(str(e))
+    if errors:
+        raise Failure("; ".join(errors))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("cmd", choices=["status", "crew"])
     p.add_argument("--secrets-dir", default="/etc/section9")
     p.add_argument("--state-dir", default="/var/lib/section9")
     p.add_argument("--site-dir", default="/var/lib/section9/hq")
+    p.add_argument("--themes-dir", default="/var/lib/section9/dashboard-themes")
     p.add_argument("--repo-root", default=str(ROOT))
     p.add_argument("--github", default="https://api.github.com")
     p.add_argument("--openrouter", default="https://openrouter.ai/api/v1")
     a = p.parse_args(argv)
     try:
-        {"status": do_status, "crew": do_crew}[a.cmd](a)
+        {"status": do_status, "crew": do_crew_and_themes}[a.cmd](a)
         return 0
     except Failure as e:
         print(f"hq {a.cmd} failed: {redact(str(e))}", file=sys.stderr)

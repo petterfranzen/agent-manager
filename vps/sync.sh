@@ -72,6 +72,7 @@ apply() {
   if grep -qE '^(vps/compose\.yaml|sandbox/|hermes/)' <<<"$changed"; then
     log "compose up (compose, sandbox or Hermes config changed)"
     install -d -m 0755 "$STATE_DIR/hq" || return 1
+    S9_STATE_DIR="$STATE_DIR" "$REPO_DIR/vps/dashboard-prep.sh" || return 1
     docker compose -f "$REPO_DIR/vps/compose.yaml" up -d --build --remove-orphans || return 1
   fi
   if grep -qE '^vps/(systemd/|install-units\.sh)' <<<"$changed"; then

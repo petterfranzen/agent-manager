@@ -74,16 +74,30 @@ a checkout with local changes and stops retrying a commit after 3 failed applies
 `install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
 the sandbox refuses the `0600` file).
 
-**hq.sectionnine.dev** is wired by hand once, in Cloudflare Zero Trust:
-- Networks, Tunnels, `section9-vps`, Public hostname: `hq.sectionnine.dev` →
-  `HTTP` `http://localhost:8090` (cloudflared runs on the host network).
-- Access, Applications: a self-hosted app for `hq.sectionnine.dev` with the same policy as the
-  other hostnames (your email, plus the service token for the Major). Without the Access app the
-  page is public: don't publish the hostname first.
-- The Paperclip page used this hostname. Retire that Access app and its DNS record first, or
-  edit it instead of adding a second one.
+**hq.sectionnine.dev** is Hermes's web dashboard (Ghost in the Shell theme), wired by hand once in
+Cloudflare Zero Trust:
+- Networks, Tunnels, `section9-vps`, Public hostname: `hq.sectionnine.dev` → change the service to
+  `HTTP` `http://localhost:9119` (it was `http://localhost:8090`; cloudflared runs on the host network).
+  Save, then run `install.sh` (or wait for the sync timer) so the dashboard is up.
+- Access, Applications: keep the self-hosted app for `hq.sectionnine.dev` with your email only. The
+  dashboard can edit Hermes's `.env` and open a shell, so treat it like SSH: never add the service
+  token or widen the policy. Without the Access app the dashboard would be public behind only its
+  own login: don't change the hostname first.
+- **Dashboard login** (second layer, made once by `install.sh`, never printed). Hermes v0.22.5 only
+  engages its login for a non-loopback bind *or* a non-loopback `dashboard.public_url`; we bind
+  `127.0.0.1` (host networking, so `0.0.0.0` would listen on every interface) and
+  `dashboard.public_url` in `hermes/config.yaml` is what makes the login mandatory, so keep it set.
+  `sudo grep DASHBOARD /etc/section9/hermes.env` shows `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` and
+  `_PASSWORD`. To rotate, delete those lines (and `_SECRET`) and re-run `install.sh`, then
+  `docker compose -f /opt/agent-manager/vps/compose.yaml up -d hermes`.
+- The crew page keeps running on `127.0.0.1:8090` for later public use. To look at it:
+  `ssh -L 8090:localhost:8090 <vps>`.
+- Themes: `section9-hq-crew` also copies `hq/*.yaml` from ghost-in-the-machine `main` into
+  `/var/lib/section9/dashboard-themes` (mounted read-only in Hermes). Without `hq/ghost.yaml` it
+  installs the starter in `vps/dashboard-themes/ghost.yaml`. `dashboard.theme: ghost` in
+  `hermes/config.yaml` makes it the default. Refresh the dashboard after a change.
 
-What serves it: the `hq` container (Caddy, 64 MB, `127.0.0.1:8090` only) reads `/var/lib/section9/hq`.
+What serves the crew page: the `hq` container (Caddy, 64 MB, `127.0.0.1:8090` only) reads `/var/lib/section9/hq`.
 Two timers fill that folder: `section9-hq-crew` (10 min) mirrors `crew/` from
 ghost-in-the-machine `main` (public, no token), and `section9-hq-status` (2 min) writes the live
 `status.json` from `section9-hq` issues, OpenRouter's usage (a percentage, no dollars) and

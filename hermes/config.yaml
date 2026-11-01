@@ -43,3 +43,11 @@ terminal:
 memory:
   memory_enabled: true
   write_approval: false
+
+# Web dashboard (enabled in vps/compose.yaml). Behind Cloudflare Access at
+# hq.sectionnine.dev; the login lives in /etc/section9/hermes.env. Themes are
+# YAML files in /opt/data/dashboard-themes (see vps/hq-status.py crew).
+dashboard:
+  public_url: https://hq.sectionnine.dev
+  trusted_proxies: ["127.0.0.1"]      # cloudflared on the host; exact IPs only
+  theme: ghost
