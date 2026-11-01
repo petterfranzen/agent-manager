@@ -89,6 +89,9 @@ services:
       - /config
     read_only: true
     cap_drop: [ALL]
+    # Caddy's binary carries the cap_net_bind_service file capability; without it in the
+    # bounding set the exec fails, even though :8090 isn't a privileged port.
+    cap_add: [NET_BIND_SERVICE]
     security_opt: ["no-new-privileges:true"]
     mem_limit: 64m
     pids_limit: 64
