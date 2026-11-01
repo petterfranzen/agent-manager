@@ -51,7 +51,9 @@ services:
       - /var/lib/section9/dashboard-themes:/opt/data/dashboard-themes:ro
       # Owned by UID 10000 (the image's hermes user), mode 0400.
       - /etc/section9/hermes_ssh_key:/opt/data/ssh/id_ed25519:ro
-    mem_limit: 512m
+    # 512m ran at 98% once the dashboard shared the container (1 Nov), and the host
+    # paged it (36% iowait). 1g still leaves the sandbox its 2g on a 3.9 GB host with 4 GB swap.
+    mem_limit: 1g
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 
