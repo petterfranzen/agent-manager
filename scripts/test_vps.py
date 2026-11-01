@@ -17,9 +17,10 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -44,16 +45,19 @@ class Stub:
     def __init__(self):
         self.issues, self.comments, self.hermes_calls = {}, [], []
         self.remaining = 15.0
+        self.key = None             # None: the normal /key reply; else the reply body to send
+        self.page_size, self.link = None, None     # page_size: serve issue lists in pages of this size
         self.hermes = "report"      # report | silent | slow | error
         self.next = 1
         self.gh_comments, self.pinned, self.crew_auth = [], None, "unset"
         self.crew_sha, self.checks = "tree1", []
         self.crew = {"index.html": "<h1>crew</h1>", "status.json": "SAMPLE", "css/app.css": "a{}"}
 
-    def add(self, labels, title="Do a thing", state="open"):
+    def add(self, labels, title="Do a thing", state="open", age_min=None):
         n = self.next
         self.next += 1
-        self.issues[n] = {"number": n, "title": title, "body": f"body of {n}", "state": state, "updated_at": "2026-11-01T10:00:00Z",
+        updated = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=age_min or 0)   # without age_min: a fixed stamp, or "now" for status:working
+        self.issues[n] = {"number": n, "title": title, "body": f"body of {n}", "state": state, "updated_at": "2026-11-01T10:00:00Z" if age_min is None and "status:working" not in labels else updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
                           "html_url": f"https://github.com/petterfranzen/section9-hq/issues/{n}",
                           "labels": [{"name": x} for x in labels]}
         return n
@@ -76,8 +80,15 @@ class Stub:
         if method == "GET" and rest == "/issues":
             want = query.get("labels", [""])[0]
             st = query.get("state", ["open"])[0]
-            return 200, [i for i in self.issues.values() if st in (i["state"], "all")
-                         and (not want or want in self.labels(i["number"]))]
+            found = [i for i in self.issues.values() if st in (i["state"], "all")
+                     and (not want or want in self.labels(i["number"]))]
+            size = min(int(query.get("per_page", ["30"])[0]), self.page_size or 10**6)
+            page = int(query.get("page", ["1"])[0])
+            if page * size < len(found):      # GitHub's Link header, absolute URL
+                q = {k: v[0] for k, v in query.items()}
+                q.update(page=page + 1, per_page=size)
+                self.link = f'<{self.base}{path}?{urlencode(q)}>; rel="next"'
+            return 200, found[(page - 1) * size:page * size]
         if method == "POST" and rest == "/issues":
             n = self.add(body.get("labels", []), body["title"])
             self.issues[n]["body"] = body["body"]
@@ -111,6 +122,8 @@ class Stub:
             return 200, {"total_count": len(self.checks), "check_runs": self.checks}
         if path.startswith("/gh/"):
             return self.gh(method, path, query, body, auth)
+        if path == "/or/key" and self.key is not None:
+            return 200, self.key
         if path == "/or/key":
             return 200, {"data": {"usage": 5, "limit": 20, "limit_remaining": self.remaining,
                                   "usage_monthly": 5, "usage_daily": 0.25}}
@@ -135,9 +148,12 @@ def serve(stub):
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n)) if n else None
             u = urlsplit(self.path)
+            stub.link = None
             code, out = stub.handle(self.command, u.path, parse_qs(u.query), body, self.headers.get("Authorization"), self.headers)
             raw = json.dumps(out).encode()
             self.send_response(code)
+            if stub.link:
+                self.send_header("Link", stub.link)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
@@ -194,6 +210,7 @@ class Base(unittest.TestCase):
         self.stub = Stub()
         self.srv = serve(self.stub)
         self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        self.stub.base = self.url
         self.tmp = tempfile.TemporaryDirectory()
         t = Path(self.tmp.name)
         (t / "secrets").mkdir()
@@ -285,6 +302,111 @@ class TestDispatch(Base):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(dispatch.main(argv), 1)
         self.assertIn("refusing", err.getvalue())
+
+
+class TestFailClosed(Base):
+    def blocked(self, reason):
+        n = self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        self.assertEqual(self.stub.hermes_calls, [])
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:blocked"})
+        self.assertIn(reason, self.stub.comments[0][1])
+
+    def test_a_key_without_a_cap_blocks(self):
+        self.stub.key = {"data": {"usage": 5, "limit": None, "limit_remaining": None, "usage_monthly": 5}}
+        self.blocked("no monthly cap")
+
+    def test_an_empty_or_unexpected_key_reply_blocks(self):
+        for reply in ({}, {"data": {}}, {"data": None}, {"error": "incident"}, [], {"data": "oops"}):
+            with self.subTest(reply=reply):
+                self.setUp()
+                self.stub.key = reply
+                self.blocked("empty or not what was expected")
+                self.tearDown()
+
+    def test_a_cap_that_is_not_a_number_blocks(self):
+        self.stub.key = {"data": {"limit": "lots", "limit_remaining": None}}
+        self.blocked("not a number")
+
+    def test_status_says_why(self):
+        self.stub.key = {"data": {"limit": None}}
+        _, out = self.run_dispatch("status")
+        self.assertIn("spend: The OpenRouter key has no monthly cap", out)
+
+
+class TestRecovery(Base):
+    timeout = 3600          # Batou: swept after 70 min
+
+    def test_a_killed_run_is_blocked_with_a_comment_before_work_is_picked(self):
+        stuck = self.stub.add(["agent:batou", "status:working"], age_min=71)
+        slow = self.stub.add(["agent:ishikawa", "status:working"], age_min=11)      # its timeout is 60 s: 11 min is stale
+        fresh = self.stub.add(["agent:batou", "status:working"], age_min=69)
+        todo = self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        self.assertEqual(self.stub.labels(stuck), {"agent:batou", "status:blocked"})
+        self.assertEqual(self.stub.labels(slow), {"agent:ishikawa", "status:blocked"})
+        self.assertEqual(self.stub.labels(fresh), {"agent:batou", "status:working"})
+        self.assertEqual([n for n, _ in self.stub.comments], [stuck, slow])
+        self.assertIn("probably killed", self.stub.comments[0][1])
+        self.assertIn("71 min", self.stub.comments[0][1])
+        self.assertEqual(self.stub.labels(todo), {"agent:batou", "status:review"})     # and the queue still ran
+
+    def test_with_nothing_todo_it_still_sweeps(self):
+        n = self.stub.add(["agent:saito", "status:working"], age_min=12)
+        self.run_dispatch()
+        self.assertEqual(self.stub.labels(n), {"agent:saito", "status:blocked"})
+
+    def test_an_issue_without_a_known_agent_gets_the_default_timeout(self):
+        young, old = self.stub.add(["status:working"], age_min=69), self.stub.add(["status:working"], age_min=71)
+        self.run_dispatch()
+        self.assertEqual((self.stub.labels(young), self.stub.labels(old)), ({"status:working"}, {"status:blocked"}))
+
+    def test_a_blocked_issue_is_not_swept_twice(self):
+        self.stub.add(["agent:saito", "status:working"], age_min=12)
+        self.run_dispatch()
+        self.run_dispatch()
+        self.assertEqual(len(self.stub.comments), 1)
+
+
+class TestPaging(Base):
+    def test_todo_follows_link_next_to_the_oldest_issue_on_a_later_page(self):
+        self.stub.page_size = 2
+        for _ in range(5):
+            self.stub.add(["status:todo"])                       # nobody's: the dispatcher must read past them
+        last = self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        self.assertEqual(self.stub.labels(last), {"agent:batou", "status:review"})
+
+    def test_status_counts_every_page(self):
+        self.stub.page_size = 3
+        for _ in range(7):
+            self.stub.add(["agent:batou", "status:todo"])
+        _, out = self.run_dispatch("status")
+        self.assertIn("7 todo", out)
+
+    def test_routines_and_spend_read_every_page(self):
+        self.stub.page_size = 1
+        for _ in range(3):
+            self.stub.add([], title="other")
+        self.run_dispatch("spend")
+        self.run_dispatch("spend")
+        self.assertEqual(sum(i["title"] == "Spend" for i in self.stub.issues.values()), 1)
+
+    def test_refuses_to_run_when_there_are_too_many_pages(self):
+        self.stub.page_size = 1
+        self.stub.add(["agent:batou", "status:todo"])
+        self.stub.add(["agent:batou", "status:todo"])
+        with mock.patch.object(dispatch, "MAX_PAGES", 1):
+            code, _ = self.run_dispatch()
+        self.assertEqual((code, self.stub.hermes_calls, self.stub.comments), (1, [], []))
+
+    def test_never_follows_a_next_link_to_another_host(self):
+        self.stub.add(["agent:batou", "status:todo"])
+        self.stub.page_size = 1
+        self.stub.add(["agent:batou", "status:todo"])
+        self.stub.base = "http://127.0.0.2:1"            # the Link header points elsewhere
+        code, _ = self.run_dispatch()
+        self.assertEqual((code, self.stub.hermes_calls), (1, []))
 
 
 class TestSpend(Base):
