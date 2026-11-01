@@ -1,6 +1,6 @@
 # Where agent commands run (Hermes connects over SSH). Holds git, gh, gitleaks,
 # mise for per-project toolchains, Node with Playwright and a headless Chromium
-# (`shoot`), and the pinned Ponytail and Impeccable skills under /opt/skills.
+# (`shoot`), and the pinned Ponytail skill under /opt/skills.
 # No model keys ever live here.
 # Everything is pinned; bump versions only once a release is 24 h old.
 FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
@@ -10,7 +10,6 @@ ARG MISE_VERSION=2026.10.19
 ARG NODE_VERSION=24.22.2
 ARG NODE_SHA256=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75
 ARG PLAYWRIGHT_VERSION=1.64.1
-ARG IMPECCABLE_VERSION=4.8.0
 # Ponytail v5.3.3; the build checks the tag still points at this commit.
 ARG PONYTAIL_TAG=v5.3.3
 ARG PONYTAIL_COMMIT=7801d061243d7b753bad0e0b3c057cd250b11755
@@ -34,10 +33,10 @@ RUN set -eu; cd /tmp \
  && rm -f /tmp/gitleaks_* /tmp/mise-* /tmp/SHASUMS256.txt
 
 # Node (LTS, checksum-verified), Playwright with only the headless Chromium
-# shell (smaller and lighter than full Chromium) and its system libraries, and
-# the Impeccable CLI. `shoot` wraps them; see that file.
+# shell (smaller and lighter than full Chromium) and its system libraries.
+# `shoot` wraps them; see that file.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright NODE_PATH=/usr/local/lib/node_modules \
-    DO_NOT_TRACK=1 IMPECCABLE_NO_TELEMETRY=1 IMPECCABLE_BROWSER=/usr/local/bin/chromium-headless-shell
+    DO_NOT_TRACK=1
 RUN set -eu; cd /tmp \
  && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && echo "${NODE_SHA256}  node-v${NODE_VERSION}-linux-x64.tar.xz" | sha256sum -c - \
@@ -45,11 +44,11 @@ RUN set -eu; cd /tmp \
       --exclude='*/doc' --exclude='*/include' --exclude='*/share' --exclude='*/CHANGELOG.md' --exclude='*/README.md' \
  && rm -f "node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && npm install -g --no-fund --no-audit --no-update-notifier \
-      "playwright@${PLAYWRIGHT_VERSION}" "impeccable@${IMPECCABLE_VERSION}" \
+      "playwright@${PLAYWRIGHT_VERSION}" \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive playwright install --with-deps --only-shell chromium \
  && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/* \
- # For tools that start the browser themselves (Impeccable): the container has no
+ # For tools that start the browser themselves: the container has no
  # user namespaces for Chromium's own sandbox, and /dev/shm is only 64 MB.
  && printf '#!/bin/sh\nexec %s --no-sandbox --disable-dev-shm-usage --disable-gpu "$@"\n' \
       "$(find /opt/ms-playwright -type f -name chrome-headless-shell | head -1)" > /usr/local/bin/chromium-headless-shell \
@@ -57,7 +56,7 @@ RUN set -eu; cd /tmp \
  && chromium-headless-shell --version \
  # SSH sessions don't get the image's ENV; pam_env gives them these.
  && printf '%s\n' "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright" "NODE_PATH=/usr/local/lib/node_modules" \
-      "DO_NOT_TRACK=1" "IMPECCABLE_NO_TELEMETRY=1" "IMPECCABLE_BROWSER=/usr/local/bin/chromium-headless-shell" >> /etc/environment
+      "DO_NOT_TRACK=1" >> /etc/environment
 COPY --chmod=0755 shoot /usr/local/bin/shoot
 COPY --chmod=0755 shoot.cjs /usr/local/lib/shoot/
 
@@ -93,14 +92,9 @@ RUN echo 'eval "$(mise activate bash)"' >> ~/.bashrc \
  && git config --global core.hooksPath ~/.config/git/hooks \
  && mkdir -p ~/work ~/.config/git/hooks ~/.config/gh
 COPY --chown=agent:agent --chmod=0755 pre-push /home/agent/.config/git/hooks/pre-push
-# Impeccable's skill for Hermes, installed for the agent user; the engine it
-# downloads is checksum-verified against the package's own list. No hooks, no telemetry.
-RUN cd /tmp && impeccable install -y --providers=hermes --scope=global --no-hooks \
- && impeccable telemetry off
+# No skills under ~/.hermes: Hermes's SSH file sync owns that tree. Impeccable's
+# root-owned 22 MB skill there made every sync fail and resend it (1 Nov).
 USER root
-# Read-only for the agents, and next to Ponytail's under /opt/skills.
-RUN chown -R root:root /home/agent/.hermes/skills/impeccable \
- && ln -s /home/agent/.hermes/skills/impeccable /opt/skills/impeccable
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 # Agents report on their own section9-hq issues with it (uses the GitHub token).
