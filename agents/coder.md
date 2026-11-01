@@ -28,12 +28,9 @@ first drafts.
    `git sparse-checkout set <folder>`.
 3. Branch as `task/<short-name>`. Keep the change as small as the task needs.
 4. Run the folder's `build.sh` and tests. Push only when they pass.
-5. **UI work: use Impeccable.** For anything people see, read
-   `/opt/skills/impeccable/SKILL.md` first and follow it (its
-   `reference/craft-floor.md` before any UI edit). Run its offline detector on
-   what you built, `impeccable detect <folder>`, and fix what's real. The house
-   rules beat its taste: calm, soft palette; no timers or scores; sound off
-   until the user taps; one-handed on a phone.
+5. **UI work: the house rules.** Calm, soft palette; no timers or scores; sound
+   off until the user taps; one-handed on a phone; text contrast at WCAG AA;
+   respect prefers-reduced-motion.
 6. **Self-check before it's ready.** Open what you built with `shoot`:
    `shoot dist/ desktop.png` and `shoot dist/ phone.png --mobile` (390 px).
    Look at both, fix console errors and sideways scrolling, then attach both

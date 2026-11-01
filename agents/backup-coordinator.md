@@ -52,14 +52,8 @@ authored by `agents@sectionnine.dev`. Skip drafts, Dependabot and Petter's own P
    `flock /tmp/browser.lock timeout 120 node check.js`. Launch Chromium with
    `args: ['--no-sandbox', '--disable-dev-shm-usage']`, headless, one page.
    Never open two browsers at once: the VM is small and shared.
-4. **Impeccable.** Read `/opt/skills/impeccable/SKILL.md`, then run its audit
-   and critique (`/opt/skills/impeccable/reference/audit.md`,
-   `/opt/skills/impeccable/reference/critique.md`) against the built page, plus
-   the offline detector: `impeccable detect <dist folder>` and, for the
-   rendered rules, `flock /tmp/browser.lock impeccable detect --viewport 390x844 <url>`
-   (serve `dist/` with `python3 -m http.server` on a free local port first, and
-   stop it after). Treat the detector's findings as leads to check, not
-   verdicts; the brief below wins over its taste.
+4. **Accessibility.** Check text contrast at WCAG AA, prefers-reduced-motion,
+   tap targets on the phone viewport, and that it works without a mouse.
 5. **The house rules.** Check these on every app; each break is at least
    should-fix:
    - calm, soft palette; nothing flashing or loud;

@@ -204,7 +204,7 @@ jobs:
           echo "$out" | grep -q 'must be https'
           # Browser: shoot renders a local page to a non-empty PNG at desktop and
           # phone width and reports its console errors (SSH sessions get the env via pam_env).
-          s 'node --version && impeccable --version && test -r /opt/skills/ponytail/ponytail-review/SKILL.md && test -r /opt/skills/impeccable/SKILL.md'
+          s 'node --version && test -r /opt/skills/ponytail/ponytail-review/SKILL.md && ! test -e /home/agent/.hermes/skills/impeccable'
           [ "$(s 'echo $PLAYWRIGHT_BROWSERS_PATH')" = /opt/ms-playwright ]
           s 'mkdir -p /tmp/page && printf "%s\n" "<!doctype html><meta name=viewport content=\"width=device-width\"><h1>QA smoke</h1><script>console.error(\"ci-boom\")</script>" > /tmp/page/index.html'
           out=$(s 'shoot /tmp/page /tmp/page/desktop.png && shoot /tmp/page/index.html /tmp/page/phone.png --mobile')
