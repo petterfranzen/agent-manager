@@ -29,7 +29,10 @@ services:
       API_SERVER_HOST: "127.0.0.1"
       # The web dashboard (hq.sectionnine.dev): loopback only, cloudflared and
       # Cloudflare Access in front, basic auth as the second layer. It can edit
-      # .env and open a shell, so treat it like SSH.
+      # .env and open a shell, so treat it like SSH. The login is demanded
+      # because dashboard.public_url (hermes/config.yaml) is set: Hermes v0.22.5
+      # gates a non-loopback bind or a non-loopback public_url. Don't bind
+      # 0.0.0.0 here: with host networking that listens on every interface.
       HERMES_DASHBOARD: "1"
       HERMES_DASHBOARD_HOST: "127.0.0.1"
       HERMES_DASHBOARD_PORT: "9119"

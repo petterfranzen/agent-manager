@@ -83,7 +83,10 @@ Cloudflare Zero Trust:
   dashboard can edit Hermes's `.env` and open a shell, so treat it like SSH: never add the service
   token or widen the policy. Without the Access app the dashboard would be public behind only its
   own login: don't change the hostname first.
-- **Dashboard login** (second layer, made once by `install.sh`, never printed):
+- **Dashboard login** (second layer, made once by `install.sh`, never printed). Hermes v0.22.5 only
+  engages its login for a non-loopback bind *or* a non-loopback `dashboard.public_url`; we bind
+  `127.0.0.1` (host networking, so `0.0.0.0` would listen on every interface) and
+  `dashboard.public_url` in `hermes/config.yaml` is what makes the login mandatory, so keep it set.
   `sudo grep DASHBOARD /etc/section9/hermes.env` shows `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` and
   `_PASSWORD`. To rotate, delete those lines (and `_SECRET`) and re-run `install.sh`, then
   `docker compose -f /opt/agent-manager/vps/compose.yaml up -d hermes`.

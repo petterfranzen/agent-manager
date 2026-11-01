@@ -694,11 +694,22 @@ class TestDashboard(unittest.TestCase):
         self.assertNotIn("0.0.0.0", text)
         self.assertRegex(text, r"(?m)^  theme: ghost$")
 
+    def test_login_is_demanded_because_public_url_is_set_not_because_of_the_bind(self):
+        # Hermes v0.22.5 (hermes_cli/web_server.py should_require_dashboard_auth) engages the auth gate for a
+        # non-loopback bind OR a non-loopback dashboard.public_url. We bind 127.0.0.1 under host networking,
+        # so public_url is the only thing making the generated login mandatory: it must stay set.
+        cfg = (ROOT / "hermes" / "config.yaml").read_text()
+        self.assertRegex(cfg, r"(?m)^  public_url: https://[a-z0-9.-]+$")
+        self.assertNotIn("HERMES_DASHBOARD_PUBLIC_URL", (ROOT / "vps" / "compose.yaml").read_text())
+        code = "\n".join(l for l in (ROOT / "vps" / "compose.yaml").read_text().splitlines() if not l.lstrip().startswith("#"))
+        self.assertNotIn("0.0.0.0", code)                    # host networking: it would listen on every interface
+
     def test_prep_makes_the_login_once_and_never_prints_it(self):
         text = (ROOT / "vps" / "dashboard-prep.sh").read_text()
         for k in ("USERNAME", "PASSWORD", "SECRET"):
             self.assertIn("HERMES_DASHBOARD_BASIC_AUTH_$k", text)
-        self.assertEqual(text.count("openssl rand"), 1)
+        self.assertEqual(text.count("openssl rand"), 2)
+        self.assertIn("openssl rand -base64 32", text)       # the signing secret: 32 bytes, as Hermes's docs ask
         for line in text.splitlines():                       # the only line with the key writes to the file
             if "openssl rand" in line:
                 self.assertTrue(line.rstrip().endswith('>> "$secrets/hermes.env"'), line)
@@ -721,7 +732,9 @@ class TestDashboard(unittest.TestCase):
             self.assertEqual(lines[0], "OPENROUTER_API_KEY=abc")
             made = dict(l.split("=", 1) for l in lines[1:])
             self.assertEqual(set(made), {f"HERMES_DASHBOARD_BASIC_AUTH_{k}" for k in ("USERNAME", "PASSWORD", "SECRET")})
-            self.assertTrue(all(len(v) == 32 for v in made.values()))
+            self.assertEqual(len(made["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"]), 32)
+            self.assertEqual(len(made["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"]), 32)
+            self.assertEqual(len(base64.b64decode(made["HERMES_DASHBOARD_BASIC_AUTH_SECRET"])), 32)
             for v in made.values():
                 self.assertNotIn(v, first.stdout + first.stderr)
             self.assertIn("sudo grep DASHBOARD", first.stdout)
