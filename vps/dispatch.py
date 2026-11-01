@@ -32,6 +32,9 @@ RESERVE = Decimal("1.00")   # stop this far below OpenRouter's cap (the company 
 KEYS = re.compile(r"(sk-or-|github_pat_|ghp_)[A-Za-z0-9_-]*")
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 STATUSES = ("todo", "working", "review", "done", "blocked")
+DEFAULT_TIMEOUT = 3600       # an agent without timeout_sec in the roster
+GRACE = 600                  # a working issue is stale this long after its agent's timeout
+PER_PAGE, MAX_PAGES = 100, 20     # board reads follow Link: rel="next" up to this; more than that is refused
 
 
 class Failure(Exception):
@@ -66,7 +69,8 @@ def read_env_value(path, name):
     return value
 
 
-def http(method, url, token, body=None, timeout=30, headers=None):
+def request(method, url, token, body=None, timeout=30, headers=None):
+    """(parsed JSON or None, response headers)."""
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", "Bearer " + token)
@@ -78,14 +82,30 @@ def http(method, url, token, body=None, timeout=30, headers=None):
         req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
+            raw, resp_headers = resp.read(), resp.headers
     except urllib.error.HTTPError as e:
         raise Failure(f"{method} {redact(url)} -> {e.code}: {redact(e.read().decode('utf-8', 'replace'))[:300]}") from None
     except TimeoutError:
         raise Failure(f"{method} {redact(url)} -> timed out after {timeout} s") from None
     except (urllib.error.URLError, OSError) as e:
         raise Failure(f"{method} {redact(url)} -> no response: {redact(str(getattr(e, 'reason', e)))}") from None
-    return json.loads(raw) if raw.strip() else None
+    try:
+        return (json.loads(raw) if raw.strip() else None), resp_headers
+    except ValueError:
+        raise Failure(f"{method} {redact(url)} -> reply is not JSON") from None
+
+
+def http(method, url, token, body=None, timeout=30, headers=None):
+    return request(method, url, token, body, timeout, headers)[0]
+
+
+def next_link(headers):
+    """The URL of Link: rel="next", or None."""
+    for part in (headers.get("Link") or "").split(","):
+        m = re.match(r'\s*<([^>]+)>\s*;.*\brel="?next"?', part)
+        if m:
+            return m.group(1)
+    return None
 
 
 class Board:
@@ -95,10 +115,29 @@ class Board:
     def call(self, method, path, body=None):
         return http(method, f"{self.api}/repos/{REPO}{path}", self.token, body)
 
+    def pages(self, path):
+        """Every item of a list endpoint, following Link: rel="next". Refuses to go on past MAX_PAGES pages
+        (a silently short list would hide the oldest todos), or to send the token to another host."""
+        url = f"{self.api}/repos/{REPO}{path}{'&' if '?' in path else '?'}per_page={PER_PAGE}"
+        items = []
+        for _ in range(MAX_PAGES):
+            page, headers = request("GET", url, self.token)
+            items += page or []
+            url = next_link(headers)
+            if not url:
+                return items
+            if urllib.parse.urlsplit(url)[:2] != urllib.parse.urlsplit(self.api)[:2]:
+                raise Failure(f"GET {path} -> the next page is on another host; refusing to send the token there")
+        raise Failure(f"GET {path} -> more than {MAX_PAGES * PER_PAGE} items; refusing to work from a partial list")
+
     def todo(self):
         """Open status:todo issues (not PRs), oldest first."""
-        issues = self.call("GET", "/issues?labels=status%3Atodo&state=open&sort=created&direction=asc&per_page=50")
-        return [i for i in issues or [] if "pull_request" not in i]
+        issues = self.pages("/issues?labels=status%3Atodo&state=open&sort=created&direction=asc")
+        return [i for i in issues if "pull_request" not in i]
+
+    def working(self):
+        """Open status:working issues (not PRs)."""
+        return [i for i in self.pages("/issues?labels=status%3Aworking&state=open") if "pull_request" not in i]
 
     def comment(self, n, text):
         self.call("POST", f"/issues/{n}/comments", {"body": redact(text)[:60000]})
@@ -130,10 +169,17 @@ def prompt_for(agent, issue):
 
 
 def spend_ok(openrouter, key):
-    k = (http("GET", openrouter.rstrip("/") + "/key", key, timeout=20) or {}).get("data") or {}
+    """Fails closed: no cap, or a reply that cannot be read, means no run."""
+    reply = http("GET", openrouter.rstrip("/") + "/key", key, timeout=20)
+    k = reply.get("data") if isinstance(reply, dict) else None
+    if not isinstance(k, dict) or not k:
+        return False, "OpenRouter's /key reply was empty or not what was expected; refusing to run until it reports the key's cap."
     if k.get("limit") is None:
-        return True, ""
-    left = Decimal(str(k["limit_remaining"] if k.get("limit_remaining") is not None else Decimal(str(k["limit"])) - Decimal(str(k.get("usage", 0)))))
+        return False, "The OpenRouter key has no monthly cap (limit is null); refusing to run. Put a cap on the key, then set `status:todo` again."
+    try:
+        left = Decimal(str(k["limit_remaining"] if k.get("limit_remaining") is not None else Decimal(str(k["limit"])) - Decimal(str(k.get("usage", 0)))))
+    except ArithmeticError:
+        return False, "OpenRouter's /key reply has a cap or balance that is not a number; refusing to run."
     if left <= RESERVE:
         return False, f"OpenRouter cap reached: ${left:.2f} left of ${k['limit']} (reserve ${RESERVE}). Raise the cap or wait for the reset, then set `status:todo` again."
     return True, ""
@@ -143,10 +189,29 @@ def tail(text, n=20):
     return "\n".join((text or "").strip().splitlines()[-n:]) or "(no output)"
 
 
+def recover_stale(board, agents, log, now=None):
+    """Block status:working issues whose run can't still be going. Only called holding the dispatch lock,
+    so no run is live: a dispatcher killed mid-run (reboot, OOM, the unit's TimeoutStartSec) leaves its issue
+    `working`, and todo() would never look at it again."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    for issue in board.working():
+        agent = agent_of(issue, agents)
+        limit = int((agent or {}).get("timeout_sec", DEFAULT_TIMEOUT)) + GRACE
+        age = (now - dt.datetime.fromisoformat(issue["updated_at"])).total_seconds()
+        if age <= limit:
+            continue
+        n = issue["number"]
+        board.set_status(issue, "blocked")
+        board.comment(n, f"Blocked by the dispatcher: `status:working` for {int(age // 60)} min with no update, "
+                         f"past the {limit // 60} min limit; the run was probably killed. Set `status:todo` to try again.")
+        log(f"#{n} blocked: stale working")
+
+
 def run_one(a, board, hermes_key, orkey, log):
     agents, _ = load_roster(a.roster)
     for ag in agents:
         ag["_root"] = a.repo_root
+    recover_stale(board, agents, log)
     todo = [(i, agent_of(i, agents)) for i in board.todo()]
     todo = [(i, ag) for i, ag in todo if ag]
     if not todo:
@@ -162,7 +227,7 @@ def run_one(a, board, hermes_key, orkey, log):
     system, user = prompt_for(agent, issue)
     board.set_status(issue, "working")
     log(f"#{n} -> {agent['name']}")
-    timeout = int(agent.get("timeout_sec", 3600))
+    timeout = int(agent.get("timeout_sec", DEFAULT_TIMEOUT))
     out, problem = "", ""
     try:
         reply = http("POST", a.hermes.rstrip("/") + "/v1/chat/completions", hermes_key, timeout=timeout,
@@ -230,7 +295,7 @@ def routines(a, board, log):
         if not when:
             continue
         label = f"agent:{name.lower()}"
-        open_ = board.call("GET", f"/issues?labels={urllib.parse.quote(label)}&state=open&per_page=100") or []
+        open_ = board.pages(f"/issues?labels={urllib.parse.quote(label)}&state=open")
         if any(i["title"] == r["title"] for i in open_):
             log(f"{name}: '{r['title']}' is still open; skipped")
             continue
@@ -267,7 +332,7 @@ def spend(a, board, orkey, log):
         f"- Left: {money('limit_remaining')}",
         f"- Today (UTC): {money('usage_daily')}", "",
         "Rewritten every hour; don't edit. Leave this issue open and pinned."])
-    open_ = board.call("GET", "/issues?state=open&sort=created&direction=asc&per_page=100") or []
+    open_ = board.pages("/issues?state=open&sort=created&direction=asc")
     issue = next((i for i in open_ if i["title"] == "Spend" and "pull_request" not in i), None)
     if issue:
         board.call("PATCH", f"/issues/{issue['number']}", {"body": body})
