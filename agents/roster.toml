@@ -84,6 +84,16 @@ timezone = "Europe/Stockholm"
 active = false
 
 [[agents]]
+name = "Jev"
+role = "general"
+title = "Quick decisions (yes/no)"
+brief = "agents/jev.md"
+avatar = "agents/avatars/jev.png"  # placeholder until Jev has its own
+# Answers in a few lines, so it costs cents a month.
+budget_monthly_cents = 100
+timeout_sec = 300
+
+[[agents]]
 name = "Saito"
 role = "devops"
 title = "Senior thinker and ops (read-only)"
