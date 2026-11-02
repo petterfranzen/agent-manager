@@ -1,5 +1,5 @@
-# The team as code. scripts/paperclip-apply.py applies this to Paperclip on the
-# VM (docs/RUNBOOK.md, step 7). Safe to re-run: it changes only what differs.
+# The team as code. vps/dispatch.py reads this on the VPS: agent names, models,
+# timeouts and routines (docs/RUNBOOK.md).
 #
 # Routines stay `active = false` (created paused) until the Major has done a
 # supervised first run. Then flip them to true in a PR and re-apply.
@@ -13,10 +13,8 @@ name = "Section 9"
 # cap, so a run is never cut off halfway by an empty key.
 budget_monthly_cents = 1900
 # Hermes reports tokens, not dollars, so every run is "unpriced" usage. With
-# "block" (Paperclip's default) one run pauses the agent and the whole company.
-# "allow" lets those runs through; the real money arrives separately, booked
-# every hour from OpenRouter by deploy/spend-report.py, and the budgets below
-# enforce against that.
+# Legacy Paperclip setting, unused since 31 Oct. Money is read from OpenRouter
+# by `vps/dispatch.py spend` and shown in the "Spend" issue in section9-hq.
 unpriced_usage = "allow"
 
 # Hermes gateway adapter settings shared by every agent. The gateway key is

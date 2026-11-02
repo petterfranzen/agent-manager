@@ -34,18 +34,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Placeholder secrets files (CI only)
-        run: |
-          sudo mkdir -p /etc/agent-manager
-          for f in postgres paperclip hermes sandbox; do echo "CI_PLACEHOLDER=1" | sudo tee /etc/agent-manager/$f.env >/dev/null; done
-          sudo touch /etc/agent-manager/sandbox_authorized_keys
-      - name: docker compose config
-        run: docker compose -f compose.yaml config --quiet
-      - name: Images pinned by digest
-        run: |
-          set -euo pipefail
-          bad=$(grep -E '^\s*image:' compose.yaml | grep -v '@sha256:' || true)
-          [ -z "$bad" ] || { echo "Unpinned image(s):"; echo "$bad"; exit 1; }
       - name: No xAI models, ZDR routing on
         run: |
           set -euo pipefail
@@ -59,22 +47,6 @@ jobs:
           assert c["terminal"]["env_passthrough"] == []
           print("hermes config ok")
           EOF
-      - name: No listeners beyond loopback
-        run: |
-          set -euo pipefail
-          docker compose -f compose.yaml config --format json > /tmp/compose.json
-          python3 - <<'EOF'
-          import json
-          svc = json.load(open("/tmp/compose.json"))["services"]
-          env = svc["hermes"].get("environment", {})
-          for k in ("HERMES_DASHBOARD", "WEBHOOK_ENABLED"):
-              assert env.get(k) in ("0", "false"), f"hermes {k} must be 0 or false, got {env.get(k)!r}"
-          for name, s in svc.items():
-              for p in s.get("ports", []):
-                  assert name == "paperclip", f"{name} publishes a port: {p}"
-                  assert p.get("host_ip") == "127.0.0.1", f"paperclip publishes beyond loopback: {p}"
-          print("listeners ok")
-          EOF
 
   roster:
     name: Roster script tests
@@ -84,8 +56,8 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - name: paperclip-apply.py against a fake Paperclip
-        run: python3 -m unittest scripts/test_paperclip_apply.py scripts/test_spend_report.py scripts/test_crew_status.py scripts/test_heal_accounting.py scripts/test_decommission.py scripts/test_vps.py
+      - name: Sync decommission and VPS script tests
+        run: python3 -m unittest scripts/test_decommission.py scripts/test_vps.py
 
   vps:
     name: VPS stack
@@ -154,11 +126,7 @@ jobs:
           fi
           # verify checks that ExecStart exists, so put the script where the unit expects it.
           sudo install -m 0755 deploy/vm-sync.sh /usr/local/sbin/agent-manager-sync
-          sudo install -m 0755 deploy/spend-report.py /usr/local/sbin/agent-manager-spend
-          sudo install -m 0755 deploy/crew-status.py /usr/local/sbin/agent-manager-crew-status
-          systemd-analyze verify deploy/agent-manager-sync.service deploy/agent-manager-sync.timer \
-            deploy/agent-manager-spend.service deploy/agent-manager-spend.timer \
-            deploy/agent-manager-crew-status.service
+          systemd-analyze verify deploy/agent-manager-sync.service deploy/agent-manager-sync.timer
 
   sandbox:
     name: Sandbox image smoke test
