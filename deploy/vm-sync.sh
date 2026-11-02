@@ -352,15 +352,19 @@ measure_memory() {
 # portfolio's main moves. Best effort: a failure is logged and retried on the
 # next tick, at most PORTFOLIO_MAX_ATTEMPTS times per commit.
 portfolio_sync() {
-  local sha applied tries short tag digest prev checks why
+  local sha key applied tries short tag digest prev checks why
   [ -n "$PORTFOLIO_GIT_URL" ] || return 0
   sha=$(git ls-remote "$PORTFOLIO_GIT_URL" refs/heads/main 2>/dev/null | awk 'NR == 1 {print $1}') || return 0
   [ -n "$sha" ] || return 0
+  # What is applied is portfolio's commit plus this repo's compose file, so a
+  # change to either (a new site, or an edit to deploy/portfolio/compose.yaml)
+  # rolls out on the next tick.
+  key="$sha-$(sha256sum "$PORTFOLIO_COMPOSE" 2>/dev/null | cut -c1-12)"
   applied=$(cat "$PORTFOLIO_APPLIED" 2>/dev/null || true)
-  [ "$sha" != "$applied" ] || return 0
+  [ "$key" != "$applied" ] || return 0
 
   tries=0
-  if [ "$(cut -d' ' -f1 "$PORTFOLIO_FAILED" 2>/dev/null)" = "$sha" ]; then
+  if [ "$(cut -d' ' -f1 "$PORTFOLIO_FAILED" 2>/dev/null)" = "$key" ]; then
     tries=$(cut -d' ' -f2 "$PORTFOLIO_FAILED" 2>/dev/null || true)
   fi
   [[ $tries =~ ^[0-9]+$ ]] || tries=0
@@ -386,7 +390,7 @@ portfolio_sync() {
   short=$(printf '%s' "$sha" | cut -c1-7)
   tag="$PORTFOLIO_IMAGE:sha-$short"
   if ! docker pull "$tag" >/dev/null 2>&1; then
-    echo "$sha $((tries + 1))" >"$PORTFOLIO_FAILED"
+    echo "$key $((tries + 1))" >"$PORTFOLIO_FAILED"
     err "portfolio: cannot pull $tag (attempt $((tries + 1)) of $PORTFOLIO_MAX_ATTEMPTS)"
     return 1
   fi
@@ -394,7 +398,7 @@ portfolio_sync() {
   digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag" 2>/dev/null \
     | grep "^$PORTFOLIO_IMAGE@" | head -n 1 || true)
   if [ -z "$digest" ]; then
-    echo "$sha $((tries + 1))" >"$PORTFOLIO_FAILED"
+    echo "$key $((tries + 1))" >"$PORTFOLIO_FAILED"
     err "portfolio: pulled $tag but found no digest for it"
     return 1
   fi
@@ -407,13 +411,13 @@ portfolio_sync() {
   mv -f "$PORTFOLIO_ENV.new" "$PORTFOLIO_ENV" || { err "portfolio: cannot replace $PORTFOLIO_ENV"; return 1; }
 
   if ! docker compose --project-name portfolio -f "$PORTFOLIO_COMPOSE" --env-file "$PORTFOLIO_ENV" up -d >/dev/null 2>&1; then
-    echo "$sha $((tries + 1))" >"$PORTFOLIO_FAILED"
+    echo "$key $((tries + 1))" >"$PORTFOLIO_FAILED"
     err "portfolio: compose up failed on ${sha:0:7} (attempt $((tries + 1)) of $PORTFOLIO_MAX_ATTEMPTS)"
     return 1
   fi
   # Drop the image this replaced; a rollback re-pulls by digest (as on 2026-10-28).
   if [ -n "$prev" ] && [ "$prev" != "$digest" ]; then docker image rm "$prev" >/dev/null 2>&1 || true; fi
-  echo "$sha" >"$PORTFOLIO_APPLIED"
+  echo "$key" >"$PORTFOLIO_APPLIED"
   rm -f "$PORTFOLIO_FAILED"
   log "portfolio: applied ${sha:0:7} ($digest)"
 }
