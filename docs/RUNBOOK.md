@@ -132,6 +132,42 @@ the spend and crew-status timers and the heal step are gone. Steps 1-10 below
 describe how the stack was set up and now apply to the VPS (see
 [migration-vps.md](migration-vps.md)), not Hetzner.
 
+### The portfolio on the Hetzner VM (from 1 Nov 2026)
+
+The VM also serves the portfolio: `www.pastabake.cloud` -> one nginx container
+on `127.0.0.1:8081`, pulled by `agent-manager-sync` (docs/DECISIONS.md,
+2026-11-01). Nothing is installed for it by hand: the compose file and the pull
+step arrive with a merged agent-manager commit, and the sync's self-update
+installs the new copy of itself.
+
+**Petter's one-time steps in Cloudflare** (the tunnel runs from a token, so
+these are dashboard entries, not a file on the box):
+
+1. **Public hostname.** Zero Trust -> Networks -> Tunnels -> the VM's tunnel ->
+   Public hostnames -> Add: `www.pastabake.cloud` -> `HTTP` ->
+   `localhost:8081`. Leave `flight.pastabake.cloud` -> `localhost:8080` as it
+   is. (The same rule is recorded at `deploy/cloudflared/portfolio-ingress.yaml`.)
+2. **Apex redirect.** Zone `pastabake.cloud` -> Rules -> Redirect Rules ->
+   Single Redirect: when the hostname is `pastabake.cloud`, dynamic redirect to
+   `https://www.pastabake.cloud` (301, preserve path). **Confirm first what
+   serves the apex today** — it resolves, proxied, to an origin that answered
+   nothing when checked on 1 Nov; if a homelab record is behind it, this
+   replaces that behaviour, so settle that before saving.
+3. **Make the GHCR package public.** GitHub -> the `portfolio` package ->
+   Package settings -> Change visibility -> Public, so the VM pulls without a
+   token (no new secret; the sync reads the public GitHub API only).
+4. Leave the homelab's DNS alone. `www` gets its record from the tunnel's public
+   hostname; nothing else under `pastabake.cloud` changes.
+
+After the first merged agent-manager commit that carries `deploy/portfolio/`,
+the portfolio comes up on its own within a few minutes. Watch it with:
+
+```bash
+journalctl -u agent-manager-sync -n 50 | grep portfolio
+docker compose --project-name portfolio -f /opt/agent-manager/deploy/portfolio/compose.yaml ps
+curl -fsS http://127.0.0.1:8081/healthz
+```
+
 The removal runs from `deploy/vm-sync.sh` once `deploy/DECOMMISSIONED` is in
 the checkout. The sync logs each step to the journal
 (`journalctl -u agent-manager-sync | grep decommission`), in order:

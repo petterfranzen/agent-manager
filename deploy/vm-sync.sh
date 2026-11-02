@@ -28,6 +28,20 @@ SECRETS_KEEP_DIR=${AM_SECRETS_KEEP_DIR:-/var/backups/agent-manager-secrets}
 GH_REPO=petterfranzen/agent-manager
 STATE_FILE=$STATE_DIR/sync-state.json
 
+# The portfolio runs on this VM too (docs/DECISIONS.md, 2026-11-01): its own
+# repo, its own CI, its own image. portfolio_sync() below resolves the image at
+# run time and writes PORTFOLIO_ENV, which deploy/portfolio/compose.yaml reads.
+PORTFOLIO_REPO=petterfranzen/portfolio
+# Where portfolio's main is read from. An empty AM_PORTFOLIO_GIT_URL turns the step off
+# (the tests do that; they point it at a local repo to exercise the step).
+PORTFOLIO_GIT_URL=${AM_PORTFOLIO_GIT_URL-https://github.com/$PORTFOLIO_REPO}
+PORTFOLIO_IMAGE=ghcr.io/petterfranzen/portfolio
+PORTFOLIO_COMPOSE=$REPO_DIR/deploy/portfolio/compose.yaml
+PORTFOLIO_APPLIED=$STATE_DIR/portfolio-applied
+PORTFOLIO_FAILED=$STATE_DIR/portfolio-failed
+PORTFOLIO_ENV=$STATE_DIR/portfolio.env
+PORTFOLIO_MAX_ATTEMPTS=3
+
 # Check runs that must be present and green on a commit before it is applied.
 # These are the job names in .github/workflows/ci.yml: update this list when
 # a CI job is added, renamed or removed, or the sync waits for ever.
@@ -37,6 +51,17 @@ REQUIRED_CHECKS=(
   "Sandbox image smoke test"
   "Roster script tests"
   "Deploy scripts"
+)
+
+# The portfolio's own check runs that must be green before its image is pulled.
+# It is `publish` in portfolio's docker-publish.yml: the job that builds the
+# site image (the Dockerfile runs the build, so a broken site fails it and no
+# image is pushed). The gate is deliberately that job alone, not a name added
+# later in portfolio's ci.yml, so this PR and the portfolio PR can land in
+# either order without the sync waiting for a check that does not exist yet.
+# Update this list when portfolio's workflows change, or the sync waits for ever.
+PORTFOLIO_CHECKS=(
+  "publish"
 )
 
 log() { echo "agent-manager-sync: $*"; }
@@ -88,8 +113,8 @@ EOF
 
 # Prints why a commit is not ready and returns 1, or returns 0 when every
 # required check run is completed with conclusion "success".
-ci_verdict() { # ci_verdict <check-runs.json>
-  python3 -I - "$1" "${REQUIRED_CHECKS[@]}" <<'EOF'
+ci_verdict() { # ci_verdict <check-runs.json> <required check name>...
+  python3 -I - "$@" <<'EOF'
 import json
 import sys
 
@@ -321,6 +346,78 @@ measure_memory() {
   echo "Memory: $mem; flight-tracker MemoryLow $low"
 }
 
+# The portfolio, pulled on every tick so it is independent of agent-manager's
+# own main. Reading portfolio's main is a `git ls-remote`, not the REST API, so
+# a quiet week costs no API calls; the check-runs call happens only when
+# portfolio's main moves. Best effort: a failure is logged and retried on the
+# next tick, at most PORTFOLIO_MAX_ATTEMPTS times per commit.
+portfolio_sync() {
+  local sha applied tries short tag digest prev checks why
+  [ -n "$PORTFOLIO_GIT_URL" ] || return 0
+  sha=$(git ls-remote "$PORTFOLIO_GIT_URL" refs/heads/main 2>/dev/null | awk 'NR == 1 {print $1}') || return 0
+  [ -n "$sha" ] || return 0
+  applied=$(cat "$PORTFOLIO_APPLIED" 2>/dev/null || true)
+  [ "$sha" != "$applied" ] || return 0
+
+  tries=0
+  if [ "$(cut -d' ' -f1 "$PORTFOLIO_FAILED" 2>/dev/null)" = "$sha" ]; then
+    tries=$(cut -d' ' -f2 "$PORTFOLIO_FAILED" 2>/dev/null || true)
+  fi
+  [[ $tries =~ ^[0-9]+$ ]] || tries=0
+  if [ "$tries" -ge "$PORTFOLIO_MAX_ATTEMPTS" ]; then
+    err "portfolio: giving up on ${sha:0:7} after $tries attempts; a new commit on portfolio's main resets this"
+    return 1
+  fi
+
+  checks=$(mktemp)
+  if ! curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' -H 'User-Agent: agent-manager-sync' \
+    -o "$checks" "$GITHUB_API/repos/$PORTFOLIO_REPO/commits/$sha/check-runs?per_page=100"; then
+    rm -f "$checks"
+    log "portfolio: cannot read the check runs of ${sha:0:7}; retrying next tick"
+    return 0
+  fi
+  if ! why=$(ci_verdict "$checks" "${PORTFOLIO_CHECKS[@]}"); then
+    log "waiting for portfolio CI on ${sha:0:7}: $why"
+    rm -f "$checks"
+    return 0
+  fi
+  rm -f "$checks"
+
+  short=$(printf '%s' "$sha" | cut -c1-7)
+  tag="$PORTFOLIO_IMAGE:sha-$short"
+  if ! docker pull "$tag" >/dev/null 2>&1; then
+    echo "$sha $((tries + 1))" >"$PORTFOLIO_FAILED"
+    err "portfolio: cannot pull $tag (attempt $((tries + 1)) of $PORTFOLIO_MAX_ATTEMPTS)"
+    return 1
+  fi
+  # Pin what was pulled by its digest, never by a tag that can move.
+  digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag" 2>/dev/null \
+    | grep "^$PORTFOLIO_IMAGE@" | head -n 1 || true)
+  if [ -z "$digest" ]; then
+    echo "$sha $((tries + 1))" >"$PORTFOLIO_FAILED"
+    err "portfolio: pulled $tag but found no digest for it"
+    return 1
+  fi
+
+  prev=$(sed -n 's/^PORTFOLIO_IMAGE=//p' "$PORTFOLIO_ENV" 2>/dev/null || true)
+  if ! printf 'PORTFOLIO_IMAGE=%s\n' "$digest" | install -m 0600 /dev/stdin "$PORTFOLIO_ENV.new"; then
+    err "portfolio: cannot write $PORTFOLIO_ENV"
+    return 1
+  fi
+  mv -f "$PORTFOLIO_ENV.new" "$PORTFOLIO_ENV" || { err "portfolio: cannot replace $PORTFOLIO_ENV"; return 1; }
+
+  if ! docker compose --project-name portfolio -f "$PORTFOLIO_COMPOSE" --env-file "$PORTFOLIO_ENV" up -d >/dev/null 2>&1; then
+    echo "$sha $((tries + 1))" >"$PORTFOLIO_FAILED"
+    err "portfolio: compose up failed on ${sha:0:7} (attempt $((tries + 1)) of $PORTFOLIO_MAX_ATTEMPTS)"
+    return 1
+  fi
+  # Drop the image this replaced; a rollback re-pulls by digest (as on 2026-10-28).
+  if [ -n "$prev" ] && [ "$prev" != "$digest" ]; then docker image rm "$prev" >/dev/null 2>&1 || true; fi
+  echo "$sha" >"$PORTFOLIO_APPLIED"
+  rm -f "$PORTFOLIO_FAILED"
+  log "portfolio: applied ${sha:0:7} ($digest)"
+}
+
 # Best effort, after a successful apply: re-install the sync's own script and
 # units when deploy/ changed (or the first state has no applied commit).
 # Replacing the running script is safe: install writes a new inode and bash
@@ -485,6 +582,13 @@ if [ "$DECOM" -eq 0 ] && [ -x "$HEAL" ]; then
     | redact | sed 's/^/agent-manager-sync: heal: /' || true
 fi
 
+# Every tick, before the early exits below: the portfolio's CI and image have
+# nothing to do with agent-manager's main, so a quiet week here must not stop
+# it being updated. Non-fatal: a portfolio problem does not hold up the sync.
+if ! portfolio_sync; then
+  err "portfolio: the step failed; it is retried on the next tick"
+fi
+
 git fetch --quiet origin main || { err "git fetch failed"; exit 1; }
 TARGET=$(git rev-parse origin/main)
 
@@ -520,7 +624,7 @@ trap 'rm -f "$CHECKS_JSON" "$OUT" "$APPLY_OUT" "$NOTES_FILE"' EXIT
 curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' -o "$CHECKS_JSON" \
   "$GITHUB_API/repos/$GH_REPO/commits/$TARGET/check-runs?per_page=100" \
   || { err "cannot read the check runs of ${TARGET:0:7}"; exit 1; }
-if ! WHY=$(ci_verdict "$CHECKS_JSON"); then
+if ! WHY=$(ci_verdict "$CHECKS_JSON" "${REQUIRED_CHECKS[@]}"); then
   log "waiting for CI on ${TARGET:0:7}: $WHY"
   exit 0
 fi

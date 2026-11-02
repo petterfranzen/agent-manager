@@ -20,7 +20,26 @@ case "$*" in
   "volume ls"*) echo agent-manager_paperclip-data ;;
   "volume inspect"*) echo "$FAKE_MOUNT" ;;
   "compose down"*) [ -z "${FAKE_DOWN_FAILS:-}" ] || exit 1 ;;
+  "pull "*) [ -z "${FAKE_PULL_FAILS:-}" ] || exit 1 ;;
+  "image inspect"*) echo "ghcr.io/petterfranzen/portfolio@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
 esac
+exit 0
+"""
+
+
+# Stands in for curl: writes a check-runs reply to the -o file. FAKE_CI=pending
+# makes the portfolio's publish run unfinished.
+FAKE_CURL = """#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "-o" ] && out="$2"
+  shift
+done
+if [ "${FAKE_CI:-green}" = pending ]; then
+  echo '{"total_count":1,"check_runs":[{"name":"publish","status":"in_progress","conclusion":null}]}' > "$out"
+else
+  echo '{"total_count":1,"check_runs":[{"name":"publish","status":"completed","conclusion":"success"}]}' > "$out"
+fi
 exit 0
 """
 
@@ -101,6 +120,7 @@ class Decommission(unittest.TestCase):
             "AM_SBIN_DIR": str(t / "sbin"), "AM_UNIT_DIR": str(t / "units"),
             "AM_BACKUP_DIR": str(t / "backups"), "AM_SECRETS_KEEP_DIR": str(t / "kept"), "AM_HEAL": str(t / "no-heal"),
             "FAKE_LOG": str(self.log), "FAKE_MOUNT": str(t / "mount"),
+            "AM_PORTFOLIO_GIT_URL": "",   # off unless a test turns it on
             **extra,
         }
         return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
@@ -110,6 +130,69 @@ class Decommission(unittest.TestCase):
 
     def left(self, *names):
         return [n for n in names if (self.t / "secrets" / n).exists()]
+
+    def portfolio_origin(self):
+        """A local stand-in for portfolio's repo; returns (url, main sha)."""
+        o = self.t / "portfolio.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(o)], check=True)
+        w = self.t / "portfolio-work"
+        subprocess.run(["git", "clone", "-q", str(o), str(w)], check=True, capture_output=True)
+        (w / "index.html").write_text("x")
+        git("add", ".", cwd=w)
+        git("commit", "-qm", "site", cwd=w)
+        git("push", "-q", "origin", "HEAD:main", cwd=w)
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=w, check=True,
+                             capture_output=True, text=True).stdout.strip()
+        (self.t / "bin" / "curl").write_text(FAKE_CURL)
+        (self.t / "bin" / "curl").chmod(0o755)
+        return str(o), sha
+
+    def test_portfolio_deploys_when_its_ci_is_green(self):
+        url, sha = self.portfolio_origin()
+        r = self.run_sync(AM_PORTFOLIO_GIT_URL=url)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = self.calls()
+        self.assertIn(f"docker pull ghcr.io/petterfranzen/portfolio:sha-{sha[:7]}", calls)
+        up = [c for c in calls if c.startswith("docker compose --project-name portfolio")]
+        self.assertEqual(len(up), 1, calls)
+        self.assertTrue(up[0].endswith("deploy/portfolio/compose.yaml --env-file %s up -d" % (self.t / "state" / "portfolio.env")), up[0])
+        env = self.t / "state" / "portfolio.env"
+        self.assertEqual(env.read_text(), "PORTFOLIO_IMAGE=ghcr.io/petterfranzen/portfolio@sha256:" + "a" * 64 + "\n")
+        self.assertEqual(oct(env.stat().st_mode & 0o777), "0o600")
+        self.assertEqual((self.t / "state" / "portfolio-applied").read_text().strip(), sha)
+
+    def test_portfolio_second_tick_does_nothing(self):
+        url, _ = self.portfolio_origin()
+        self.run_sync(AM_PORTFOLIO_GIT_URL=url)
+        before = self.calls()
+        r = self.run_sync(AM_PORTFOLIO_GIT_URL=url)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), before)
+
+    def test_portfolio_waits_for_its_ci(self):
+        url, _ = self.portfolio_origin()
+        r = self.run_sync(AM_PORTFOLIO_GIT_URL=url, FAKE_CI="pending")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertIn("waiting for portfolio CI", r.stdout)
+        self.assertFalse((self.t / "state" / "portfolio-applied").exists())
+
+    def test_portfolio_gives_up_after_three_failed_pulls(self):
+        url, _ = self.portfolio_origin()
+        for _ in range(3):
+            self.run_sync(AM_PORTFOLIO_GIT_URL=url, FAKE_PULL_FAILS="1")
+        pulls = [c for c in self.calls() if c.startswith("docker pull")]
+        self.assertEqual(len(pulls), 3)
+        r = self.run_sync(AM_PORTFOLIO_GIT_URL=url, FAKE_PULL_FAILS="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len([c for c in self.calls() if c.startswith("docker pull")]), 3)
+        self.assertIn("giving up", r.stderr)
+
+    def test_a_portfolio_failure_does_not_stop_the_sync(self):
+        url, _ = self.portfolio_origin()
+        r = self.run_sync(AM_PORTFOLIO_GIT_URL=url, FAKE_PULL_FAILS="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("the step failed", r.stderr)
 
     def test_gated_off_does_nothing(self):
         r = self.run_sync()

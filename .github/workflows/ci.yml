@@ -47,6 +47,20 @@ jobs:
           assert c["terminal"]["env_passthrough"] == []
           print("hermes config ok")
           EOF
+      - name: Portfolio compose (Hetzner)
+        run: |
+          set -euo pipefail
+          export PORTFOLIO_IMAGE=ghcr.io/petterfranzen/portfolio@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          docker compose -f deploy/portfolio/compose.yaml config --quiet
+          docker compose -f deploy/portfolio/compose.yaml config --format json > /tmp/portfolio.json
+          python3 - <<'EOF2'
+          import json
+          s = json.load(open("/tmp/portfolio.json"))["services"]["portfolio"]
+          assert s["ports"] and all(p.get("host_ip") == "127.0.0.1" for p in s["ports"]), "portfolio must publish on loopback only"
+          assert s.get("mem_limit"), "portfolio needs a memory cap"
+          assert "ALL" in s.get("cap_drop", []), "portfolio must drop all capabilities"
+          print("portfolio compose ok")
+          EOF2
 
   roster:
     name: Roster script tests

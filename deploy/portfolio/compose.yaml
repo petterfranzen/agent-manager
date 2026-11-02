@@ -1,0 +1,48 @@
+# The portfolio (www.pastabake.cloud), pulled by this VM. See docs/DECISIONS.md,
+# 2026-11-01. One static nginx container: no volumes, no state, no shared
+# network with anything else on the box. flight-tracker is a systemd unit on
+# 127.0.0.1:8080 and is not touched by this file.
+#
+# The image is not pinned here: the sync resolves it. deploy/vm-sync.sh
+# (portfolio_sync) reads portfolio's main SHA, waits for its CI, pulls
+# ghcr.io/petterfranzen/portfolio:sha-<sha>, reads the digest back, writes
+# PORTFOLIO_IMAGE into /var/lib/agent-manager/portfolio.env (root-only) and
+# brings this file up with --env-file. To do it by hand, that file must exist:
+#   docker compose -f deploy/portfolio/compose.yaml \
+#     --env-file /var/lib/agent-manager/portfolio.env up -d
+
+name: portfolio
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  portfolio:
+    image: ${PORTFOLIO_IMAGE:?set by deploy/vm-sync.sh in /var/lib/agent-manager/portfolio.env}
+    container_name: portfolio
+    restart: unless-stopped
+    # Loopback only: the host's cloudflared is the sole way in, as for every
+    # other service on this box.
+    ports:
+      - "127.0.0.1:8081:80"
+    # nginx's entrypoint chowns its cache directories and its workers drop from
+    # root to the nginx user, so these three are genuinely required (found
+    # deploying portfolio/deploy/docker-compose.yml for real: with a bare
+    # cap_drop the container restart-loops on chown and never serves).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    # A static nginx idles at ~10-25 MB RSS; a hard cap of 96 MB kills a runaway
+    # inside the container instead of pushing flight-tracker's page cache out.
+    mem_limit: 96m
+    mem_reservation: 64m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
