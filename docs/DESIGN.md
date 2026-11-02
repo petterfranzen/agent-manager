@@ -91,6 +91,16 @@ Anyone who can merge to `main` can run code as root on the VM, so `main` is
 protected by a ruleset (PR required, green CI). Setup is in
 [RUNBOOK.md](RUNBOOK.md), step 10.
 
+The same script also pulls the **portfolio** (docs/DECISIONS.md, 2026-11-01).
+On every tick, before the early exits above and independently of this repo's
+`main`, `portfolio_sync` reads portfolio `main` with a `git ls-remote`, waits
+for that commit's CI, pulls `ghcr.io/petterfranzen/portfolio:sha-<sha>`, reads
+the digest back, writes it to `/var/lib/agent-manager/portfolio.env` and
+recreates the one container in `deploy/portfolio/compose.yaml` on
+`127.0.0.1:8081`. A portfolio failure is logged and retried on the next tick;
+it never holds up agent-manager's own sync. The image is pinned by digest at
+run time, so a moved tag cannot change what runs.
+
 ## Models (OpenRouter, ZDR endpoints only)
 
 | Use | Model | $/M tokens in / out |
@@ -221,8 +231,12 @@ Claude are in [`../CLAUDE.md`](../CLAUDE.md).
 
 ## Domains
 
-`sectionnine.dev` is the Hetzner VM's domain (Section 9: the agents and, after
-its move, flight-tracker). `pastabake.cloud` is the homelab's.
+`pastabake.cloud` is the public-facing domain: the portfolio on the Hetzner VM
+at `www.pastabake.cloud`, with the bare domain 301-redirecting there, and
+flight-tracker at `flight.pastabake.cloud` on the same VM. The homelab keeps
+its own `pastabake.cloud` names (its tunnel, authentik). `sectionnine.dev` is
+the agents' domain: `hq.sectionnine.dev` on the VPS, `ops.sectionnine.dev` for
+its status page.
 
 ## Open items
 

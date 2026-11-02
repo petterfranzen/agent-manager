@@ -1,0 +1,20 @@
+# cloudflared ingress for the portfolio on the Hetzner VM.
+#
+# The VM's tunnel runs from a token (`cloudflared service install`), so its
+# ingress lives in the Cloudflare dashboard, not in a file on the box (see
+# docs/RUNBOOK.md, "What the Hetzner VM runs now"). This file is the rule in
+# the form it would take if that tunnel ever moves to a local config.yml; keep
+# the two in step. Applying it (Petter's one-time step):
+#   Zero Trust -> Networks -> Tunnels -> <the VM's tunnel> -> Public hostnames
+#     www.pastabake.cloud  ->  HTTP  localhost:8081
+
+ingress:
+  # Already on the tunnel, unchanged: flight-tracker on the same box.
+  - hostname: flight.pastabake.cloud
+    service: http://localhost:8080
+  - hostname: www.pastabake.cloud
+    service: http://localhost:8081
+    originRequest:
+      connectTimeout: 10s
+  # No catch-all on purpose: the dashboard lists each hostname by hand, and an
+  # http_status:404 fallthrough here would silently swallow a typo'd hostname.
