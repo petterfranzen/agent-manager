@@ -32,6 +32,9 @@ STATE_FILE=$STATE_DIR/sync-state.json
 # repo, its own CI, its own image. portfolio_sync() below resolves the image at
 # run time and writes PORTFOLIO_ENV, which deploy/portfolio/compose.yaml reads.
 PORTFOLIO_REPO=petterfranzen/portfolio
+# Where portfolio's main is read from. An empty AM_PORTFOLIO_GIT_URL turns the step off
+# (the tests do that; they point it at a local repo to exercise the step).
+PORTFOLIO_GIT_URL=${AM_PORTFOLIO_GIT_URL-https://github.com/$PORTFOLIO_REPO}
 PORTFOLIO_IMAGE=ghcr.io/petterfranzen/portfolio
 PORTFOLIO_COMPOSE=$REPO_DIR/deploy/portfolio/compose.yaml
 PORTFOLIO_APPLIED=$STATE_DIR/portfolio-applied
@@ -350,7 +353,8 @@ measure_memory() {
 # next tick, at most PORTFOLIO_MAX_ATTEMPTS times per commit.
 portfolio_sync() {
   local sha applied tries short tag digest prev checks why
-  sha=$(git ls-remote "https://github.com/$PORTFOLIO_REPO" refs/heads/main 2>/dev/null | awk 'NR == 1 {print $1}') || return 0
+  [ -n "$PORTFOLIO_GIT_URL" ] || return 0
+  sha=$(git ls-remote "$PORTFOLIO_GIT_URL" refs/heads/main 2>/dev/null | awk 'NR == 1 {print $1}') || return 0
   [ -n "$sha" ] || return 0
   applied=$(cat "$PORTFOLIO_APPLIED" 2>/dev/null || true)
   [ "$sha" != "$applied" ] || return 0
@@ -396,7 +400,7 @@ portfolio_sync() {
   fi
 
   prev=$(sed -n 's/^PORTFOLIO_IMAGE=//p' "$PORTFOLIO_ENV" 2>/dev/null || true)
-  if ! printf 'PORTFOLIO_IMAGE=%s\n' "$digest" | install -m 0600 -o root -g root /dev/stdin "$PORTFOLIO_ENV.new"; then
+  if ! printf 'PORTFOLIO_IMAGE=%s\n' "$digest" | install -m 0600 /dev/stdin "$PORTFOLIO_ENV.new"; then
     err "portfolio: cannot write $PORTFOLIO_ENV"
     return 1
   fi
