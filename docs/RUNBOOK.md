@@ -1,5 +1,7 @@
 # Runbook: deploy the agent stack on the VM
 
+> **2 Nov 2026:** the Paperclip stack is gone from this repo (root `compose.yaml`, `scripts/paperclip-apply.py`, `deploy/` accounting scripts, `docs/paperclip.md`, `scripts/new-secrets.sh`). Sections below that mention them describe the retired Hetzner setup and are history; the VPS sections are current.
+
 ## Section 9 on the VPS: Monday 2 Nov (do these in order)
 
 Paperclip is gone. On the VPS, Hermes and the sandbox run from `vps/compose.yaml`;
