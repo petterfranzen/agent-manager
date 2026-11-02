@@ -24,6 +24,13 @@ services:
     image: ${PORTFOLIO_IMAGE:?set by deploy/vm-sync.sh in /var/lib/agent-manager/portfolio.env}
     container_name: portfolio
     restart: unless-stopped
+    # The site's nginx config still proxies /lab-api/ to a host named
+    # docker-monitor (the Lab, which only exists on the NAS). nginx refuses to
+    # start when an upstream name does not resolve, so point the name at the
+    # container's own loopback: the site works and only /lab-api/ fails. Remove
+    # this once the Lab is gone from portfolio (section9-hq #47).
+    extra_hosts:
+      - "docker-monitor:127.0.0.1"
     # Loopback only: the host's cloudflared is the sole way in, as for every
     # other service on this box.
     ports:

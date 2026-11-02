@@ -143,6 +143,11 @@ class Decommission(unittest.TestCase):
         git("push", "-q", "origin", "HEAD:main", cwd=w)
         sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=w, check=True,
                              capture_output=True, text=True).stdout.strip()
+        (self.repo / "deploy" / "portfolio").mkdir(exist_ok=True)
+        (self.repo / "deploy" / "portfolio" / "compose.yaml").write_text("services: {}\n")
+        git("add", ".", cwd=self.repo)
+        git("commit", "-qm", "portfolio compose", cwd=self.repo)
+        git("push", "-q", "origin", "HEAD:main", cwd=self.repo)
         (self.t / "bin" / "curl").write_text(FAKE_CURL)
         (self.t / "bin" / "curl").chmod(0o755)
         return str(o), sha
@@ -159,7 +164,7 @@ class Decommission(unittest.TestCase):
         env = self.t / "state" / "portfolio.env"
         self.assertEqual(env.read_text(), "PORTFOLIO_IMAGE=ghcr.io/petterfranzen/portfolio@sha256:" + "a" * 64 + "\n")
         self.assertEqual(oct(env.stat().st_mode & 0o777), "0o600")
-        self.assertEqual((self.t / "state" / "portfolio-applied").read_text().strip(), sha)
+        self.assertTrue((self.t / "state" / "portfolio-applied").read_text().startswith(sha + "-"))
 
     def test_portfolio_second_tick_does_nothing(self):
         url, _ = self.portfolio_origin()
@@ -168,6 +173,19 @@ class Decommission(unittest.TestCase):
         r = self.run_sync(AM_PORTFOLIO_GIT_URL=url)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.calls(), before)
+
+    def test_portfolio_is_reapplied_when_the_compose_file_changes(self):
+        url, _ = self.portfolio_origin()
+        self.run_sync(AM_PORTFOLIO_GIT_URL=url)
+        ups = lambda: [c for c in self.calls() if c.startswith("docker compose --project-name portfolio")]
+        self.assertEqual(len(ups()), 1)
+        (self.repo / "deploy" / "portfolio" / "compose.yaml").write_text("services: {a: {}}\n")
+        git("add", ".", cwd=self.repo)
+        git("commit", "-qm", "edit compose", cwd=self.repo)
+        git("push", "-q", "origin", "HEAD:main", cwd=self.repo)
+        r = self.run_sync(AM_PORTFOLIO_GIT_URL=url)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(ups()), 2, self.calls())
 
     def test_portfolio_waits_for_its_ci(self):
         url, _ = self.portfolio_origin()
