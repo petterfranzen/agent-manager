@@ -818,7 +818,7 @@ class TestHq(Base):
         (self.t / "secrets" / "crew-deny.txt").write_text("# private topics\nsecret-garden\n")
         self.assertEqual(self.run_hq("status")[0], 0)
         doc = self.status()
-        self.assertEqual(set(doc), {"generatedAt", "budget", "model", "agents"})
+        self.assertEqual(set(doc), {"generatedAt", "budget", "model", "agents", "tasks"})
         self.assertEqual(doc["budget"], {"usedPercent": 25, "month": doc["budget"]["month"]})     # 5 of 20, no dollars
         self.assertEqual(doc["model"], "deepseek/deepseek-v4.1-flash")
         self.assertEqual([a["name"] for a in doc["agents"]], ["Tachikoma", "Batou", "Ishikawa", "Togusa", "Saito"])
@@ -836,6 +836,38 @@ class TestHq(Base):
         raw = json.dumps(doc)
         for leak in ("private errand", "secret-garden", "Morning ops", "$", "sk-or", "section9-hq"):
             self.assertNotIn(leak, raw)
+
+    def test_tasks_carry_status_agent_and_a_public_pr_and_nothing_private(self):
+        self.board()
+        (self.t / "secrets" / "crew-deny.txt").write_text("secret-garden\n")
+        self.assertEqual(self.run_hq("status")[0], 0)
+        tasks = self.status()["tasks"]
+        by_title = {t["title"]: t for t in tasks}
+        for t in tasks:
+            self.assertEqual(set(t), {"id", "title", "agent", "status", "pr", "updated"})
+        self.assertEqual((by_title["Fix the crew page layout"]["status"], by_title["Fix the crew page layout"]["agent"]),
+                         ("working", "batou"))
+        self.assertEqual(by_title["Add dark mode"]["status"], "review")
+        self.assertEqual(by_title["Add dark mode"]["pr"], "https://github.com/petterfranzen/ghost-in-the-machine/pull/12")
+        self.assertEqual(by_title["Nightly build"]["status"], "done")
+        private = [t for t in tasks if t["title"] == "On a private task"]
+        self.assertEqual(len(private), 3)       # the label, the deny term, the private report
+        self.assertTrue(all(t["pr"] is None for t in private))
+        raw = json.dumps(tasks)
+        for leak in ("private errand", "secret-garden", "Morning ops", "$", "section9-hq"):
+            self.assertNotIn(leak, raw)
+
+    def test_without_a_deny_file_task_titles_are_not_published(self):
+        self.board()
+        self.assertEqual(self.run_hq("status")[0], 0)
+        self.assertEqual({t["title"] for t in self.status()["tasks"]}, {"On a task", "On a private task"})
+
+    def test_status_also_writes_the_board_page_and_a_copy_of_status_json(self):
+        self.board()
+        self.assertEqual(self.run_hq("status")[0], 0)
+        site = self.t / "site"
+        self.assertEqual((site / "board" / "status.json").read_text(), (site / "status.json").read_text())
+        self.assertEqual((site / "board" / "index.html").read_bytes(), (ROOT / "vps" / "board" / "index.html").read_bytes())
 
     def test_without_a_deny_file_only_states_and_on_a_task(self):
         self.board()
@@ -881,6 +913,15 @@ class TestHq(Base):
         self.stub.crew_sha, self.stub.crew["index.html"] = "tree2", "<h1>new</h1>"
         self.run_hq("crew")
         self.assertEqual((site / "index.html").read_text(), "<h1>new</h1>")
+
+    def test_the_crew_sync_leaves_the_board_folder_alone(self):
+        site = self.t / "site"
+        (site / "board").mkdir(parents=True)
+        (site / "board" / "index.html").write_text("BOARD")
+        (site / "board" / "status.json").write_text("LIVE")
+        self.assertEqual(self.run_hq("crew")[0], 0)
+        self.assertEqual((site / "board" / "index.html").read_text(), "BOARD")
+        self.assertEqual((site / "board" / "status.json").read_text(), "LIVE")
 
     def test_crew_without_an_index_changes_nothing(self):
         site = self.t / "site"
