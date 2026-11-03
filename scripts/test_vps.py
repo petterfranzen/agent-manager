@@ -128,7 +128,9 @@ class Stub:
             c = next(c for n, c in self.crew.items() if n.replace("/", "-") == name)
             return 200, {"content": base64.b64encode(c.encode()).decode()}
         if path.startswith("/ci/"):
-            return 200, {"total_count": len(self.checks), "check_runs": self.checks}
+            if path.endswith("/check-runs"):
+                return 200, {"total_count": len(self.checks), "check_runs": self.checks}
+            return self.gh(method, "/gh" + path[len("/ci"):], query, body, auth)
         if path.startswith("/gh/"):
             return self.gh(method, path, query, body, auth)
         if path == "/or/key" and self.key is not None:
@@ -233,9 +235,10 @@ class Base(unittest.TestCase):
         self.srv.server_close()
         self.tmp.cleanup()
 
-    def run_dispatch(self, cmd="run"):
+    def run_dispatch(self, cmd="run", limits=None):
         argv = [cmd, "--secrets-dir", str(self.t / "secrets"), "--state-dir", str(self.t / "state"),
                 "--roster", str(self.t / "roster.toml"), "--private-routines", str(self.t / "none.toml"),
+                "--limits", limits or str(self.t / "none-limits.toml"),
                 "--github", self.url + "/gh", "--openrouter", self.url + "/or", "--hermes", self.url + "/hermes"]
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -563,7 +566,12 @@ class TestSync(unittest.TestCase):
                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
                     "S9_REPO_DIR": str(t / "repo"), "S9_STATE_DIR": str(t / "state"), "S9_LOCK_FILE": str(t / "lock"),
                     "S9_GITHUB_API": f"http://127.0.0.1:{self.srv.server_address[1]}/ci",
+                    "S9_PINS_FILE": str(t / "pins.toml"), "S9_SECRETS_DIR": str(t / "secrets"),
+                    "S9_DISPATCH_PY": str(ROOT / "vps" / "dispatch.py"),
                     "PATH": f"{t / 'bin'}:{os.environ['PATH']}"}
+        (t / "secrets").mkdir()
+        (t / "secrets" / "sandbox.env").write_text(f"GH_TOKEN={GH}\n")
+        (t / "secrets" / "hermes.env").write_text(f"OPENROUTER_API_KEY={ORKEY}\nAPI_SERVER_KEY={HKEY}\n")
         (t / "bin").mkdir()
         (t / "bin" / "docker").write_text(f'#!/bin/sh\necho "docker $@" >> {t}/calls\n[ ! -e {t}/docker-fails ]\n')
         (t / "bin" / "docker").chmod(0o755)
@@ -593,10 +601,17 @@ class TestSync(unittest.TestCase):
         self.git("add", "-A", cwd=self.t / "origin")
         self.git("commit", "-q", "-m", "change", cwd=self.t / "origin")
 
+    def accept(self):
+        """What Petter runs on the VPS after reading a change to a guarded path."""
+        return subprocess.run(["bash", str(ROOT / "vps" / "sync.sh"), "--accept"], env=self.env, capture_output=True, text=True)
+
     def sync(self):
         p = subprocess.run(["bash", str(ROOT / "vps" / "sync.sh")], env=self.env, capture_output=True, text=True)
         calls = (self.t / "calls").read_text().splitlines() if (self.t / "calls").exists() else []
         return p, calls
+
+    def sync_issue(self):
+        return next(i for i in self.stub.issues.values() if i["title"] == "Sync")
 
     def head(self):
         return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.t / "repo", capture_output=True, text=True).stdout.strip()
@@ -621,6 +636,7 @@ class TestSync(unittest.TestCase):
 
     def test_compose_change_runs_compose_up_once(self):
         self.commit({"vps/compose.yaml": "x"})
+        self.accept()
         p, calls = self.sync()
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(len(calls), 2)
@@ -634,6 +650,7 @@ class TestSync(unittest.TestCase):
 
     def test_unit_change_reinstalls_units_and_docs_change_does_nothing(self):
         self.commit({"vps/systemd/section9-x.timer": "x"})
+        self.accept()
         self.assertEqual(self.sync()[1], ["install-units"])
         (self.t / "calls").unlink()
         self.commit({"docs/RUNBOOK.md": "x"})
@@ -643,13 +660,16 @@ class TestSync(unittest.TestCase):
 
     def test_hermes_or_sandbox_change_rebuilds(self):
         self.commit({"sandbox/Dockerfile": "x"})
+        self.accept()
         self.assertEqual(len(self.sync()[1]), 2)        # up, then the Impeccable prune
         self.commit({"hermes/config.yaml": "x"})
+        self.accept()
         self.assertEqual(len(self.sync()[1]), 4)
 
     def test_failed_apply_is_retried_three_times_then_stops_until_main_moves(self):
         (self.t / "docker-fails").write_text("")
         self.commit({"vps/compose.yaml": "x"})
+        self.accept()
         for _ in range(3):
             self.assertEqual(self.sync()[0].returncode, 1)
         self.assertEqual(len(self.sync()[1]), 3)
@@ -658,15 +678,108 @@ class TestSync(unittest.TestCase):
         self.assertIn("not retrying", p.stderr)
         (self.t / "docker-fails").unlink()
         self.commit({"vps/compose.yaml": "y"})      # main moves: tries again, from the last applied commit
+        self.accept()
         p, calls = self.sync()
         self.assertEqual((p.returncode, len(calls)), (0, 5))
 
-    def test_dirty_checkout_is_refused(self):
+    def test_dirty_checkout_is_refused_and_reported_on_the_board(self):
         (self.t / "repo" / "README.md").write_text("hand edit")
         self.commit({"vps/compose.yaml": "x"})
         p, calls = self.sync()
         self.assertEqual((p.returncode, calls), (1, []))
         self.assertIn("local changes", p.stderr)
+        issue = self.sync_issue()
+        self.assertEqual({l["name"] for l in issue["labels"]}, {"status:blocked"})
+        self.assertIn("local changes", issue["body"])
+        self.assertIn("README.md", issue["body"])
+
+    def test_guarded_change_is_refused_until_a_human_pins_it(self):
+        before = self.head()
+        self.commit({"vps/compose.yaml": "x"})
+        p, calls = self.sync()
+        self.assertEqual((p.returncode, calls), (1, []))
+        self.assertIn("does not pin", p.stderr)
+        self.assertEqual(self.head(), before)       # the checkout is untouched
+        issue = self.sync_issue()
+        self.assertEqual({l["name"] for l in issue["labels"]}, {"status:blocked"})
+        self.assertIn("vps/compose.yaml is new", issue["body"])
+        self.assertIn("--accept", issue["body"])
+
+    def test_accept_pins_what_a_human_read_and_the_sync_then_applies(self):
+        self.commit({"vps/compose.yaml": "x"})
+        p = self.accept()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("vps/compose.yaml", (self.t / "pins.toml").read_text())
+        self.assertEqual(oct((self.t / "pins.toml").stat().st_mode & 0o777), "0o600")
+        p, calls = self.sync()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(calls), 2)             # up, then the Impeccable prune
+        self.assertIn("Applied", self.sync_issue()["body"])
+
+    def test_an_unguarded_change_needs_no_pins_at_all(self):
+        self.commit({"docs/RUNBOOK.md": "x"})
+        p, calls = self.sync()
+        self.assertEqual((p.returncode, calls), (0, []))
+        self.assertIn("applied", p.stdout)
+
+    def test_a_commit_that_changes_sync_sh_is_applied_again_by_the_new_copy(self):
+        # The new copy's own new step, as #46's dashboard-prep.sh line was for the old
+        # sync.sh: only the re-run can reach it.
+        marker = f'  echo "new-step" >> {self.t}/marker\n'
+        text = (ROOT / "vps" / "sync.sh").read_text().replace(
+            '  changed=$(git diff --name-only "$1" "$2")\n', '  changed=$(git diff --name-only "$1" "$2")\n' + marker)
+        self.assertIn(marker, text)
+        self.commit({"vps/sync.sh": text, "vps/compose.yaml": "x"})
+        self.accept()
+        p, calls = self.sync()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("re-running it", p.stdout)
+        self.assertEqual((self.t / "marker").read_text(), "new-step\n")
+        self.assertEqual(len(calls), 4)             # once per copy: compose-up, then the Impeccable prune
+
+
+class TestGuardrails(Base):
+    """The root-only limits file: what the dispatcher refuses to take from the repo."""
+
+    def limits(self, text="", brief=None):
+        (self.t / "limits.toml").write_text(text)
+        if brief is not None:
+            (self.t / "secrets" / "briefs").mkdir(exist_ok=True)
+            (self.t / "secrets" / "briefs" / "Batou.md").write_text(brief)
+        return str(self.t / "limits.toml")
+
+    def system_message(self, limits):
+        self.stub.add(["agent:batou", "status:todo"])
+        code, _ = self.run_dispatch("run", limits=limits)
+        self.assertEqual(code, 0)
+        return self.stub.hermes_calls[0][0]["messages"][0]["content"]
+
+    def test_the_preamble_and_a_locked_brief_win_over_the_repo(self):
+        limits = self.limits('preamble = "Read-only outside your task."\n', brief="You are Batou, locked brief.")
+        self.assertEqual(self.system_message(limits),
+                         "Read-only outside your task.\n\n---\n\nYou are Batou, locked brief.")
+
+    def test_without_a_limits_file_the_repo_brief_is_used_as_before(self):
+        system = self.system_message(str(self.t / "none-limits.toml"))
+        self.assertIn("You are **Batou**", system)
+        self.assertNotIn("Read-only", system)
+
+    def test_a_run_is_cut_off_at_the_root_only_ceiling_not_the_roster_value(self):
+        limits = self.limits("[timeout_sec]\nBatou = 1\n")      # the roster says 60 s
+        self.stub.hermes = "slow"
+        n = self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch("run", limits=limits)
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:blocked"})
+        self.assertIn("timed out after 1 s", self.stub.comments[0][1])
+
+    def test_the_ceiling_is_the_root_only_value_and_the_roster_can_only_lower_it(self):
+        self.assertEqual(dispatch.ceiling({"name": "Batou", "timeout_sec": 3600}, {"Batou": 60}), 60)
+        self.assertEqual(dispatch.ceiling({"name": "Ishikawa", "timeout_sec": 60}, {"default": 30}), 30)
+        self.assertEqual(dispatch.ceiling({"name": "Saito", "timeout_sec": 60}, {}), 60)
+        caps, preamble = dispatch.limits_of(self.t / "gone.toml")
+        self.assertEqual((caps, preamble), ({}, ""))
+        self.assertEqual(dispatch.limits_of(self.limits('preamble = "p"\n[timeout_sec]\ndefault = 5\n')),
+                         ({"default": 5}, "p"))
 
 
 class TestHq(Base):
