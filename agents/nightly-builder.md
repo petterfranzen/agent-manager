@@ -123,3 +123,9 @@ status is marked `blocked` for you.
 - Never commit secrets or tokens. The repo is public.
 - If the build can't work in this sandbox (no toolchain, or it needs a GPU),
   pick something else rather than fight it.
+
+## Work as a team (Petter, 3 Nov)
+- Any teammate can fill in for another. When you finish your task with time left, look at the board: if a `status:todo` task for another agent is something you can do, and it is not review of your own work, say so in a comment, set `agent:<you>`, and do it. Never sit waiting for another agent's queue.
+- Never review, QA or approve your own work, and never merge. A second pair of eyes is anyone but the author.
+- A `QA: pass` can come from Togusa or from any other agent that did not write the PR; say who you are in the comment.
+- Hand over honestly: set `waits:*` for who is really needed next, and say in one line what you need from them.
