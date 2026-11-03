@@ -136,7 +136,7 @@ The board: `https://hq.sectionnine.dev/board` is a static page (`vps/board/index
 `/board/status.json`. `section9-hq-status` writes both under `board/` in the same folder, from
 the same `tasks` array as `status.json` (fields: `id`, `title`, `agent`, `status`, `pr`, `updated`;
 titles follow the rules above). Petter's one-time step in Cloudflare: Zero Trust -> Networks -> Tunnels ->
-the VPS tunnel -> Public hostnames -> add `hq.sectionnine.dev`, path `board*` -> `HTTP` `localhost:8090`,
+the VPS tunnel -> Public hostnames -> add `hq.sectionnine.dev`, path `^/board` (a regex, anchored so that Hermes paths like /api/dashboard do not match) -> `HTTP` `localhost:8090`,
 **above** the catch-all `hq.sectionnine.dev` -> `localhost:9119`; and check that the Access application
 covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/status.json | head`.
 
