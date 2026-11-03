@@ -115,8 +115,10 @@ def build(now, agents, issues, comments, key, model, deny):
 
     def text(issue):
         title = issue.get("title") or ""
-        if "private" in labels(issue) or base.search(title) or deny.search(title):
+        if "private" in labels(issue) or base.search(title) or (deny and deny.search(title)):
             return PRIVATE
+        if not deny:
+            return ON_TASK
         return short(title)
 
     links = {}
@@ -153,6 +155,38 @@ def build(now, agents, issues, comments, key, model, deny):
             "budgetPercent": 0,       # per-agent spend isn't tracked on the VPS
             "recent": recent[:RECENT],
         })
+    tasks = []
+    for i in issues:
+        if "pull_request" in i:
+            continue
+        title = text(i)
+        agent = "unassigned"
+        for l in labels(i):
+            if l.startswith("agent:"):
+                agent = l[6:]
+                break
+        status = "todo"
+        if "status:done" in labels(i) or i.get("state") == "closed":
+            status = "done"
+        else:
+            for s in ("blocked", "review", "working", "todo"):
+                if f"status:{s}" in labels(i):
+                    status = s
+                    break
+        pr = None
+        if title != PRIVATE:
+            u = URL.search(i.get("body") or "")
+            u = links.get(str(i["number"])) or (u.group(0) if u else None)
+            if u and u.startswith(PUBLIC_URLS):
+                pr = u
+        tasks.append({
+            "id": i["number"],
+            "title": title,
+            "agent": agent,
+            "status": status,
+            "pr": pr,
+            "updated": iso(i["updated_at"]),
+        })
     used, cap = key.get("usage_monthly"), key.get("limit")
     doc = {
         "generatedAt": iso(now),
@@ -160,6 +194,7 @@ def build(now, agents, issues, comments, key, model, deny):
                    "month": now.strftime("%Y-%m")},
         "model": model,
         "agents": out,
+        "tasks": tasks,
     }
     validate(doc, deny)
     return doc
@@ -170,14 +205,22 @@ def validate(doc, deny):
         if not ok:
             raise Failure(f"status.json invalid: {what}")
 
-    need(set(doc) == {"generatedAt", "budget", "model", "agents"} and ZULU.match(doc["generatedAt"]), "top level")
+    need(set(doc) == {"generatedAt", "budget", "model", "agents", "tasks"} and ZULU.match(doc["generatedAt"]), "top level")
     need(isinstance(doc["budget"]["usedPercent"], int) and doc["budget"]["usedPercent"] >= 0, "budget")
     for a in doc["agents"]:
         need(a["state"] in ("working", "idle") and (a["lastActiveAt"] is None or ZULU.match(a["lastActiveAt"])), "agent")
         for r in a["recent"]:
             need(ZULU.match(r["at"]) and ("url" not in r or r["url"].startswith(PUBLIC_URLS)), "recent item")
+    for t in doc["tasks"]:
+        need(isinstance(t.get("id"), int), "task id")
+        need(isinstance(t.get("title"), str), "task title")
+        need(isinstance(t.get("agent"), str), "task agent")
+        need(t.get("status") in ("todo", "working", "review", "blocked", "done"), "task status")
+        need(t.get("pr") is None or (isinstance(t["pr"], str) and t["pr"].startswith(PUBLIC_URLS)), "task pr")
+        need(isinstance(t.get("updated"), str) and ZULU.match(t["updated"]), "task updated")
     words = [a["name"] for a in doc["agents"]] + [a["now"] or "" for a in doc["agents"]] \
-        + [r["text"] for a in doc["agents"] for r in a["recent"]]
+        + [r["text"] for a in doc["agents"] for r in a["recent"]] \
+        + [t["title"] for t in doc["tasks"]]
     pattern = re.compile(DENY_BASE + ("|" + deny.pattern if deny else ""), re.IGNORECASE)
     need(not any(pattern.search(w) for w in words), "a private term would be published")
     need(not re.search(r"\$\s?\d|cents|usd", json.dumps(doc), re.IGNORECASE), "a money amount would be published")
@@ -220,8 +263,15 @@ def do_status(a):
     comments = http(f"{board}/issues/comments?since={since}&per_page=100", ghtoken) or []
     key = (http(a.openrouter.rstrip("/") + "/key", orkey) or {}).get("data") or {}
     doc = build(now, agents, issues, comments, key, model, load_deny(a.secrets_dir))
-    write_atomic(Path(a.site_dir) / "status.json", (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode())
-    print(f"hq status: {len(doc['agents'])} agents, {sum(x['state'] == 'working' for x in doc['agents'])} working")
+    data = (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode()
+    write_atomic(Path(a.site_dir) / "status.json", data)
+    try:
+        board_html = (Path(a.repo_root) / "vps" / "board" / "index.html").read_bytes()
+    except OSError as e:
+        raise Failure(f"cannot read the board page: {e}") from None
+    write_atomic(Path(a.site_dir) / "board" / "index.html", board_html)
+    write_atomic(Path(a.site_dir) / "board" / "status.json", data)
+    print(f"hq status: {len(doc['agents'])} agents, {sum(x['state'] == 'working' for x in doc['agents'])} working, {len(doc['tasks'])} tasks")
 
 
 def do_crew(a):
@@ -252,7 +302,7 @@ def do_crew(a):
         write_atomic(site / rel, base64.b64decode(blob["content"]))
     for p in sorted(site.rglob("*"), reverse=True):      # files and folders no longer in crew/
         rel = p.relative_to(site).as_posix()
-        if rel == "status.json" or rel.endswith(".tmp"):
+        if rel == "status.json" or rel.endswith(".tmp") or rel == "board" or rel.startswith("board/"):
             continue
         if p.is_file() and rel not in files:
             p.unlink()

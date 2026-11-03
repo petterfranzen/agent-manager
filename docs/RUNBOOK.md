@@ -109,6 +109,14 @@ Private tasks show as "On a private task": any issue labelled `private`, and any
 a term in `/etc/section9/crew-deny.txt` (one per line, root-only). Without that file only agent
 states and "On a task" are published. Create the file before you expect titles on the page.
 
+The board: `https://hq.sectionnine.dev/board` is a static page (`vps/board/index.html`) that fetches
+`/board/status.json`. `section9-hq-status` writes both under `board/` in the same folder, from
+the same `tasks` array as `status.json` (fields: `id`, `title`, `agent`, `status`, `pr`, `updated`;
+titles follow the rules above). Petter's one-time step in Cloudflare: Zero Trust -> Networks -> Tunnels ->
+the VPS tunnel -> Public hostnames -> add `hq.sectionnine.dev`, path `board*` -> `HTTP` `localhost:8090`,
+**above** the catch-all `hq.sectionnine.dev` -> `localhost:9119`; and check that the Access application
+covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/status.json | head`.
+
 `section9-spend.timer` (hourly) keeps the open `Spend` issue in `section9-hq` current: month, cap,
 left and today from OpenRouter, with an "As of" time. Pin it in the GitHub UI if the automatic pin
 failed (the log says so). If "As of" is over 3 hours old, check `systemctl status section9-spend.timer`.
