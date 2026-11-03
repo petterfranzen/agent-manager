@@ -61,4 +61,8 @@ fi
 # 5. Timers: dispatcher, routines, sync (pulls main once CI is green), HQ page, spend, CPU.
 "$here/install-units.sh"
 
+# 6. Pin the guardrail paths this checkout carries, so the sync accepts them
+#    (root-only /etc/section9/pins.toml; see docs/RUNBOOK.md, VPS step 6).
+S9_REPO_DIR="$(dirname "$here")" "$here/sync.sh" --accept
+
 echo "Done. Check: python3 -I $here/dispatch.py status && python3 -I $here/dispatch.py cpu"

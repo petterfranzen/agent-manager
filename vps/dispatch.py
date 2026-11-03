@@ -6,11 +6,15 @@
   dispatch.py status     queue, spend and Hermes reachability (for the runbook)
   dispatch.py spend      update the open "Spend" issue with OpenRouter's figures (hourly)
   dispatch.py cpu        update the open "CPU credits" issue with this VPS's own CPU figures (hourly)
+  dispatch.py note       update the open "Sync" issue: what the VPS did with itself
 
 Run by systemd timers on the VPS (vps/systemd). One run at a time (lock file).
 Standard library only. Secrets come from root-only files and are never printed:
   OPENROUTER_API_KEY, API_SERVER_KEY  in <secrets-dir>/hermes.env
   GH_TOKEN                            in <secrets-dir>/sandbox.env
+Optional, root-only, outside the repo (a commit to it cannot change them):
+  <secrets-dir>/limits.toml           per-agent run ceiling and the guardrail preamble
+  <secrets-dir>/briefs/<Name>.md      an agent's brief, when it must not live in the repo
 """
 
 import argparse
@@ -164,9 +168,31 @@ def load_roster(path):
     return data.get("agents", []), data
 
 
-def prompt_for(agent, issue):
-    """(system, user): the agent's brief, then the task."""
-    brief = (Path(agent["_root"]) / agent["brief"]).read_text(encoding="utf-8")
+def limits_of(path):
+    """(ceilings, preamble) from the root-only limits file. No file: no ceilings, no preamble."""
+    try:
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError:
+        return {}, ""
+    except ValueError as e:
+        raise Failure(f"cannot read {path}: {e}") from None
+    return data.get("timeout_sec", {}), data.get("preamble", "")
+
+
+def ceiling(agent, caps):
+    """The agent's run timeout, never above the root-only ceiling for that agent."""
+    want = int(agent.get("timeout_sec", DEFAULT_TIMEOUT))
+    cap = caps.get(agent["name"], caps.get("default"))
+    return min(want, int(cap)) if cap is not None else want
+
+
+def prompt_for(agent, issue, preamble="", briefs_dir=None):
+    """(system, user): the guardrail preamble, the agent's brief, then the task."""
+    locked = Path(briefs_dir) / f"{agent['name']}.md" if briefs_dir else None
+    source = locked if locked is not None and locked.exists() else Path(agent["_root"]) / agent["brief"]
+    brief = source.read_text(encoding="utf-8")
+    if preamble:
+        brief = preamble.strip() + "\n\n---\n\n" + brief
     name, n = agent["name"], issue["number"]
     return brief, (
         f"Task #{n}: {issue['title']}\n{issue['html_url']}\n\n{issue.get('body') or '(no description)'}\n\n"
@@ -216,6 +242,7 @@ def recover_stale(board, agents, log, now=None):
 
 def run_one(a, board, hermes_key, orkey, log):
     agents, _ = load_roster(a.roster)
+    caps, preamble = limits_of(a.limits)
     for ag in agents:
         ag["_root"] = a.repo_root
     recover_stale(board, agents, log)
@@ -231,10 +258,10 @@ def run_one(a, board, hermes_key, orkey, log):
         board.comment(n, why)
         log(f"#{n} blocked: spend")
         return
-    system, user = prompt_for(agent, issue)
+    system, user = prompt_for(agent, issue, preamble, Path(a.secrets_dir) / "briefs")
     board.set_status(issue, "working")
     log(f"#{n} -> {agent['name']}")
-    timeout = int(agent.get("timeout_sec", DEFAULT_TIMEOUT))
+    timeout = ceiling(agent, caps)     # the roster may lower a run, never raise it past limits.toml
     out, problem = "", ""
     try:
         reply = http("POST", a.hermes.rstrip("/") + "/v1/chat/completions", hermes_key, timeout=timeout,
@@ -433,6 +460,26 @@ def credits(a, board, log):
     log(f"cpu: opened #{issue['number']}")
 
 
+def note(a, board, log):
+    """Keep one open issue titled "Sync" current: what the VPS did with itself. Rewrites the body."""
+    if a.state not in ("ok", "blocked"):
+        raise Failure("note needs --state ok or --state blocked")
+    now = dt.datetime.now(dt.timezone.utc)
+    body = "\n".join([
+        f"**VPS sync: {a.state}.** As of {now:%Y-%m-%d %H:%M} UTC.", "",
+        a.message, "",
+        "Rewritten by `vps/sync.sh` on the VPS; don't edit. Leave this issue open."])
+    labels = ["status:blocked"] if a.state == "blocked" else []
+    open_ = board.call("GET", "/issues?state=open&sort=created&direction=asc&per_page=100") or []
+    issue = next((i for i in open_ if i["title"] == "Sync" and "pull_request" not in i), None)
+    if issue:
+        board.call("PATCH", f"/issues/{issue['number']}", {"body": body, "labels": labels})
+        log(f"sync: #{issue['number']} {a.state}")
+        return
+    issue = board.call("POST", "/issues", {"title": "Sync", "body": body, "labels": labels})
+    log(f"sync: opened #{issue['number']} ({a.state})")
+
+
 def local_only(url, what):
     u = urllib.parse.urlsplit(url)
     if u.scheme != "https" and u.hostname not in LOOPBACK:
@@ -441,12 +488,16 @@ def local_only(url, what):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("cmd", nargs="?", default="run", choices=["run", "routines", "status", "spend", "cpu"])
+    p.add_argument("cmd", nargs="?", default="run", choices=["run", "routines", "status", "spend", "cpu", "note"])
     p.add_argument("--secrets-dir", default="/etc/section9")
     p.add_argument("--state-dir", default="/var/lib/section9")
     p.add_argument("--repo-root", default=str(ROOT))
     p.add_argument("--roster", default=str(ROOT / "agents" / "roster.toml"))
     p.add_argument("--private-routines", default="/etc/section9/routines.private.toml")
+    p.add_argument("--limits", default="/etc/section9/limits.toml",
+                   help="root-only run ceilings and the guardrail preamble")
+    p.add_argument("--state", default="", help="note: ok or blocked")
+    p.add_argument("--message", default="", help="note: what the VPS did")
     p.add_argument("--github", default="https://api.github.com")
     p.add_argument("--openrouter", default="https://openrouter.ai/api/v1")
     p.add_argument("--hermes", default="http://127.0.0.1:8642")
@@ -475,6 +526,9 @@ def main(argv=None):
             return 0
         if a.cmd == "cpu":
             credits(a, board, log)
+            return 0
+        if a.cmd == "note":
+            note(a, board, log)
             return 0
         Path(a.state_dir).mkdir(parents=True, exist_ok=True)
         with open(Path(a.state_dir) / "dispatch.lock", "w") as lock:

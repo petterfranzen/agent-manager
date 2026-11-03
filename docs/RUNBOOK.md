@@ -73,6 +73,29 @@ From then on `section9-sync.timer` (every 5 min) fast-forwards `/opt/agent-manag
 for changes to `vps/compose.yaml`, `sandbox/` or `hermes/`; the systemd units for changes
 to `vps/systemd/`. It logs to the journal: `journalctl -u section9-sync -n 20`. It refuses
 a checkout with local changes and stops retrying a commit after 3 failed applies.
+
+The paths in agent-manager that become root execution or a guardrail on the VPS
+(`.github/workflows/`, `vps/`, `sandbox/`, `hermes/`) are pinned by sha256 in the root-only
+`/etc/section9/pins.toml`, which `install.sh` writes once. The sync applies a commit that
+changes one of them only after you have read the change and run
+```bash
+sudo /opt/agent-manager/vps/sync.sh --accept   # fetches and re-pins origin/main
+```
+It stops instead, and says so on one open issue titled **Sync** in `section9-hq` (created the
+first time it has something to say); a dirty checkout and a failed apply are reported on the
+same issue. Nothing else needs a pin, and `--accept` is the only command to know.
+The dispatcher's own limits come from the same directory, root-only, by hand:
+```toml
+# /etc/section9/limits.toml -- optional; without it the roster decides (as before)
+preamble = """
+You are read-only outside your task's repository: no change to /opt/agent-manager,
+/etc/section9 or /var/lib/section9, and none to your own brief.
+"""
+[timeout_sec]
+default = 3600      # a per-agent ceiling; agents/roster.toml can only lower it
+Tachikoma = 10800
+```
+`/etc/section9/briefs/<Name>.md`, if it exists, is that agent's brief instead of the repo's.
 `install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
 the sandbox refuses the `0600` file).
 
