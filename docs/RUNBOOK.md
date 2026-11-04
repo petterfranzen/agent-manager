@@ -235,7 +235,7 @@ For the Hetzner CX23 that runs flight-tracker (Ubuntu 26.04). Run everything as 
 Hetzner web console, or over SSH once that works. About 30–45 minutes, mostly waiting.
 
 **Before you start, you have:**
-- the OpenRouter key (`sk-or-v1-…`, $20/month budget) in your password manager;
+- the OpenRouter key (`sk-or-v1-…`, $40/month budget) in your password manager;
 - the fine-grained GitHub token `agents-ghost` (`github_pat_…`), limited to
   `ghost-in-the-machine`, in your password manager;
 - `ghost-in-the-machine` created (public, README, Pages from Actions, push
