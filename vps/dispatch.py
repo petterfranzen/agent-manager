@@ -6,6 +6,7 @@
   dispatch.py status     queue, spend and Hermes reachability (for the runbook)
   dispatch.py spend      update the open "Spend" issue with OpenRouter's figures (hourly)
   dispatch.py cpu        update the open "CPU credits" issue with this VPS's own CPU figures (hourly)
+  dispatch.py capacity   roll the run ledger up into the open "Capacity" issue (daily)
   dispatch.py note       update the open "Sync" issue: what the VPS did with itself
 
 Run by systemd timers on the VPS (vps/systemd). One run at a time (lock file).
@@ -18,9 +19,11 @@ Optional, root-only, outside the repo (a commit to it cannot change them):
 """
 
 import argparse
+import calendar
 import datetime as dt
 import fcntl
 import json
+import os
 import re
 import sys
 import time
@@ -44,6 +47,12 @@ SAMPLE_SECONDS = 5.0         # window for the /proc/stat sample behind the CPU c
 PROBE_SECONDS = 1.0          # length of the throttling probe; ~18 credits a day at this size
 BASELINE = 0.25              # share of one vCPU a Hostinger VPS uses without spending credits
 BALANCE_MAX = 8100.0         # core-seconds in a full balance: 3 h x 3600 x (1 vCPU - 25%)
+SAFE_CREDITS_DAY = 8100.0    # one full balance a day is the guidance the Capacity issue measures against
+CLK_TCK = float(os.sysconf("SC_CLK_TCK"))   # /proc/stat counts in USER_HZ ticks, not seconds
+LEDGER_NAME = "runs.jsonl"   # one JSON line per run, under --state-dir (never in the repo)
+LEDGER_VERSION = 1
+TYPE_PREFIXES = {"qa", "review", "design", "research", "plan", "check", "sweep", "build",
+                 "triage", "fix", "nightly", "report", "audit"}
 SANDBOX_CORES, HERMES_CORES = 0.4, 0.3    # keep in step with vps/compose.yaml
 PER_PAGE, MAX_PAGES = 100, 20     # board reads follow Link: rel="next" up to this; more than that is refused
 
@@ -240,6 +249,45 @@ def recover_stale(board, agents, log, now=None):
         log(f"#{n} blocked: stale working")
 
 
+def hold_low_priority(todo, a, orkey, log, now=None):
+    """The pacing rule, when the root-only limits file turns it on.
+
+    Under the line: every task is admitted. Over the line, or with the CPU limit on: only
+    `priority:low` issues wait; ordinary work still runs. No switch or no readable figures
+    means no change (the existing spend check and $1 reserve still fail closed first).
+    """
+    setting = pacing_settings(a.limits)
+    if not setting.get("enabled"):
+        return todo
+    now = now or dt.datetime.now(dt.timezone.utc)
+    reasons = []
+    usage = key_usage(a.openrouter, orkey)
+    try:
+        cap, spend = float(usage["limit"]), float(usage["usage_monthly"])
+        p = month_pace(now, cap, spend)
+        if float(spend) > p["linear_to_date"] + p["linear_per_day"] * float(setting.get("slack_days", 1.0)):
+            reasons.append(f"spend ${spend:.2f} is ahead of the ${p['linear_to_date']:.2f} pace line")
+    except (KeyError, TypeError, ValueError):
+        log("pacing: spend figures unreadable; holding low-priority work (fail closed)")
+        reasons.append("spend figures unreadable")
+    try:
+        first = cpu_sample()
+        time.sleep(float(setting.get("sample_seconds", 1.0)))
+        d = cpu_delta(first, cpu_sample())
+        limit = float(setting.get("steal_pct", 10.0))
+        if d["steal_pct"] > limit:
+            reasons.append(f"steal {d['steal_pct']:.1f}% is over {limit:.0f}% (Hostinger's limit is on)")
+    except (Failure, OSError, KeyError, ValueError) as e:
+        log(f"pacing: cannot read CPU ({e}); holding low-priority work (fail closed)")
+        reasons.append("CPU figures unreadable")
+    if not reasons:
+        return todo
+    kept = [(i, ag) for i, ag in todo if "priority:low" not in {l["name"] for l in i["labels"]}]
+    if len(kept) < len(todo):
+        log(f"pacing: holding {len(todo) - len(kept)} low-priority task(s): {'; '.join(reasons)}")
+    return kept
+
+
 def run_one(a, board, hermes_key, orkey, log):
     agents, _ = load_roster(a.roster)
     caps, preamble = limits_of(a.limits)
@@ -250,19 +298,31 @@ def run_one(a, board, hermes_key, orkey, log):
     todo = [(i, ag) for i, ag in todo if ag]
     if not todo:
         return
-    issue, agent = todo[0]
-    n = issue["number"]
     ok, why = spend_ok(a.openrouter, orkey)
     if not ok:
+        issue = todo[0][0]
         board.set_status(issue, "blocked")
-        board.comment(n, why)
-        log(f"#{n} blocked: spend")
+        board.comment(issue["number"], why)
+        log(f"#{issue['number']} blocked: spend")
         return
+    waiting = len(todo)
+    todo = hold_low_priority(todo, a, orkey, log)
+    if not todo:
+        log("pacing: nothing left to admit")
+        return
+    issue, agent = todo[0]
+    n = issue["number"]
     system, user = prompt_for(agent, issue, preamble, Path(a.secrets_dir) / "briefs")
     board.set_status(issue, "working")
     log(f"#{n} -> {agent['name']}")
     timeout = ceiling(agent, caps)     # the roster may lower a run, never raise it past limits.toml
-    out, problem = "", ""
+    started = dt.datetime.now(dt.timezone.utc)
+    usage_before, cpu_before = key_usage(a.openrouter, orkey), None
+    try:
+        cpu_before = cpu_sample()
+    except (Failure, OSError):
+        pass
+    out, problem, reply = "", "", None
     try:
         reply = http("POST", a.hermes.rstrip("/") + "/v1/chat/completions", hermes_key, timeout=timeout,
                      headers={"X-Hermes-Session-Id": f"issue-{n}"},
@@ -271,15 +331,44 @@ def run_one(a, board, hermes_key, orkey, log):
         out = (((reply or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     except Failure as e:
         problem = str(e)
+    ended = dt.datetime.now(dt.timezone.utc)
     # Re-read: the agent reports with s9-task, which changes the labels.
     now = board.call("GET", f"/issues/{n}")
     labels = {l["name"] for l in now["labels"]}
     if problem or "status:working" in labels:
+        outcome = ("timeout" if "timed out" in problem.lower() else "blocked") if problem else "no-output"
         board.set_status(now, "blocked")
         board.comment(n, f"Blocked by the dispatcher: {problem or 'the run ended without a final status'}.\n\nLast lines of output:\n```\n{tail(out)}\n```")
         log(f"#{n} blocked: {problem or 'no final status'}")
     else:
+        outcome = "blocked" if "status:blocked" in labels else "ok"
         log(f"#{n} finished")
+    usage_after = key_usage(a.openrouter, orkey)
+    cpu, cpu_after = None, None
+    try:
+        if cpu_before is not None:
+            cpu_after = cpu_sample()
+            cpu = cpu_delta(cpu_before, cpu_after)
+    except (Failure, OSError):
+        cpu, cpu_after = None, None
+    tokens = None
+    if isinstance(reply, dict) and isinstance(reply.get("usage"), dict):
+        tokens = {k: v for k, v in reply["usage"].items() if isinstance(v, (int, float))}
+    record = {
+        "v": LEDGER_VERSION, "issue": n, "type": task_type(issue.get("title")),
+        "agent": agent["name"], "role": agent.get("role", ""),
+        "model": agent.get("model", "hermes-agent"),
+        "start": started.isoformat(timespec="seconds"), "end": ended.isoformat(timespec="seconds"),
+        "seconds": round(max((ended - started).total_seconds(), 0.0), 3),
+        "outcome": outcome, "queue_before": waiting, "held_low_priority": waiting - len(todo),
+        "usage_before": usage_before, "usage_after": usage_after,
+        "cost_usd": money_delta(usage_before, usage_after),
+        "tokens": tokens, "cpu": cpu, "cpu_before": cpu_before, "cpu_after": cpu_after,
+    }
+    try:
+        append_ledger(Path(a.state_dir) / LEDGER_NAME, record)
+    except Exception as e:                  # a ledger must never stop or fail a run
+        log(f"ledger: not written for #{n} ({e})")
 
 
 def field_matches(spec, value, lo, hi):
@@ -382,6 +471,150 @@ def spend(a, board, orkey, log):
         log(f"spend: could not pin #{issue['number']} (pin it by hand): {e}")
 
 
+def parse_when(value):
+    try:
+        return dt.datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def summarise(rows):
+    """One bucket of ledger rows: runs, busy time, money, failures and CPU credits."""
+    out = {"runs": len(rows), "seconds": 0.0, "cost": 0.0, "priced": 0,
+           "timeouts": 0, "timeout_seconds": 0.0, "credits": 0.0,
+           "outcomes": {"ok": 0, "timeout": 0, "blocked": 0, "no-output": 0}}
+    for r in rows:
+        seconds = float(r.get("seconds") or 0.0)
+        out["seconds"] += seconds
+        if isinstance(r.get("cost_usd"), (int, float)):
+            out["cost"] += float(r["cost_usd"])
+            out["priced"] += 1
+        cpu = r.get("cpu") or {}
+        out["credits"] += float(cpu.get("credits") or 0.0)
+        status = r.get("outcome")
+        if status in out["outcomes"]:
+            out["outcomes"][status] += 1
+        if status == "timeout":
+            out["timeouts"] += 1
+            out["timeout_seconds"] += seconds
+    hours = out["seconds"] / 3600.0
+    out["hours"] = hours
+    out["per_hour"] = (out["cost"] / hours) if hours > 0 and out["priced"] else None
+    return out
+
+
+def queue_idle_hours(rows):
+    """Upper bound on hours with work waiting and no run: the gap before a run that saw a queue.
+
+    The ledger records only runs, so this counts a gap when the next run started with more
+    than its own issue waiting. It can overstate (the task may have appeared mid-gap) and
+    never includes time before the first recorded run.
+    """
+    ordered = sorted((r for r in rows if parse_when(r.get("start")) and parse_when(r.get("end"))),
+                     key=lambda r: r["start"])
+    idle = 0.0
+    for prev, nxt in zip(ordered, ordered[1:]):
+        if int(nxt.get("queue_before") or 0) > 1:
+            idle += max((parse_when(nxt["start"]) - parse_when(prev["end"])).total_seconds(), 0.0) / 3600.0
+    return idle
+
+
+def money(value):
+    return f"${value:.2f}" if isinstance(value, (int, float)) else "—"
+
+
+def rate(hours, cost, priced):
+    """$/hour only when the sample is long enough to mean something (72 s)."""
+    return f"${cost / hours:.2f}" if hours >= 0.02 and priced else "—"
+
+
+def table(rows, label):
+    lines = [f"| {label} | runs | busy h | $ | $/h | timeouts | timeout h | credits |",
+             "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for name, group in rows:
+        s = summarise(group)
+        lines.append(f"| {name} | {s['runs']} | {s['hours']:.2f} | {money(s['cost']) if s['priced'] else '—'} | "
+                     f"{rate(s['hours'], s['cost'], s['priced'])} | {s['timeouts']} | "
+                     f"{s['timeout_seconds'] / 3600.0:.2f} | {s['credits']:.0f} |")
+    return lines
+
+
+def capacity(a, board, orkey, log):
+    """Keep one open issue titled "Capacity" current: the ledger rolled up, and the pace line."""
+    now = dt.datetime.now(dt.timezone.utc)
+    usage = key_usage(a.openrouter, orkey)
+    rows = read_ledger(Path(getattr(a, "ledger", "") or (Path(a.state_dir) / LEDGER_NAME)))
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    week_start = now - dt.timedelta(days=7)
+    in_window = lambda start: [r for r in rows if parse_when(r.get("start")) and parse_when(r["start"]) >= start]  # noqa: E731
+    week, mtd = in_window(week_start), in_window(month_start)
+    ws, ms = summarise(week), summarise(mtd)
+    lines = [f"**Capacity, rolled up by the VPS from the run ledger.** As of {now:%Y-%m-%d %H:%M} UTC.", ""]
+    cap, spend = usage.get("limit"), usage.get("usage_monthly")
+    if isinstance(cap, (int, float)) and isinstance(spend, (int, float)):
+        p = month_pace(now, cap, spend)
+        left = float(cap) - float(spend)
+        ahead = float(spend) - p["linear_to_date"]
+        today = usage.get("usage_daily")
+        lines += [f"**Pace:** {money(spend)} of {money(cap)} used; day {p['elapsed']:.1f} of {p['days']}.",
+                  f"- Fixed linear pace: {money(p['linear_per_day'])}/day, so {money(p['linear_to_date'])} "
+                  f"by now. Actual is {'ahead by ' + money(ahead) if ahead >= 0 else 'behind by ' + money(-ahead)}"
+                  f"{' (' + format(float(spend) / p['linear_to_date'], '.1f') + 'x)' if p['linear_to_date'] else ''}.",
+                  f"- Remaining-days pace (after the ${RESERVE:.0f} reserve): {money(p['remaining_per_day'])}/day "
+                  f"for {p['left_days']:.1f} days, from {money(left)} left.",
+                  f"- Today (UTC): {money(today)} used, fixed pace {money(p['linear_per_day'])}.",
+                  ""]
+    else:
+        lines += ["**Pace:** OpenRouter's cap or month-to-date usage could not be read; no pace line this run.", ""]
+    lines += ["**Last 7 days**",
+              f"- Runs: {ws['runs']}; busy: {ws['hours']:.2f} h; spend: {money(ws['cost']) if ws['priced'] else '—'}"
+              f"{' (from ' + str(ws['priced']) + (' priced run)' if ws['priced'] == 1 else ' priced runs)') if ws['priced'] else ' (no run had a readable cost delta)'}.",
+              f"- Timeouts: {ws['timeouts']} ({ws['timeout_seconds'] / 3600.0:.2f} h wasted); outcomes: "
+              + ", ".join(f"{k} {v}" for k, v in ws["outcomes"].items()) + ".",
+              f"- Queue idle (upper bound): {queue_idle_hours(week):.2f} h.",
+              f"- CPU credits: {ws['credits']:.0f} against a {SAFE_CREDITS_DAY * 7:.0f} guidance for 7 days "
+              f"({100.0 * ws['credits'] / (SAFE_CREDITS_DAY * 7):.0f}%).", "",
+              "**Month to date**",
+              f"- Runs: {ms['runs']}; busy: {ms['hours']:.2f} h; spend: {money(ms['cost']) if ms['priced'] else '—'}.",
+              f"- Timeouts: {ms['timeouts']} ({ms['timeout_seconds'] / 3600.0:.2f} h wasted); "
+              f"queue idle (upper bound): {queue_idle_hours(mtd):.2f} h.",
+              f"- CPU credits: {ms['credits']:.0f} against a {SAFE_CREDITS_DAY * max(p['elapsed'], 1):.0f} "
+              f"guidance for {max(p['elapsed'], 1):.1f} days "
+              f"({100.0 * ms['credits'] / (SAFE_CREDITS_DAY * max(p['elapsed'], 1)):.0f}%)."
+              if isinstance(cap, (int, float)) and isinstance(spend, (int, float)) else
+              f"- CPU credits: {ms['credits']:.0f}.", ""]
+    by_agent = {}
+    for r in week:
+        by_agent.setdefault(r.get("agent") or "unknown", []).append(r)
+    by_type = {}
+    for r in week:
+        by_type.setdefault(r.get("type") or "task", []).append(r)
+    lines += ["**Last 7 days by agent**"] + table(sorted(by_agent.items()), "Agent") + [""]
+    lines += ["**Last 7 days by task type**"] + table(sorted(by_type.items()), "Type") + [""]
+    stale = [r for r in rows if not isinstance(r.get("cost_usd"), (int, float))]
+    if stale:
+        lines += [f"- {len(stale)} run(s) have no cost figure: OpenRouter's usage counter did not move or "
+                  "could not be read. Nothing was guessed; collect the next run's `usage_before`/`usage_after`.", ""]
+    if not rows:
+        lines += [f"No ledger data yet. The first run appends to `{Path(a.state_dir) / LEDGER_NAME}`.", ""]
+    lines += ["Rewritten by `vps/dispatch.py capacity`; don't edit. Leave this issue open and pinned."]
+    body = "\n".join(lines)
+    open_ = board.pages("/issues?state=open&sort=created&direction=asc")
+    issue = next((i for i in open_ if i["title"] == "Capacity" and "pull_request" not in i), None)
+    if issue:
+        board.call("PATCH", f"/issues/{issue['number']}", {"body": body})
+        log(f"capacity: updated #{issue['number']}")
+        return
+    issue = board.call("POST", "/issues", {"title": "Capacity", "body": body})
+    log(f"capacity: opened #{issue['number']}")
+    try:        # pinning is GraphQL-only and needs more than issue access; best effort
+        http("POST", f"{board.api}/graphql", board.token, {
+            "query": "mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }",
+            "variables": {"id": issue["node_id"]}})
+    except (Failure, KeyError) as e:
+        log(f"capacity: could not pin #{issue['number']} (pin it by hand): {e}")
+
+
 def cpu_fields():
     """The first ``cpu`` line of /proc/stat as ints: user nice system idle iowait irq softirq steal."""
     for line in Path("/proc/stat").read_text(encoding="utf-8").splitlines():
@@ -391,8 +624,122 @@ def cpu_fields():
 
 
 def busy_seconds(fields):
-    """Core-seconds this VPS actually used in a ``cpu`` line (idle, iowait and steal are not ours)."""
-    return float(sum(fields[:3]) + sum(fields[5:7]))
+    """Core-seconds this VPS actually used in a ``cpu`` line (idle, iowait and steal are not ours).
+
+    /proc/stat counts USER_HZ ticks (normally 100 a second), not seconds. Treating them as
+    seconds made the hourly draw read ~100x too high (section9-hq #44: 117,609 credits/hour).
+    """
+    return float(sum(fields[:3]) + sum(fields[5:7])) / CLK_TCK
+
+
+def cpu_sample():
+    """A cumulative CPU snapshot, in seconds, for the run ledger."""
+    fields = cpu_fields()
+    return {"at": time.time(), "busy": busy_seconds(fields),
+            "steal": fields[7] / CLK_TCK, "total": sum(fields) / CLK_TCK}
+
+
+def cpu_delta(before, after):
+    """What one run cost in CPU: steal share, core-seconds and credits above the baseline.
+
+    Credits are core-seconds above Hostinger's free 25% baseline (section9-hq #34). This is
+    an estimate from /proc/stat: it includes everything on the VPS, not only the run, so a
+    single lane makes it attributable; two lanes do not.
+    """
+    wall = max(after["at"] - before["at"], 0.0)
+    total = max(after["total"] - before["total"], 0.0)
+    busy = max(after["busy"] - before["busy"], 0.0)
+    steal = max(after["steal"] - before["steal"], 0.0)
+    return {"wall_seconds": round(wall, 3),
+            "steal_pct": round(100.0 * steal / total, 2) if total else 0.0,
+            "core_seconds": round(busy, 3),
+            "credits": round(max(0.0, busy - BASELINE * wall), 3)}
+
+
+def key_usage(openrouter, key):
+    """OpenRouter's counters, best effort: a ledger must never stop a run or a report."""
+    try:
+        reply = http("GET", openrouter.rstrip("/") + "/key", key, timeout=10)
+    except Failure:
+        return {}
+    data = reply.get("data") if isinstance(reply, dict) else None
+    if not isinstance(data, dict):
+        return {}
+    return {name: data.get(name) for name in
+            ("usage", "usage_monthly", "usage_daily", "limit", "limit_remaining")}
+
+
+def money_delta(before, after, name="usage_monthly"):
+    """Cost of one run from two /key snapshots, or None when the counter did not move/read."""
+    try:
+        a, b = before.get(name), after.get(name)
+        if a is None or b is None:
+            return None
+        change = float(b) - float(a)
+        return round(change, 6) if change >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def task_type(title):
+    """A coarse task type from the title's prefix ('QA: ...', 'Research: ...'), for grouping only."""
+    m = re.match(r"\s*([A-Za-z]+)\s*:", title or "")
+    word = m.group(1).lower() if m else ""
+    return word if word in TYPE_PREFIXES else "task"
+
+
+def append_ledger(path, record):
+    """Append one JSON line. Raises; the caller decides that a ledger failure must not matter."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+
+
+def read_ledger(path):
+    """Every good record; a corrupt line is skipped rather than losing the whole report."""
+    rows = []
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return rows
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("start"):
+            rows.append(row)
+    return rows
+
+
+def month_pace(now, cap, spend, reserve=RESERVE):
+    """The two pace lines: fixed linear for the month, and what is left over the days left."""
+    days = calendar.monthrange(now.year, now.month)[1]
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elapsed = max((now - start).total_seconds() / 86400.0, 0.0)
+    linear = max(float(cap) - float(reserve), 0.0) / days
+    left_days = max(days - elapsed, 0.0)
+    remaining = float(cap) - float(spend) - float(reserve)
+    return {"days": days, "elapsed": elapsed, "left_days": left_days,
+            "linear_per_day": linear, "linear_to_date": linear * elapsed,
+            "remaining_per_day": (remaining / left_days) if left_days > 0 else 0.0}
+
+
+def pacing_settings(path):
+    """The root-only [pacing] table. Absent file or key: pacing is off (no behaviour change)."""
+    try:
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    value = data.get("pacing", {})
+    return value if isinstance(value, dict) else {}
+
+
+def over_pace(now, cap, spend, reserve=RESERVE, slack_days=1.0):
+    """True when month-to-date spend is more than `slack_days` ahead of the linear pace."""
+    p = month_pace(now, cap, spend, reserve)
+    return float(spend) > p["linear_to_date"] + p["linear_per_day"] * slack_days
 
 
 def cpu_ceiling():
@@ -421,11 +768,13 @@ def credits(a, board, log):
         before = json.loads(state.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         before = {}
+    if before.get("v") != 2:          # the first, tick-as-seconds snapshot: its busy value is apples to oranges
+        before = {}
     draw = None
     if before.get("at") and before.get("busy") is not None:
         hours = max((now.timestamp() - float(before["at"])) / 3600.0, 0.01)
         draw = (busy_seconds(second) - float(before["busy"]) - BASELINE * hours * 3600.0) / hours
-    state.write_text(json.dumps({"at": now.timestamp(), "busy": busy_seconds(second)}), encoding="utf-8")
+    state.write_text(json.dumps({"v": 2, "at": now.timestamp(), "busy": busy_seconds(second)}), encoding="utf-8")
     try:
         some = next(l for l in Path("/proc/pressure/cpu").read_text(encoding="utf-8").splitlines()
                     if l.startswith("some"))
@@ -488,7 +837,8 @@ def local_only(url, what):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("cmd", nargs="?", default="run", choices=["run", "routines", "status", "spend", "cpu", "note"])
+    p.add_argument("cmd", nargs="?", default="run",
+                   choices=["run", "routines", "status", "spend", "cpu", "note", "capacity"])
     p.add_argument("--secrets-dir", default="/etc/section9")
     p.add_argument("--state-dir", default="/var/lib/section9")
     p.add_argument("--repo-root", default=str(ROOT))
@@ -496,6 +846,7 @@ def main(argv=None):
     p.add_argument("--private-routines", default="/etc/section9/routines.private.toml")
     p.add_argument("--limits", default="/etc/section9/limits.toml",
                    help="root-only run ceilings and the guardrail preamble")
+    p.add_argument("--ledger", default="", help="run ledger path; default <state-dir>/runs.jsonl")
     p.add_argument("--state", default="", help="note: ok or blocked")
     p.add_argument("--message", default="", help="note: what the VPS did")
     p.add_argument("--github", default="https://api.github.com")
@@ -526,6 +877,9 @@ def main(argv=None):
             return 0
         if a.cmd == "cpu":
             credits(a, board, log)
+            return 0
+        if a.cmd == "capacity":
+            capacity(a, board, orkey, log)
             return 0
         if a.cmd == "note":
             note(a, board, log)
