@@ -339,6 +339,10 @@ class TestFailClosed(Base):
                 self.blocked("empty or not what was expected")
                 self.tearDown()
 
+    def test_a_cap_with_neither_a_remaining_balance_nor_usage_blocks(self):
+        self.stub.key = {"data": {"limit": 20, "usage_monthly": 5}}     # a cap, but no usage and no limit_remaining
+        self.blocked("neither a remaining balance nor usage")
+
     def test_a_cap_that_is_not_a_number_blocks(self):
         self.stub.key = {"data": {"limit": "lots", "limit_remaining": None}}
         self.blocked("not a number")
@@ -365,6 +369,14 @@ class TestRecovery(Base):
         self.assertIn("probably killed", self.stub.comments[0][1])
         self.assertIn("71 min", self.stub.comments[0][1])
         self.assertEqual(self.stub.labels(todo), {"agent:batou", "status:review"})     # and the queue still ran
+
+    def test_the_sweep_uses_the_root_only_ceiling_not_the_roster_value(self):
+        limits = str(self.t / "limits.toml")
+        Path(limits).write_text("[timeout_sec]\nBatou = 1800\n")      # the roster says 3600 s
+        stuck = self.stub.add(["agent:batou", "status:working"], age_min=41)    # past 1800+600 s, under 3600+600
+        self.run_dispatch("run", limits=limits)
+        self.assertEqual(self.stub.labels(stuck), {"agent:batou", "status:blocked"})
+        self.assertIn("41 min", self.stub.comments[0][1])
 
     def test_with_nothing_todo_it_still_sweeps(self):
         n = self.stub.add(["agent:saito", "status:working"], age_min=12)

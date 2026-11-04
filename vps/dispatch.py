@@ -280,6 +280,13 @@ def spend_ok(openrouter, key):
         return False, "OpenRouter's /key reply was empty or not what was expected; refusing to run until it reports the key's cap."
     if k.get("limit") is None:
         return False, "The OpenRouter key has no monthly cap (limit is null); refusing to run. Put a cap on the key, then set `status:todo` again."
+    if k.get("limit_remaining") is None and k.get("usage") is None:
+        try:
+            Decimal(str(k["limit"]))
+        except ArithmeticError:
+            pass            # a cap that is not a number is reported just below
+        else:
+            return False, "OpenRouter's /key reply has a cap but reports neither a remaining balance nor usage; refusing to run until it reports what has been spent."
     try:
         left = Decimal(str(k["limit_remaining"] if k.get("limit_remaining") is not None else Decimal(str(k["limit"])) - Decimal(str(k.get("usage", 0)))))
     except ArithmeticError:
@@ -293,14 +300,15 @@ def tail(text, n=20):
     return "\n".join((text or "").strip().splitlines()[-n:]) or "(no output)"
 
 
-def recover_stale(board, agents, log, now=None):
+def recover_stale(board, agents, caps, log, now=None):
     """Block status:working issues whose run can't still be going. Only called holding the dispatch lock,
     so no run is live: a dispatcher killed mid-run (reboot, OOM, the unit's TimeoutStartSec) leaves its issue
-    `working`, and todo() would never look at it again."""
+    `working`, and todo() would never look at it again. The age limit is the same ceiling the run itself got, so a
+    run cut off by the root-only cap is swept at that cap, not the roster's longer timeout."""
     now = now or dt.datetime.now(dt.timezone.utc)
     for issue in board.working():
         agent = agent_of(issue, agents)
-        limit = int((agent or {}).get("timeout_sec", DEFAULT_TIMEOUT)) + GRACE
+        limit = (ceiling(agent, caps) if agent else DEFAULT_TIMEOUT) + GRACE
         age = (now - dt.datetime.fromisoformat(issue["updated_at"])).total_seconds()
         if age <= limit:
             continue
@@ -355,7 +363,7 @@ def run_one(a, board, hermes_key, orkey, log):
     caps, preamble = limits_of(a.limits)
     for ag in agents:
         ag["_root"] = a.repo_root
-    recover_stale(board, agents, log)
+    recover_stale(board, agents, caps, log)
     seen, todo, unassignable = None, [], []
     for issue in board.todo():
         pool, why = candidates(issue, agents)
