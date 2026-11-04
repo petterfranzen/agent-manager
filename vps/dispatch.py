@@ -162,14 +162,76 @@ class Board:
     def comment(self, n, text):
         self.call("POST", f"/issues/{n}/comments", {"body": redact(text)[:60000]})
 
-    def set_status(self, issue, status):
+    def set_status(self, issue, status, agent=None):
         labels = [l["name"] for l in issue["labels"] if not l["name"].startswith("status:")]
+        if agent is not None:      # a pooled task becomes that agent's own, so a killed run is swept with its timeout
+            labels = [x for x in labels if not x.lower().startswith("agent:")] + ["agent:" + agent["name"].lower()]
         self.call("PATCH", f"/issues/{issue['number']}", {"labels": labels + ["status:" + status]})
 
 
+def label_names(issue):
+    return {l["name"].lower() for l in issue["labels"]}
+
+
 def agent_of(issue, agents):
-    names = {l["name"].lower() for l in issue["labels"]}
+    names = label_names(issue)
     return next((a for a in agents if f"agent:{a['name'].lower()}" in names), None)
+
+
+ANY = "any"
+AUTHOR = re.compile(r"(?im)^\s*author:\s*([A-Za-z][\w.-]*)")
+
+
+def author_of(issue):
+    """Who wrote the thing under review: an `author:<name>` label, else an `Author: <Name>` line in the body."""
+    for name in sorted(label_names(issue)):
+        if name.startswith("author:") and name[len("author:"):].strip():
+            return name[len("author:"):].strip().lower()
+    m = AUTHOR.search(issue.get("body") or "")
+    return m.group(1).strip().lower() if m else None
+
+
+def role_matches(agent, token):
+    """`agent:<role>`: a word in the agent's role or title. `agent:qa` reaches Togusa."""
+    words = ((agent.get("role") or "") + " " + (agent.get("title") or "")).lower().split()
+    return token in words
+
+
+def candidates(issue, agents):
+    """(agents who may take it, why not). An exact `agent:<name>` wins; `agent:any` or `agent:<role>`
+    is a pool. Either way the author of the thing under review is never among them."""
+    names = label_names(issue)
+    author = author_of(issue)
+    for a in agents:
+        if f"agent:{a['name'].lower()}" in names:
+            if a["name"].lower() == author:
+                return [], f"the named agent, {a['name']}, wrote it"
+            return [a], ""
+    token = next((n.split(":", 1)[1].strip() for n in names if n.startswith("agent:")), None)
+    if not token:
+        return [], "no agent label"
+    pool = list(agents) if token == ANY else [a for a in agents if role_matches(a, token)]
+    if not pool:
+        return [], f"no agent has the role {token!r}"
+    pool = [a for a in pool if a["name"].lower() != author]
+    if not pool:
+        return [], f"the author ({author}) is the only agent who could take it"
+    return pool, ""
+
+
+def activity(board, agents):
+    """Agent name -> its most recent `updated_at` on the board, from one page of the 100 most
+    recently updated issues. An agent outside that window is treated as idle longest."""
+    seen = {}
+    for issue in board.call("GET", "/issues?state=all&sort=updated&direction=desc&per_page=100") or []:
+        if "pull_request" in issue:
+            continue
+        names = label_names(issue)
+        at = issue.get("updated_at") or ""
+        for a in agents:
+            if f"agent:{a['name'].lower()}" in names and at > seen.get(a["name"], ""):
+                seen[a["name"]] = at
+    return seen
 
 
 def load_roster(path):
@@ -282,7 +344,7 @@ def hold_low_priority(todo, a, orkey, log, now=None):
         reasons.append("CPU figures unreadable")
     if not reasons:
         return todo
-    kept = [(i, ag) for i, ag in todo if "priority:low" not in {l["name"] for l in i["labels"]}]
+    kept = [t for t in todo if "priority:low" not in {l["name"] for l in t[0]["labels"]}]
     if len(kept) < len(todo):
         log(f"pacing: holding {len(todo) - len(kept)} low-priority task(s): {'; '.join(reasons)}")
     return kept
@@ -294,9 +356,24 @@ def run_one(a, board, hermes_key, orkey, log):
     for ag in agents:
         ag["_root"] = a.repo_root
     recover_stale(board, agents, log)
-    todo = [(i, agent_of(i, agents)) for i in board.todo()]
-    todo = [(i, ag) for i, ag in todo if ag]
+    seen, todo, unassignable = None, [], []
+    for issue in board.todo():
+        pool, why = candidates(issue, agents)
+        if not pool:
+            if why != "no agent label":
+                unassignable.append((issue, why))
+            continue
+        if seen is None and len(pool) > 1:
+            seen = activity(board, agents)      # one extra read, only when a task has a pool to choose from
+        pooled = not any(f"agent:{a['name'].lower()}" in label_names(issue) for a in agents)
+        todo.append((issue, min(pool, key=lambda a: (seen or {}).get(a["name"], "")), pooled))
     if not todo:
+        if unassignable:      # e.g. only its own author could take it: tell the Major instead of looping on it
+            issue, why = unassignable[0]
+            board.set_status(issue, "blocked")
+            board.comment(issue["number"], f"Blocked by the dispatcher: {why}. Relabel it for an agent who may "
+                                           f"take it, then set `status:todo` again.")
+            log(f"#{issue['number']} blocked: {why}")
         return
     ok, why = spend_ok(a.openrouter, orkey)
     if not ok:
@@ -310,10 +387,10 @@ def run_one(a, board, hermes_key, orkey, log):
     if not todo:
         log("pacing: nothing left to admit")
         return
-    issue, agent = todo[0]
+    issue, agent, pooled = todo[0]
     n = issue["number"]
     system, user = prompt_for(agent, issue, preamble, Path(a.secrets_dir) / "briefs")
-    board.set_status(issue, "working")
+    board.set_status(issue, "working", agent if pooled else None)
     log(f"#{n} -> {agent['name']}")
     timeout = ceiling(agent, caps)     # the roster may lower a run, never raise it past limits.toml
     started = dt.datetime.now(dt.timezone.utc)

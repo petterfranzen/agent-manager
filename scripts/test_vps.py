@@ -1236,5 +1236,147 @@ class TestDashboard(unittest.TestCase):
         self.assertNotIn("Midday", text)
 
 
+class TestAnyAgent(Base):
+    """agent:any and agent:<role>: the pool takes the task, never its author, least recent work first."""
+
+    ROSTER = """
+[[agents]]
+name = "Batou"
+brief = "agents/coder.md"
+role = "engineer"
+timeout_sec = 60
+
+[[agents]]
+name = "Ishikawa"
+brief = "agents/researcher.md"
+role = "researcher"
+timeout_sec = 60
+
+[[agents]]
+name = "Togusa"
+brief = "agents/backup-coordinator.md"
+role = "general"
+title = "QA and UI/UX reviewer"
+timeout_sec = 60
+
+[[agents]]
+name = "Saito"
+brief = "agents/ops.md"
+role = "devops"
+timeout_sec = 60
+"""
+
+    def setUp(self):
+        super().setUp()
+        (self.t / "roster.toml").write_text(self.ROSTER)
+
+    def worked(self, labels, stamp):
+        n = self.stub.add(labels)
+        self.stub.issues[n]["updated_at"] = stamp
+        return n
+
+    def system_and_user(self):
+        body, auth, session = self.stub.hermes_calls[0]
+        return body["messages"][0]["content"], body["messages"][1]["content"], session
+
+    def test_any_takes_the_least_recently_active_agent_not_the_author(self):
+        self.worked(["agent:batou", "status:done"], "2026-11-03T12:00:00Z")
+        self.worked(["agent:ishikawa", "status:done"], "2026-11-03T11:00:00Z")
+        self.worked(["agent:togusa", "status:done"], "2026-11-03T10:00:00Z")
+        self.worked(["agent:saito", "status:done"], "2026-11-03T09:00:00Z")
+        n = self.stub.add(["agent:any", "status:todo", "author:batou"], "QA Batou's PR")
+        code, _ = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.stub.hermes_calls), 1)
+        system, user, session = self.system_and_user()
+        self.assertIn("You are **Saito**", system)            # oldest activity, and not the author
+        self.assertNotIn("You are **Batou**", system)
+        self.assertIn(f"s9-task --as Saito status {n}", user)
+        self.assertEqual(session, f"issue-{n}")
+        self.assertEqual(self.stub.labels(n), {"agent:saito", "author:batou", "status:review"})
+
+    def test_any_skips_an_author_who_would_otherwise_be_oldest(self):
+        self.worked(["agent:saito", "status:done"], "2026-11-03T12:00:00Z")
+        self.worked(["agent:togusa", "status:done"], "2026-11-03T11:00:00Z")
+        self.worked(["agent:ishikawa", "status:done"], "2026-11-03T10:00:00Z")
+        self.worked(["agent:batou", "status:done"], "2026-11-03T08:00:00Z")   # oldest, but wrote it
+        n = self.stub.add(["agent:any", "status:todo", "author:batou"], "Review Batou's work")
+        self.run_dispatch()
+        self.assertEqual(len(self.stub.hermes_calls), 1)
+        system = self.system_and_user()[0]
+        self.assertIn("You are **Ishikawa**", system)
+        self.assertNotIn("You are **Batou**", system)
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "author:batou", "status:review"})
+
+    def test_an_author_named_in_the_body_is_also_excluded(self):
+        n = self.stub.add(["agent:any", "status:todo"], "QA the PR")
+        self.stub.issues[n]["body"] = "Author: Batou\n\nPlease review."
+        self.run_dispatch()
+        system = self.system_and_user()[0]
+        self.assertNotIn("You are **Batou**", system)
+
+    def test_a_named_agent_who_wrote_it_is_blocked_not_run(self):
+        n = self.stub.add(["agent:batou", "status:todo", "author:batou"], "Review Batou's PR")
+        code, _ = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.hermes_calls, [])
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "author:batou", "status:blocked"})
+        self.assertIn("wrote it", self.stub.comments[0][1])
+        self.assertIn("status:todo", self.stub.comments[0][1])
+
+    def test_a_role_label_reaches_only_an_agent_with_that_role(self):
+        n = self.stub.add(["agent:engineer", "status:todo", "author:ishikawa"], "Fix the bug")
+        self.run_dispatch()
+        self.assertEqual(len(self.stub.hermes_calls), 1)
+        self.assertIn("You are **Batou**", self.system_and_user()[0])
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "author:ishikawa", "status:review"})
+
+    def test_a_role_with_only_its_author_blocks_instead_of_self_reviewing(self):
+        n = self.stub.add(["agent:qa", "status:todo", "author:togusa"], "QA Togusa's own PR")
+        self.run_dispatch()
+        self.assertEqual(self.stub.hermes_calls, [])
+        self.assertEqual(self.stub.labels(n), {"agent:qa", "author:togusa", "status:blocked"})
+        self.assertIn("the author (togusa)", self.stub.comments[0][1])
+
+    def test_oldest_any_task_still_goes_first(self):
+        first = self.stub.add(["agent:any", "status:todo"], "First")
+        second = self.stub.add(["agent:any", "status:todo"], "Second")
+        self.run_dispatch()
+        self.assertEqual(len(self.stub.hermes_calls), 1)
+        self.assertIn("First", self.system_and_user()[1])
+        self.assertEqual(self.stub.labels(first), {"agent:batou", "status:review"})
+        self.assertEqual(self.stub.labels(second), {"agent:any", "status:todo"})
+
+    def test_a_named_task_is_still_taken_by_its_named_agent(self):
+        n = self.stub.add(["agent:ishikawa", "status:todo"])
+        self.run_dispatch()
+        self.assertIn("You are **Ishikawa**", self.system_and_user()[0])
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:review"})
+
+    def test_pooled_task_is_recorded_in_the_ledger_under_the_agent_it_went_to(self):
+        self.worked(["agent:batou", "status:done"], "2026-11-03T12:00:00Z")
+        self.worked(["agent:ishikawa", "status:done"], "2026-11-03T11:00:00Z")
+        self.worked(["agent:togusa", "status:done"], "2026-11-03T10:00:00Z")
+        self.worked(["agent:saito", "status:done"], "2026-11-03T09:00:00Z")
+        n = self.stub.add(["agent:any", "status:todo"])
+        self.run_dispatch()
+        (row,) = [json.loads(l) for l in (self.t / "state" / "runs.jsonl").read_text().splitlines()]
+        self.assertEqual((row["issue"], row["agent"], row["outcome"]), (n, "Saito", "ok"))
+
+    def test_pacing_holds_a_low_priority_pooled_task_and_runs_the_next_one(self):
+        low = self.stub.add(["agent:any", "status:todo", "priority:low"])
+        normal = self.stub.add(["agent:ishikawa", "status:todo"])
+        path = self.t / "limits.toml"
+        path.write_text("[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n")
+        with mock.patch.object(dispatch, "month_pace",
+                               return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
+                                             "days": 30, "left_days": 29, "remaining_per_day": 1}), \
+                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+            self.run_dispatch(limits=str(path))
+        self.assertIn("status:todo", self.stub.labels(low))
+        self.assertIn("agent:any", self.stub.labels(low))
+        self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
+
+
 if __name__ == "__main__":
     unittest.main()
