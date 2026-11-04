@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 capacity roll-up, once a day
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=24h
+
+[Install]
+WantedBy=timers.target

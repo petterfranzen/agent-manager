@@ -144,6 +144,11 @@ covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/sta
 left and today from OpenRouter, with an "As of" time. Pin it in the GitHub UI if the automatic pin
 failed (the log says so). If "As of" is over 3 hours old, check `systemctl status section9-spend.timer`.
 
+`section9-capacity.timer` (daily) rolls `/var/lib/section9/runs.jsonl` up into the open `Capacity`
+issue and adds the two pace lines. The ledger, the CPU headroom numbers, the pacing switch and the
+monthly forecast/budget-request procedure are in `docs/CAPACITY.md`. A run's cost is the OpenRouter
+`usage_monthly` delta; the ledger write is best effort and never blocks a run.
+
 **Later.** Update: `git -C /opt/agent-manager pull --ff-only && /opt/agent-manager/vps/install.sh`.
 Stop everything: `systemctl disable --now section9-dispatch.timer section9-routines.timer`.
 A private routine (rental watch) goes in the root-only `/etc/section9/routines.private.toml`
@@ -493,6 +498,7 @@ To run it by hand, use `systemctl start agent-manager-sync`.
 | Stop everything (data kept) | `docker compose down` |
 | Disk used by Docker | `docker system df` |
 | CPU credits and the Hostinger limit | `python3 -I /opt/agent-manager/vps/dispatch.py cpu`; the figures are also on the hourly **CPU credits** issue in section9-hq |
+| Run ledger and the month's pace | `tail -n 20 /var/lib/section9/runs.jsonl`; the roll-up is the daily **Capacity** issue. See `docs/CAPACITY.md` |
 | Sync traffic (should be near zero when nothing runs) | `docker compose exec -u agent sandbox sh -c "awk '/eth0/{print \$2}' /proc/net/dev"` twice, ~10 s apart |
 
 ## Troubleshooting

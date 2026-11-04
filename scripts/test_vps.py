@@ -45,6 +45,7 @@ class Stub:
     def __init__(self):
         self.issues, self.comments, self.hermes_calls = {}, [], []
         self.remaining = 15.0
+        self.monthly, self.daily, self.bump = 5.0, 0.25, 0.0
         self.key = None             # None: the normal /key reply; else the reply body to send
         self.page_size, self.link = None, None     # page_size: serve issue lists in pages of this size
         self.hermes = "report"      # report | silent | slow | error
@@ -136,12 +137,13 @@ class Stub:
         if path == "/or/key" and self.key is not None:
             return 200, self.key
         if path == "/or/key":
-            return 200, {"data": {"usage": 5, "limit": 20, "limit_remaining": self.remaining,
-                                  "usage_monthly": 5, "usage_daily": 0.25}}
+            return 200, {"data": {"usage": self.monthly, "limit": 20, "limit_remaining": self.remaining,
+                                  "usage_monthly": self.monthly, "usage_daily": self.daily}}
         if path == "/hermes/v1/models":
             return 200, {"data": []}
         if path == "/hermes/v1/chat/completions":
             self.hermes_calls.append((body, auth, headers.get("X-Hermes-Session-Id")))
+            self.monthly += self.bump          # a run's cost shows up in the counter it returns
             n = int(body["messages"][1]["content"].split("#")[1].split(":")[0])
             if self.hermes == "error":
                 return 500, {"error": f"upstream said {ORKEY}"}
@@ -149,7 +151,8 @@ class Stub:
                 time.sleep(2.5)
             if self.hermes == "report":     # what the agent does with s9-task
                 self.issues[n]["labels"] = [{"name": x} for x in self.labels(n) - {"status:working"}] + [{"name": "status:review"}]
-            return 200, {"choices": [{"message": {"content": "line 1\nline 2\nall done"}}]}
+            return 200, {"choices": [{"message": {"content": "line 1\nline 2\nall done"}}],
+                         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
         return 404, {}
 
 
@@ -968,6 +971,192 @@ class TestHq(Base):
         for part in ("palette:", "typography:", "customCSS: |", "repeating-linear-gradient", "monospace"):
             self.assertIn(part, text)
         self.assertLess(len(text), 32 << 10)                 # Hermes caps customCSS at 32 KiB
+
+
+class TestLedger(Base):
+    def ledger(self):
+        path = self.t / "state" / "runs.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_one_json_line_per_run_with_agent_type_tokens_cost_and_cpu(self):
+        self.stub.bump = 0.03
+        n = self.stub.add(["agent:batou", "status:todo"], "QA: check the spacing")
+        self.assertEqual(self.run_dispatch()[0], 0)
+        (row,) = self.ledger()
+        self.assertEqual((row["v"], row["issue"], row["agent"], row["role"], row["type"], row["model"]),
+                         (1, n, "Batou", "", "qa", "hermes-agent"))
+        self.assertEqual((row["outcome"], row["queue_before"]), ("ok", 1))
+        self.assertGreaterEqual(row["seconds"], 0)
+        self.assertEqual(row["cost_usd"], 0.03)
+        self.assertEqual(row["usage_before"]["usage_monthly"], 5.0)
+        self.assertEqual(row["usage_after"]["usage_monthly"], 5.03)
+        self.assertEqual(row["tokens"], {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
+        self.assertEqual(set(row["cpu"]), {"wall_seconds", "steal_pct", "core_seconds", "credits"})
+        self.assertEqual(set(row["cpu_before"]), {"at", "busy", "steal", "total"})
+        self.assertGreaterEqual(row["cpu_after"]["total"], row["cpu_before"]["total"])
+        self.assertGreaterEqual(row["cpu"]["core_seconds"], 0)
+        self.assertTrue(row["start"].endswith("+00:00") and row["end"].endswith("+00:00"))
+
+    def test_outcomes_are_named_not_guessed(self):
+        cases = (("silent", "no-output"), ("error", "blocked"))
+        for mode, expected in cases:
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.stub.hermes = mode
+                self.stub.add(["agent:batou", "status:todo"])
+                self.run_dispatch()
+                self.assertEqual(self.ledger()[0]["outcome"], expected)
+                self.tearDown()
+
+    def test_a_timeout_is_recorded_as_a_timeout_with_its_hours(self):
+        (self.t / "roster.toml").write_text(ROSTER.format(timeout=1))
+        self.stub.hermes = "slow"
+        self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        row = self.ledger()[0]
+        self.assertEqual(row["outcome"], "timeout")
+        self.assertGreaterEqual(row["seconds"], 1.0)      # the 1 s run ceiling ends it; the record says so
+
+    def test_a_broken_ledger_never_stops_the_run(self):
+        n = self.stub.add(["agent:batou", "status:todo"])
+        with mock.patch.object(dispatch, "append_ledger", side_effect=OSError("disk full")):
+            code, out = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:review"})
+        self.assertIn("ledger: not written", out)
+
+    def test_an_issue_without_a_readable_cost_is_not_given_one(self):
+        self.stub.key = {"data": {"usage": 5, "limit": 20, "limit_remaining": 15,
+                                  "usage_monthly": None, "usage_daily": 0.25}}
+        self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        row = self.ledger()[0]
+        self.assertIsNone(row["cost_usd"])
+        self.assertEqual(row["usage_before"], {"usage": 5, "usage_monthly": None, "usage_daily": 0.25,
+                                               "limit": 20, "limit_remaining": 15})
+
+
+class TestCpuUnits(unittest.TestCase):
+    def test_proc_stat_ticks_are_converted_to_seconds(self):
+        fields = [100, 0, 50, 900, 20, 10, 10, 5]        # user nice system idle iowait irq softirq steal
+        with mock.patch.object(dispatch, "CLK_TCK", 100.0):
+            self.assertAlmostEqual(dispatch.busy_seconds(fields), 1.7)   # (100+50+10+10)/100
+            self.assertEqual(dispatch.cpu_sample.__name__, "cpu_sample")
+
+    def test_the_draw_is_not_a_hundred_times_too_big(self):
+        before = {"at": 0.0, "busy": 0.0, "steal": 0.0, "total": 0.0}
+        after = {"at": 3600.0, "busy": 1185.0, "steal": 18.0, "total": 3600.0}
+        d = dispatch.cpu_delta(before, after)
+        self.assertAlmostEqual(d["credits"], 285.0)      # 1185 - 25% baseline x 3600 = 285
+        self.assertAlmostEqual(d["steal_pct"], 0.5)
+
+
+class TestPace(unittest.TestCase):
+    def test_the_two_lines_for_a_forty_dollar_month(self):
+        now = dt.datetime(2026, 11, 15, 12, tzinfo=dt.timezone.utc)
+        p = dispatch.month_pace(now, 40, 20)
+        self.assertEqual(p["days"], 30)
+        self.assertAlmostEqual(p["linear_per_day"], 39 / 30)
+        self.assertAlmostEqual(p["linear_to_date"], (39 / 30) * 14.5)
+        self.assertAlmostEqual(p["remaining_per_day"], (40 - 20 - 1) / 15.5)
+        self.assertFalse(dispatch.over_pace(now, 40, 20))
+        self.assertTrue(dispatch.over_pace(now, 40, 30))
+
+    def test_slack_days_is_the_tolerance(self):
+        now = dt.datetime(2026, 11, 15, 12, tzinfo=dt.timezone.utc)
+        pace = dispatch.month_pace(now, 40, 20)["linear_to_date"]
+        just_over = pace + 0.5 * dispatch.month_pace(now, 40, 20)["linear_per_day"]
+        self.assertFalse(dispatch.over_pace(now, 40, just_over, slack_days=1.0))
+        self.assertTrue(dispatch.over_pace(now, 40, just_over, slack_days=0.0))
+
+
+class TestPacing(Base):
+    def limits(self, body):
+        path = self.t / "limits.toml"
+        path.write_text(body)
+        return str(path)
+
+    def test_off_by_default_and_a_low_priority_task_still_runs(self):
+        n = self.stub.add(["agent:batou", "status:todo", "priority:low"])
+        self.run_dispatch()
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:review", "priority:low"})
+
+    def test_over_pace_holds_only_low_priority_work(self):
+        self.stub.add(["agent:batou", "status:todo", "priority:low"])
+        normal = self.stub.add(["agent:ishikawa", "status:todo"])
+        with mock.patch.object(dispatch, "month_pace",
+                               return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
+                                             "days": 30, "left_days": 29, "remaining_per_day": 1}), \
+                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+            code, out = self.run_dispatch(limits=self.limits(
+                "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
+        low = next(i for i in self.stub.issues.values() if "priority:low" in self.stub.labels(i["number"]))
+        self.assertEqual(code, 0)
+        self.assertIn("status:todo", self.stub.labels(low["number"]))
+        self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
+        self.assertIn("holding 1 low-priority", out)
+
+    def test_under_pace_admits_the_low_priority_task_too(self):
+        low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
+        with mock.patch.object(dispatch, "month_pace",
+                               return_value={"linear_to_date": 100.0, "linear_per_day": 1.0, "elapsed": 1,
+                                             "days": 30, "left_days": 29, "remaining_per_day": 1}), \
+                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+            self.run_dispatch(limits=self.limits(
+                "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
+        self.assertEqual(self.stub.labels(low), {"agent:batou", "status:review", "priority:low"})
+
+
+class TestCapacity(Base):
+    def capacity(self):
+        code, out = self.run_dispatch("capacity")
+        self.assertEqual(code, 0, out)
+        return out
+
+    def test_creates_then_updates_one_pinned_issue_with_the_roll_up(self):
+        self.stub.bump = 0.03
+        self.stub.add(["agent:batou", "status:todo"], "QA: check the spacing")
+        self.run_dispatch()
+        self.capacity()
+        (n, issue), = [x for x in self.stub.issues.items() if x[1]["title"] == "Capacity"]
+        self.assertEqual((self.stub.labels(n), self.stub.pinned), (set(), f"node-{n}"))
+        for line in ("**Pace:**", "Last 7 days", "Month to date", "by agent", "by task type",
+                     "Queue idle", "CPU credits", "$0.03", "| Batou | 1 |"):
+            self.assertIn(line, issue["body"])
+        self.capacity()
+        self.assertEqual(sum(i["title"] == "Capacity" for i in self.stub.issues.values()), 1)
+
+    def test_an_empty_ledger_still_writes_the_issue_and_says_what_is_missing(self):
+        self.capacity()
+        (n, issue), = self.stub.issues.items()
+        self.assertIn("No ledger data yet", issue["body"])
+        for line in ("—", "no run had a readable cost delta"):
+            self.assertIn(line, issue["body"])
+
+    def test_runs_without_a_cost_are_not_averaged_into_a_fake_rate(self):
+        self.capacity()                       # creates the issue and the shape
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "v": 1, "issue": 1, "type": "qa", "agent": "Batou", "role": "engineer",
+            "model": "hermes-agent", "start": "2026-11-04T10:00:00+00:00",
+            "end": "2026-11-04T10:30:00+00:00", "seconds": 1800, "outcome": "ok",
+            "queue_before": 2, "usage_before": {}, "usage_after": {}, "cost_usd": None,
+            "tokens": None, "cpu": {"credits": 100}}) + "\n")
+        self.capacity()
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertIn("no run had a readable cost delta", body)
+        self.assertNotIn("$0.00/h", body)
+
+    def test_a_corrupt_ledger_line_is_skipped_not_fatal(self):
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not json\n" + json.dumps({"start": "2026-11-04T10:00:00+00:00", "end":
+            "2026-11-04T10:10:00+00:00", "agent": "Batou", "type": "qa", "seconds": 600,
+            "outcome": "ok", "cost_usd": 0.02, "cpu": {"credits": 10}, "queue_before": 1}) + "\n")
+        self.capacity()
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertIn("Runs: 1", body)
 
 
 class TestDashboard(unittest.TestCase):
