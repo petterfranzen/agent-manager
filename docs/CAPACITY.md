@@ -14,6 +14,7 @@ report and the Major adds a row here. Mid-week readings are welcome too.
 | Reading | Weekly used | Time elapsed | Resets (UTC) | Note |
 |---|---|---|---|---|
 | 2026-11-04 17:47 UTC | 50% | 56% (95 of 168 h) | 2026-11-07 19:00 | About 6 points under pace: room for ~0.7% an hour (~16% a day) until the reset. Session window 5% used. |
+| 2026-11-04 19:30 UTC | 53% | 57% (96.5 of 168 h) | 2026-11-07 19:00 | First automatic reading (tools/pro-usage, section9-hq #81). +3 points in 1.7 h while the Major reviewed, merged and queued work: about 1.7% an hour against 0.66% an hour left in the budget (47% over 71.5 h). At this rate the week runs out about 28 h before the reset. Session window 10%. |
 
 What goes to Pro: review, merge, planning, the judgement calls. What goes to the
 agents: research, builds, QA, anything that can wait overnight. Under pace by a
