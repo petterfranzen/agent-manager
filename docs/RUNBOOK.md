@@ -147,7 +147,18 @@ failed (the log says so). If "As of" is over 3 hours old, check `systemctl statu
 `section9-capacity.timer` (daily) rolls `/var/lib/section9/runs.jsonl` up into the open `Capacity`
 issue and adds the two pace lines. The ledger, the CPU headroom numbers, the pacing switch and the
 monthly forecast/budget-request procedure are in `docs/CAPACITY.md`. A run's cost is the OpenRouter
-`usage_monthly` delta; the ledger write is best effort and never blocks a run.
+`usage_monthly` delta; the ledger write is best effort and never blocks a run. The ledger file is
+written `0640` in a `0750` directory: it carries every run's cost and CPU draw, so it is not
+world-readable.
+
+Each run reads OpenRouter `/key` twice, before it starts and after it ends, and each read waits up
+to 10 s, so a slow OpenRouter can delay a run's start by that much. The dispatcher picks
+`priority:high` first, then unlabelled, then `priority:low`, oldest first within each group; with no
+priority labels the pick is unchanged (oldest first). An issue whose `agent:<token>` names no agent
+is blocked with a comment once nothing else is todo, so a typo surfaces instead of being ignored.
+`agent:any` hands the issue to the least-recently-active agent that may take it, judged from the
+board's 100 most recently updated issues: an agent older than that window counts as the one idle
+longest.
 
 **Later.** Update: `git -C /opt/agent-manager pull --ff-only && /opt/agent-manager/vps/install.sh`.
 Stop everything: `systemctl disable --now section9-dispatch.timer section9-routines.timer`.
