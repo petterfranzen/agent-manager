@@ -421,7 +421,10 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
     Returns (issue, agent, pooled, timeout, queue_before, held) or None."""
     recover_stale(board, agents, caps, log)
     seen, todo, unassignable, offered = None, [], [], 0
-    busy_agents, busy_repos, unknown = (set(), set(), False) if not lane else inflight(board, agents)
+    # Symmetric exclusion: with lanes = 2 even lane 0 keeps off the agent and repo the other lane is in.
+    # With one lane nothing is read and nothing changes. Lane 0 never stands down for an unknown repo.
+    two = bool(lane) or lanes_setting(a.limits) == 2
+    busy_agents, busy_repos, unknown = inflight(board, agents) if two else (set(), set(), False)
     for issue in board.todo():
         pool, why = candidates(issue, agents)
         if not pool:
@@ -435,6 +438,8 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
         key = repo_key(issue)
         if lane and (agent["name"].lower() in busy_agents or unknown or not key or key in busy_repos):
             continue                            # the other lane's agent, or a repo it may be in
+        if two and not lane and (agent["name"].lower() in busy_agents or (key and key in busy_repos)):
+            continue                            # lane 0 beside a live lane-1 run
         pooled = not any(f"agent:{who['name'].lower()}" in label_names(issue) for who in agents)
         todo.append((issue, agent, pooled, key))
     if not todo:
@@ -952,7 +957,10 @@ def lane_fallback(a, rows, now):
     """Why a second lane must not run right now, or ''. Steal first (Hostinger's temporary limit
     shows there, as the hourly CPU credits issue reads it), then the runs' own credit draw."""
     setting = pacing_settings(a.limits)
-    steal = steal_secs(setting.get("sample_seconds", 1.0))
+    try:
+        steal = steal_secs(setting.get("sample_seconds", 1.0))
+    except (Failure, OSError, KeyError, ValueError) as e:
+        return f"cpu unreadable ({e})"
     limit = float(setting.get("steal_pct", SAFE_STEAL_PCT))
     if steal > limit:
         return f"CPU steal {steal:.1f}% is over {limit:.0f}%: Hostinger's limit is on"
