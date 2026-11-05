@@ -68,7 +68,9 @@ is more headroom. Check the hourly **CPU credits** issue and the panel weekly.
 `/var/lib/section9/runs.jsonl` (outside the repo; `--ledger` overrides it). A failed
 write never stops or fails a run: the dispatcher logs `ledger: not written` and goes
 on. Single lane makes the deltas attributable to one run; with two lanes, read the
-record as the pair's cost.
+record as the pair's cost. The file is created `0640` in a `0750` directory (it holds
+every run's cost and CPU draw, so it is not world-readable), and building the record is
+inside the same guard as the write, so neither can stop a run.
 
 | field | meaning |
 |---|---|
@@ -76,7 +78,7 @@ record as the pair's cost.
 | `start`, `end`, `seconds` | UTC ISO times and wall-clock length |
 | `outcome` | `ok`, `timeout`, `blocked`, `no-output` |
 | `queue_before`, `held_low_priority` | todo issues seen at start; how many the pace rule held |
-| `usage_before`, `usage_after` | OpenRouter `/key`: `usage_monthly`, `usage_daily`, `limit`, `limit_remaining` |
+| `usage_before`, `usage_after` | OpenRouter `/key`: `usage_monthly`, `usage_daily`, `limit`, `limit_remaining`; each read waits up to 10 s, and one run makes two of them (before it starts and after it ends) |
 | `cost_usd` | the `usage_monthly` delta; `null` when the counter did not move or could not be read |
 | `tokens` | Hermes's `usage` object, when the reply carries one |
 | `cpu`, `cpu_before`, `cpu_after` | `wall_seconds`, `steal_pct`, `core_seconds`, `credits`, plus the raw snapshots |

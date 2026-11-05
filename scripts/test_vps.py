@@ -47,6 +47,7 @@ class Stub:
         self.remaining = 15.0
         self.monthly, self.daily, self.bump = 5.0, 0.25, 0.0
         self.key = None             # None: the normal /key reply; else the reply body to send
+        self.key_calls, self.key_fail_after = 0, None   # key_fail_after: fail /key reads after this many
         self.page_size, self.link = None, None     # page_size: serve issue lists in pages of this size
         self.hermes = "report"      # report | silent | slow | error
         self.next = 1
@@ -134,9 +135,12 @@ class Stub:
             return self.gh(method, "/gh" + path[len("/ci"):], query, body, auth)
         if path.startswith("/gh/"):
             return self.gh(method, path, query, body, auth)
-        if path == "/or/key" and self.key is not None:
-            return 200, self.key
         if path == "/or/key":
+            self.key_calls += 1
+            if self.key_fail_after is not None and self.key_calls > self.key_fail_after:
+                return 500, {"error": "key read refused"}
+            if self.key is not None:
+                return 200, self.key
             return 200, {"data": {"usage": self.monthly, "limit": 20, "limit_remaining": self.remaining,
                                   "usage_monthly": self.monthly, "usage_daily": self.daily}}
         if path == "/hermes/v1/models":
@@ -1047,6 +1051,37 @@ class TestLedger(Base):
         self.assertEqual(row["usage_before"], {"usage": 5, "usage_monthly": None, "usage_daily": 0.25,
                                                "limit": 20, "limit_remaining": 15})
 
+    def test_a_failing_key_read_still_runs_and_records_no_cost(self):
+        self.stub.key_fail_after = 1        # spend_ok's read succeeds; the ledger's two reads fail
+        n = self.stub.add(["agent:batou", "status:todo"])
+        code, _ = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:review"})
+        row = self.ledger()[0]
+        self.assertEqual((row["usage_before"], row["usage_after"], row["cost_usd"]), ({}, {}, None))
+
+    def test_key_usage_is_empty_when_the_read_fails(self):
+        for boom in (dispatch.Failure("no key"), ValueError("not JSON after all")):
+            with self.subTest(boom=type(boom).__name__):
+                with mock.patch.object(dispatch, "http", side_effect=boom):
+                    self.assertEqual(dispatch.key_usage("http://x/api/v1", "k"), {})
+
+    def test_a_failing_cpu_sample_still_runs_and_records_no_cpu(self):
+        n = self.stub.add(["agent:batou", "status:todo"])
+        with mock.patch.object(dispatch, "cpu_sample", side_effect=OSError("no /proc/stat")):
+            code, _ = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:review"})
+        row = self.ledger()[0]
+        self.assertEqual((row["cpu"], row["cpu_before"], row["cpu_after"], row["outcome"]),
+                         (None, None, None, "ok"))
+
+    def test_the_ledger_file_is_not_world_readable(self):
+        self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        mode = (self.t / "state" / "runs.jsonl").stat().st_mode & 0o777
+        self.assertEqual(mode, 0o640)
+
 
 class TestCpuUnits(unittest.TestCase):
     def test_proc_stat_ticks_are_converted_to_seconds(self):
@@ -1388,6 +1423,74 @@ timeout_sec = 60
         self.assertIn("status:todo", self.stub.labels(low))
         self.assertIn("agent:any", self.stub.labels(low))
         self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
+
+
+class TestPriority(Base):
+    def test_a_high_priority_bug_is_picked_before_an_older_ordinary_task(self):
+        old = self.stub.add(["agent:batou", "status:todo"], "Old feature request")
+        bug = self.stub.add(["agent:batou", "status:todo", "priority:high"], "Fix the broken board")
+        self.run_dispatch()
+        self.assertEqual(len(self.stub.hermes_calls), 1)
+        self.assertIn("Fix the broken board", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+        self.assertEqual(self.stub.labels(bug), {"agent:batou", "priority:high", "status:review"})
+        self.assertEqual(self.stub.labels(old), {"agent:batou", "status:todo"})
+
+    def test_a_low_priority_task_waits_behind_an_older_ordinary_one(self):
+        low = self.stub.add(["agent:batou", "status:todo", "priority:low"], "Nice to have, older")
+        normal = self.stub.add(["agent:batou", "status:todo"], "Ordinary, newer")
+        self.run_dispatch()
+        self.assertIn("Ordinary, newer", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+        self.assertEqual(self.stub.labels(normal), {"agent:batou", "status:review"})
+        self.assertEqual(self.stub.labels(low), {"agent:batou", "priority:low", "status:todo"})
+
+    def test_without_priority_labels_the_oldest_is_still_picked(self):
+        self.stub.add(["agent:batou", "status:todo"], "First")
+        self.stub.add(["agent:batou", "status:todo"], "Second")
+        self.run_dispatch()
+        self.assertIn("First", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+
+    def test_priority_picks_the_issue_and_agent_any_still_picks_the_agent(self):
+        old = self.stub.add(["agent:batou", "status:todo"], "Old ordinary")
+        bug = self.stub.add(["agent:any", "status:todo", "priority:high"], "New high bug")
+        self.run_dispatch()
+        self.assertIn("New high bug", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+        labels = self.stub.labels(bug)
+        self.assertIn("status:review", labels)
+        self.assertTrue(any(l.startswith("agent:") and l != "agent:any" for l in labels))
+        self.assertEqual(self.stub.labels(old), {"agent:batou", "status:todo"})
+
+    def test_an_issue_with_two_agent_labels_chooses_the_same_one_under_any_hash_seed(self):
+        lines = [
+            "import importlib.util, sys",
+            "spec = importlib.util.spec_from_file_location('d', sys.argv[1])",
+            "m = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(m)",
+            "issue = {'labels': [{'name': 'agent:any'}, {'name': 'agent:qa'}], 'body': ''}",
+            "agents = [{'name': 'A'}, {'name': 'B', 'role': 'qa'}, {'name': 'C', 'title': 'QA reviewer'}]",
+            "print(len(m.candidates(issue, agents)[0]))",
+        ]
+        seen = set()
+        for seed in ("0", "3", "12345", "random"):        # seed 3 exposes the old set-order pick
+            env = dict(os.environ, PYTHONHASHSEED=seed)
+            out = subprocess.run([sys.executable, "-c", "\n".join(lines), str(ROOT / "vps" / "dispatch.py")],
+                                 capture_output=True, text=True, env=env)
+            seen.add(out.stdout.strip())
+        self.assertEqual(seen, {"3"})        # 'any' wins the tie, so all three agents, delete-proof
+
+    def test_an_unknown_agent_label_is_blocked_when_it_is_the_only_todo(self):
+        n = self.stub.add(["agent:ghost", "status:todo"])
+        code, _ = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.hermes_calls, [])
+        self.assertEqual(self.stub.labels(n), {"agent:ghost", "status:blocked"})
+        self.assertIn("no agent has the role", self.stub.comments[0][1])
+
+    def test_an_unknown_agent_label_is_left_alone_while_other_work_runs(self):
+        bad = self.stub.add(["agent:ghost", "status:todo"])
+        good = self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        self.assertEqual(self.stub.labels(bad), {"agent:ghost", "status:todo"})
+        self.assertEqual(self.stub.labels(good), {"agent:batou", "status:review"})
 
 
 if __name__ == "__main__":

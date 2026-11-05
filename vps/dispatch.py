@@ -207,7 +207,9 @@ def candidates(issue, agents):
             if a["name"].lower() == author:
                 return [], f"the named agent, {a['name']}, wrote it"
             return [a], ""
-    token = next((n.split(":", 1)[1].strip() for n in names if n.startswith("agent:")), None)
+    # sorted: an issue with two agent labels (e.g. agent:any and agent:qa) must choose the same
+    # one every run; set order depends on PYTHONHASHSEED. 'any' sorts before a role, so it wins a tie.
+    token = next((n.split(":", 1)[1].strip() for n in sorted(names) if n.startswith("agent:")), None)
     if not token:
         return [], "no agent label"
     pool = list(agents) if token == ANY else [a for a in agents if role_matches(a, token)]
@@ -358,6 +360,18 @@ def hold_low_priority(todo, a, orkey, log, now=None):
     return kept
 
 
+def priority_rank(issue):
+    """Pick order: `priority:high` first, then unlabelled, then `priority:low`. Anything else ranks 1.
+
+    Petter, 4 Nov: a bug must not wait behind older feature requests. With no priority labels every
+    issue ranks 1, so the pick is oldest-first exactly as before.
+    """
+    names = label_names(issue)
+    if "priority:high" in names:
+        return 0
+    return 2 if "priority:low" in names else 1
+
+
 def run_one(a, board, hermes_key, orkey, log):
     agents, _ = load_roster(a.roster)
     caps, preamble = limits_of(a.limits)
@@ -373,8 +387,8 @@ def run_one(a, board, hermes_key, orkey, log):
             continue
         if seen is None and len(pool) > 1:
             seen = activity(board, agents)      # one extra read, only when a task has a pool to choose from
-        pooled = not any(f"agent:{a['name'].lower()}" in label_names(issue) for a in agents)
-        todo.append((issue, min(pool, key=lambda a: (seen or {}).get(a["name"], "")), pooled))
+        pooled = not any(f"agent:{who['name'].lower()}" in label_names(issue) for who in agents)
+        todo.append((issue, min(pool, key=lambda who: (seen or {}).get(who["name"], "")), pooled))
     if not todo:
         if unassignable:      # e.g. only its own author could take it: tell the Major instead of looping on it
             issue, why = unassignable[0]
@@ -383,6 +397,8 @@ def run_one(a, board, hermes_key, orkey, log):
                                            f"take it, then set `status:todo` again.")
             log(f"#{issue['number']} blocked: {why}")
         return
+    # Priority before age: a stable sort, so oldest-first survives within each priority group.
+    todo.sort(key=lambda t: priority_rank(t[0]))
     ok, why = spend_ok(a.openrouter, orkey)
     if not ok:
         issue = todo[0][0]
@@ -439,18 +455,18 @@ def run_one(a, board, hermes_key, orkey, log):
     tokens = None
     if isinstance(reply, dict) and isinstance(reply.get("usage"), dict):
         tokens = {k: v for k, v in reply["usage"].items() if isinstance(v, (int, float))}
-    record = {
-        "v": LEDGER_VERSION, "issue": n, "type": task_type(issue.get("title")),
-        "agent": agent["name"], "role": agent.get("role", ""),
-        "model": agent.get("model", "hermes-agent"),
-        "start": started.isoformat(timespec="seconds"), "end": ended.isoformat(timespec="seconds"),
-        "seconds": round(max((ended - started).total_seconds(), 0.0), 3),
-        "outcome": outcome, "queue_before": waiting, "held_low_priority": waiting - len(todo),
-        "usage_before": usage_before, "usage_after": usage_after,
-        "cost_usd": money_delta(usage_before, usage_after),
-        "tokens": tokens, "cpu": cpu, "cpu_before": cpu_before, "cpu_after": cpu_after,
-    }
-    try:
+    try:                                    # building and writing the record: neither may stop a run
+        record = {
+            "v": LEDGER_VERSION, "issue": n, "type": task_type(issue.get("title")),
+            "agent": agent["name"], "role": agent.get("role", ""),
+            "model": agent.get("model", "hermes-agent"),
+            "start": started.isoformat(timespec="seconds"), "end": ended.isoformat(timespec="seconds"),
+            "seconds": round(max((ended - started).total_seconds(), 0.0), 3),
+            "outcome": outcome, "queue_before": waiting, "held_low_priority": waiting - len(todo),
+            "usage_before": usage_before, "usage_after": usage_after,
+            "cost_usd": money_delta(usage_before, usage_after),
+            "tokens": tokens, "cpu": cpu, "cpu_before": cpu_before, "cpu_after": cpu_after,
+        }
         append_ledger(Path(a.state_dir) / LEDGER_NAME, record)
     except Exception as e:                  # a ledger must never stop or fail a run
         log(f"ledger: not written for #{n} ({e})")
@@ -742,10 +758,14 @@ def cpu_delta(before, after):
 
 
 def key_usage(openrouter, key):
-    """OpenRouter's counters, best effort: a ledger must never stop a run or a report."""
+    """OpenRouter's counters, best effort: a ledger must never stop a run or a report.
+
+    The 10 s timeout bounds a slow read. One run reads it twice, before it starts and after it
+    ends, so a slow OpenRouter can delay a run's start by up to 10 s (docs/CAPACITY.md).
+    """
     try:
         reply = http("GET", openrouter.rstrip("/") + "/key", key, timeout=10)
-    except Failure:
+    except Exception:
         return {}
     data = reply.get("data") if isinstance(reply, dict) else None
     if not isinstance(data, dict):
@@ -774,10 +794,12 @@ def task_type(title):
 
 
 def append_ledger(path, record):
-    """Append one JSON line. Raises; the caller decides that a ledger failure must not matter."""
+    """Append one JSON line, mode 0640 in a 0750 dir. Raises; the caller decides that a ledger
+    failure must not matter. The record holds every run's cost and CPU draw: not world-readable."""
     p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "a", encoding="utf-8") as f:
+    p.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o640)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
 
 
