@@ -77,6 +77,7 @@ inside the same guard as the write, so neither can stop a run.
 | `issue`, `agent`, `role`, `type`, `model` | what ran; `type` comes from the title prefix (`QA:`, `Research:`, `Design:` …) |
 | `start`, `end`, `seconds` | UTC ISO times and wall-clock length |
 | `outcome` | `ok`, `timeout`, `blocked`, `no-output` |
+| `lane` | `0` or `1`: the dispatcher lane that ran it; a row from before the switch is lane 0 |
 | `queue_before`, `held_low_priority` | todo issues seen at start; how many the pace rule held |
 | `usage_before`, `usage_after` | OpenRouter `/key`: `usage_monthly`, `usage_daily`, `limit`, `limit_remaining`; each read waits up to 10 s, and one run makes two of them (before it starts and after it ends) |
 | `cost_usd` | the `usage_monthly` delta; `null` when the counter did not move or could not be read |
@@ -89,11 +90,14 @@ The dispatcher keeps the existing fail-closed spend check and the $1 reserve. Pa
 is an extra, **off by default**, in the root-only `/etc/section9/limits.toml`:
 
 ```toml
+lanes = 1             # 1: one lane. 2: a second dispatcher lane may run beside it (#79)
+
 [pacing]
 enabled = true        # false or absent: no behaviour change
 slack_days = 1.0      # how far ahead of the line is still "on pace"
-steal_pct = 10.0      # above this, Hostinger's limit is on
+steal_pct = 10.0      # above this, Hostinger's limit is on; the second lane stands down too
 sample_seconds = 1.0  # CPU sample before an admitted run
+quiet_hours = 3.0     # safe readings before the second lane comes back
 ```
 
 1. `linear pace = ($cap - $1) / days_in_month x days_elapsed`; the report also shows
@@ -105,12 +109,34 @@ sample_seconds = 1.0  # CPU sample before an admitted run
    hold low-priority work (fail closed, but the spend check still runs first).
 4. Nothing is admitted when the spend check or the cap fails, exactly as today.
 
-The one-lane default does not change. When the `lanes` switch in the same root-only
-file allows two lanes (#61; not implemented as of 4 Nov), both lanes must evaluate the
-same pace and the same steal sample, and the lock has to become per-lane. The CPU
-ceiling is for the whole VPS, so run two lanes only while the 7-day credits/day stay
-under 8,100; if a day goes over, turn `lanes` back to 1. A low-priority hold applies
-to both lanes.
+## The second lane (#79)
+
+`lanes = 2` in the same root-only file turns on `section9-dispatch-lane1.service`/`.timer`
+(`dispatch.py --lane 1`, the same 2-minute cadence as lane 0). `lanes = 1`, no file, or anything
+but 2 is the old one-lane behaviour, and lane 1 does not even take a CPU sample then.
+
+Lane 1 picks the oldest task it may run *beside* lane 0: a different agent, and a repo no open
+`status:working` issue is in. The repo is the `repo:<name>` label, else a known repo name in the
+title or body (agent-manager, section9-hq, ghost-in-the-machine, flight-tracker, nvim-trainer,
+dinner-planner, portfolio); a task with neither is unknown and only lane 0 takes it, because two
+unknowns could be the same repo. Both lanes sweep and pick under `dispatch.pick.lock`, so they
+never claim or sweep the same issue twice; each lane has its own run lock, and a lane that finds
+the other choosing skips the tick and its timer refires in 2 minutes.
+
+The fallback is the trial's own evidence: about 15 h near 100% brought a 40% CPU limit, against a
+15-20% baseline. Lane 1 stands down when a 1-second `/proc/stat` sample shows steal over
+`[pacing] steal_pct` (10% by default — Hostinger's limit shows as steal, the same signal the
+hourly **CPU credits** issue reads), or when the runs of the last 24 h drew over
+`SAFE_CREDITS_DAY` (8,100) credits. The second is a sum of **per-run** figures, so with two lanes
+each run's window can include the other's draw: it over-counts, which fails safe. The reason is
+logged (`lanes: down to one lane: ...`) and latched in `/var/lib/section9/lanes.json`, and the
+lane returns only after `[pacing] quiet_hours` (3 h by default) of safe readings, so one spike
+cannot flap it. A low-priority hold applies to both lanes.
+
+What the two lanes cost: the per-run CPU and cost figures are the pair's, not one run's, so read
+the ledger's `lane` field and the Capacity issue's per-lane line together. Two lanes are safe
+only while the 7-day credits/day stay under 8,100; the fallback above is what enforces it, and
+`lanes = 1` is the switch if the panel says otherwise.
 
 ## The Capacity issue
 
@@ -118,9 +144,9 @@ to both lanes.
 open **Capacity** issue in `section9-hq` (pinned like **Spend**): last 7 days and
 month to date, runs, busy hours, $ and $/hour by agent and task type, timeouts and the
 hours they wasted, queue idle (an upper bound: the ledger only sees runs), CPU credits
-against the daily guidance, and both pace lines with today's spend against them. It
-guesses nothing: a run whose cost delta was unreadable is reported as `—`, and the
-issue says how many such runs there are.
+against the daily guidance, the runs and busy hours per lane with the hours two ran at once, and
+both pace lines with today's spend against them. It guesses nothing: a run whose cost delta was
+unreadable is reported as `—`, and the issue says how many such runs there are.
 
 ## Forecast and the budget request (the Major's procedure)
 

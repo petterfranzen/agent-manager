@@ -108,6 +108,8 @@ class Stub:
                     issue["labels"] = [{"name": x} for x in body["labels"]]
                 issue["state"] = body.get("state", issue["state"])
                 issue["body"] = body.get("body", issue["body"])
+                # GitHub moves updated_at on every change; the dispatcher's stale sweep reads it.
+                issue["updated_at"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 return 200, issue
             return 200, issue
         return 404, {"message": "Not Found", "echo": auth}
@@ -151,9 +153,9 @@ class Stub:
             n = int(body["messages"][1]["content"].split("#")[1].split(":")[0])
             if self.hermes == "error":
                 return 500, {"error": f"upstream said {ORKEY}"}
-            if self.hermes == "slow":
+            if self.hermes in ("slow", "slow-report"):
                 time.sleep(2.5)
-            if self.hermes == "report":     # what the agent does with s9-task
+            if self.hermes in ("report", "slow-report"):   # what the agent does with s9-task
                 self.issues[n]["labels"] = [{"name": x} for x in self.labels(n) - {"status:working"}] + [{"name": "status:review"}]
             return 200, {"choices": [{"message": {"content": "line 1\nline 2\nall done"}}],
                          "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
@@ -242,11 +244,13 @@ class Base(unittest.TestCase):
         self.srv.server_close()
         self.tmp.cleanup()
 
-    def run_dispatch(self, cmd="run", limits=None):
+    def run_dispatch(self, cmd="run", limits=None, lane=None):
         argv = [cmd, "--secrets-dir", str(self.t / "secrets"), "--state-dir", str(self.t / "state"),
                 "--roster", str(self.t / "roster.toml"), "--private-routines", str(self.t / "none.toml"),
                 "--limits", limits or str(self.t / "none-limits.toml"),
                 "--github", self.url + "/gh", "--openrouter", self.url + "/or", "--hermes", self.url + "/hermes"]
+        if lane is not None:
+            argv += ["--lane", str(lane)]
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = dispatch.main(argv)
@@ -304,11 +308,11 @@ class TestDispatch(Base):
     def test_lock_held_means_no_run(self):
         self.stub.add(["agent:batou", "status:todo"])
         (self.t / "state").mkdir()
-        with open(self.t / "state" / "dispatch.lock", "w") as f:
+        with open(self.t / "state" / "dispatch.lane0.lock", "w") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             code, out = self.run_dispatch()
         self.assertEqual((code, self.stub.hermes_calls), (0, []))
-        self.assertIn("in progress", out)
+        self.assertIn("in progress in lane 0", out)
 
     def test_status_reports_queue_and_hermes(self):
         self.stub.add(["agent:batou", "status:todo"])
@@ -1491,6 +1495,255 @@ class TestPriority(Base):
         self.run_dispatch()
         self.assertEqual(self.stub.labels(bad), {"agent:ghost", "status:todo"})
         self.assertEqual(self.stub.labels(good), {"agent:batou", "status:review"})
+
+class TestLanes(Base):
+    """#79: the second lane -- the lanes switch, what it may run beside lane 0, and the fallback."""
+
+    TWO = "lanes = 2\n[timeout_sec]\ndefault = 60\n[pacing]\nsample_seconds = 0\n"
+
+    def limits(self, text):
+        path = self.t / "limits.toml"
+        path.write_text(text)
+        return str(path)
+
+    def ledger(self):
+        return [json.loads(l) for l in (self.t / "state" / "runs.jsonl").read_text().splitlines()]
+
+    def latch(self):
+        return json.loads((self.t / "state" / "lanes.json").read_text())
+
+    def seed(self, rows):
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def lane_one(self, limits=None):
+        """Run lane 1 with the steal sample stubbed out: the tests seed the rest of the gate."""
+        with mock.patch.object(dispatch, "steal_secs", return_value=0.0):
+            return self.run_dispatch("run", limits=limits or self.limits(self.TWO), lane=1)
+
+    def test_lane_one_is_off_unless_the_switch_says_two(self):
+        n = self.stub.add(["agent:batou", "status:todo"])
+        code, out = self.run_dispatch(lane=1)                      # no limits file at all: one lane
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertIn("lane 1 is off", out)
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:todo"})
+        code, out = self.run_dispatch(lane=1, limits=self.limits("lanes = 1\n[timeout_sec]\ndefault = 60\n"))
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+
+    def test_the_second_lane_runs_beside_lane_zero(self):
+        busy = self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        mine = self.stub.add(["agent:ishikawa", "status:todo"], "ghost-in-the-machine: research it")
+        same_repo = self.stub.add(["agent:saito", "status:todo"], "flight-tracker: another pop")
+        same_agent = self.stub.add(["agent:batou", "status:todo"], "portfolio: build direction B")
+        code, out = self.lane_one()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.stub.hermes_calls), 1)
+        self.assertIn("You are **Ishikawa**", self.stub.hermes_calls[0][0]["messages"][0]["content"])
+        self.assertEqual(self.stub.labels(mine), {"agent:ishikawa", "status:review"})
+        self.assertEqual(self.stub.labels(same_repo), {"agent:saito", "status:todo"})
+        self.assertEqual(self.stub.labels(same_agent), {"agent:batou", "status:todo"})
+        self.assertEqual(self.stub.labels(busy), {"agent:batou", "status:working"})
+        self.assertIn("(lane 1)", out)
+
+    def test_the_second_lane_picks_by_priority_among_what_it_may_run(self):
+        """#71 priority order and #79 lane filter together: the filter drops first, then priority picks."""
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        self.stub.add(["agent:batou", "status:todo", "priority:high"], "portfolio: urgent, but batou is busy")
+        old = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: old ordinary")
+        low = self.stub.add(["agent:saito", "status:todo", "priority:low"], "dinner-planner: nice to have")
+        high = self.stub.add(["agent:saito", "status:todo", "priority:high"], "ghost-in-the-machine: broken")
+        code, _ = self.lane_one()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(high), {"agent:saito", "status:review", "priority:high"})
+        self.assertEqual(self.stub.labels(old), {"agent:ishikawa", "status:todo"})
+        self.assertEqual(self.stub.labels(low), {"agent:saito", "status:todo", "priority:low"})
+        self.assertEqual(self.ledger()[0]["lane"], 1)
+
+    def test_the_second_lane_skips_a_task_whose_repo_it_cannot_tell(self):
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        unknown = self.stub.add(["agent:ishikawa", "status:todo"], "Do a thing")
+        known = self.stub.add(["agent:saito", "status:todo"], "nvim-trainer: add a keymap")
+        code, _ = self.lane_one()
+        self.assertEqual((code, self.stub.labels(unknown)), (0, {"agent:ishikawa", "status:todo"}))
+        self.assertEqual(self.stub.labels(known), {"agent:saito", "status:review"})
+
+    def test_an_unknown_repo_already_running_stands_the_second_lane_down(self):
+        self.stub.add(["agent:batou", "status:working"], "Night build 2026-11-05 (Tachikoma)")
+        self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        code, out = self.lane_one()
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertIn("found nothing", out)
+        self.assertEqual(self.latch()["lanes"], 2)      # the reading was safe: two lanes stand
+
+    def test_two_lanes_run_two_tasks_at_the_same_time(self):
+        """Two real processes on the same state dir: lane 1 starts while lane 0 is in Hermes."""
+        first = self.stub.add(["agent:batou", "status:todo"], "flight-tracker: fix the popping")
+        second = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        limits = self.limits(self.TWO)
+        self.stub.hermes = "slow-report"                # 2.5 s in Hermes: a real overlap
+        def lane(n):
+            argv = [sys.executable, str(ROOT / "vps" / "dispatch.py"), "run", "--lane", str(n),
+                    "--secrets-dir", str(self.t / "secrets"), "--state-dir", str(self.t / "state"),
+                    "--roster", str(self.t / "roster.toml"), "--private-routines", str(self.t / "none.toml"),
+                    "--limits", limits, "--github", self.url + "/gh", "--openrouter", self.url + "/or",
+                    "--hermes", self.url + "/hermes"]
+            return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        zero = lane(0)
+        time.sleep(0.5)                                 # lane 0 is inside its Hermes call by now
+        one = lane(1)
+        out0, err0 = zero.communicate(timeout=60)
+        out1, err1 = one.communicate(timeout=60)
+        self.assertEqual((zero.returncode, one.returncode), (0, 0), err0 + err1)
+        for text in (out0 + err0, out1 + err1):
+            for secret in (GH, ORKEY, HKEY):
+                self.assertNotIn(secret, text)
+        self.assertEqual(sorted(session for _, _, session in self.stub.hermes_calls),
+                         [f"issue-{first}", f"issue-{second}"])
+        self.assertEqual([self.stub.labels(first), self.stub.labels(second)],
+                         [{"agent:batou", "status:review"}, {"agent:ishikawa", "status:review"}])
+        rows = self.ledger()
+        self.assertEqual(sorted(r["lane"] for r in rows), [0, 1])
+        self.assertGreater(dispatch.concurrent_hours(rows), 0.0)
+        self.assertIn("(lane 1)", out1)
+
+    def test_cpu_steal_drops_the_second_lane_and_writes_the_latch(self):
+        n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        with mock.patch.object(dispatch, "steal_secs", return_value=25.0):
+            code, out = self.run_dispatch("run", limits=self.limits(self.TWO), lane=1)
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:todo"})
+        self.assertIn("down to one lane", out)
+        self.assertIn("steal 25.0%", out)
+        self.assertEqual(self.latch()["lanes"], 1)
+        self.assertIn("Hostinger", self.latch()["reason"])
+
+    def test_unreadable_cpu_stands_the_second_lane_down_cleanly(self):
+        n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        with mock.patch.object(dispatch, "steal_secs", side_effect=OSError("no /proc/stat")):
+            code, out = self.run_dispatch("run", limits=self.limits(self.TWO), lane=1)
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:todo"})
+        self.assertIn("lanes: down to one lane: cpu unreadable (no /proc/stat)", out)
+        self.assertEqual(self.latch()["lanes"], 1)
+
+    def lane_zero(self, limits):
+        with mock.patch.object(dispatch, "steal_secs", return_value=0.0):
+            return self.run_dispatch("run", limits=limits, lane=0)
+
+    def test_lane_zero_skips_the_agent_lane_one_is_running(self):
+        self.stub.add(["agent:batou", "status:working"], "portfolio: build direction B")
+        same_agent = self.stub.add(["agent:batou", "status:todo"], "nvim-trainer: add a keymap")
+        other = self.stub.add(["agent:ishikawa", "status:todo"], "ghost-in-the-machine: research it")
+        code, _ = self.lane_zero(self.limits(self.TWO))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(same_agent), {"agent:batou", "status:todo"})
+        self.assertEqual(self.stub.labels(other), {"agent:ishikawa", "status:review"})
+
+    def test_lane_zero_skips_the_repo_lane_one_is_working_in(self):
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        same_repo = self.stub.add(["agent:saito", "status:todo"], "flight-tracker: another pop")
+        unknown = self.stub.add(["agent:ishikawa", "status:todo"], "Do a thing")   # lane 0 may still take it
+        code, _ = self.lane_zero(self.limits(self.TWO))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(same_repo), {"agent:saito", "status:todo"})
+        self.assertEqual(self.stub.labels(unknown), {"agent:ishikawa", "status:review"})
+
+    def test_lane_zero_is_unchanged_with_one_lane(self):
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        first = self.stub.add(["agent:batou", "status:todo"], "flight-tracker: another pop")
+        code, _ = self.lane_zero(self.limits("lanes = 1\n[timeout_sec]\ndefault = 60\n"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(first), {"agent:batou", "status:review"})
+
+    def test_the_credit_estimate_over_the_daily_guidance_drops_the_second_lane(self):
+        n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        at = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).isoformat(timespec="seconds")
+        self.seed([{"start": at, "end": at, "agent": "Batou", "lane": 0, "cpu": {"credits": 9000}}])
+        code, out = self.lane_one()
+        self.assertEqual((code, self.stub.labels(n)), (0, {"agent:ishikawa", "status:todo"}))
+        self.assertIn("9000 CPU credits", out)
+        self.assertEqual(self.latch()["lanes"], 1)
+
+    def test_the_second_lane_returns_only_after_the_quiet_period(self):
+        n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        limits = self.limits(self.TWO)
+        latch = self.t / "state" / "lanes.json"
+        latch.parent.mkdir(parents=True, exist_ok=True)
+        now = dt.datetime.now(dt.timezone.utc)
+        stamp = lambda h: (now - dt.timedelta(hours=h)).isoformat(timespec="seconds")   # noqa: E731
+        latch.write_text(json.dumps({"lanes": 1, "unsafe_at": stamp(0.5)}))
+        code, out = self.lane_one(limits)
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertIn("quiet period", out)
+        latch.write_text(json.dumps({"lanes": 1, "unsafe_at": stamp(4)}))
+        code, out = self.lane_one(limits)
+        self.assertEqual(len(self.stub.hermes_calls), 1)
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:review"})
+        self.assertIn("back to two lanes", out)
+        self.assertEqual(self.latch()["lanes"], 2)
+
+    def test_the_ledger_records_the_lane(self):
+        first = self.stub.add(["agent:batou", "status:todo"], "flight-tracker: fix the popping")
+        self.assertEqual(self.run_dispatch()[0], 0)
+        second = self.stub.add(["agent:ishikawa", "status:todo"], "ghost-in-the-machine: research it")
+        self.lane_one()
+        self.assertEqual([(r["issue"], r["lane"]) for r in self.ledger()], [(first, 0), (second, 1)])
+
+    def test_each_lane_has_its_own_run_lock(self):
+        n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        (self.t / "state").mkdir(exist_ok=True)
+        with open(self.t / "state" / "dispatch.lane0.lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            code, _ = self.lane_one()
+        self.assertEqual((code, self.stub.labels(n)), (0, {"agent:ishikawa", "status:review"}))
+
+    def test_one_lane_chooses_at_a_time(self):
+        n = self.stub.add(["agent:batou", "status:todo"])
+        (self.t / "state").mkdir(exist_ok=True)
+        with open(self.t / "state" / "dispatch.pick.lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            code, out = self.run_dispatch()
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:todo"})
+        self.assertIn("choosing", out)
+
+    def test_capacity_reports_the_lanes(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        stamp = lambda h: (now - dt.timedelta(hours=h)).isoformat(timespec="seconds")   # noqa: E731
+        self.seed([{"start": stamp(3), "end": stamp(2), "agent": "Batou", "type": "qa", "lane": 0,
+                    "seconds": 3600, "outcome": "ok", "cost_usd": 0.05, "cpu": {"credits": 100},
+                    "queue_before": 2},
+                   {"start": stamp(2.5), "end": stamp(1.5), "agent": "Ishikawa", "type": "research", "lane": 1,
+                    "seconds": 3600, "outcome": "ok", "cost_usd": 0.04, "cpu": {"credits": 90},
+                    "queue_before": 3}])
+        code, out = self.run_dispatch("capacity")
+        self.assertEqual(code, 0, out)
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertIn("lane 0: 1 run(s), 1.00 h", body)
+        self.assertIn("lane 1: 1 run(s), 1.00 h", body)
+        self.assertIn("two at once 0.50 h", body)
+
+    def test_repo_key_and_the_lanes_switch(self):
+        self.assertEqual(dispatch.repo_key({"title": "flight-tracker: x", "body": "", "labels": []}), "flight-tracker")
+        self.assertEqual(dispatch.repo_key({"title": "QA the PR", "body": "see nvim-trainer", "labels": []}),
+                         "nvim-trainer")
+        self.assertEqual(dispatch.repo_key({"title": "Do a thing", "body": "", "labels": [{"name": "repo:portfolio"}]}),
+                         "portfolio")
+        self.assertEqual(dispatch.repo_key({"title": "Do a thing", "body": "", "labels": []}), "")
+        path = self.t / "limits.toml"
+        for text, want in (("", 1), ("lanes = 1\n", 1), ("lanes = 2\n", 2), ("lanes = 3\n", 1),
+                           ("lanes = '2'\n", 1)):
+            path.write_text(text)
+            self.assertEqual(dispatch.lanes_setting(path), want, text)
+
+    def test_the_two_lanes_never_overlap(self):
+        rows = [{"start": "2026-11-05T10:00:00+00:00", "end": "2026-11-05T11:00:00+00:00", "lane": 0},
+                {"start": "2026-11-05T10:30:00+00:00", "end": "2026-11-05T11:30:00+00:00", "lane": 1},
+                {"start": "2026-11-05T12:00:00+00:00", "end": "2026-11-05T12:10:00+00:00", "lane": 0}]
+        self.assertAlmostEqual(dispatch.concurrent_hours(rows), 0.5)
+        self.assertTrue(dispatch.lane_line(rows).endswith("two at once 0.50 h"))
+        self.assertEqual(dispatch.lane_line([]), "—")
 
 
 if __name__ == "__main__":

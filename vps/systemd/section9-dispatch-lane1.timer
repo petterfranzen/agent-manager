@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 second-lane dispatcher, 2 minutes after its own last run
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=2min
+
+[Install]
+WantedBy=timers.target
