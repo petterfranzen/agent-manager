@@ -1618,6 +1618,44 @@ class TestLanes(Base):
         self.assertEqual(self.latch()["lanes"], 1)
         self.assertIn("Hostinger", self.latch()["reason"])
 
+    def test_unreadable_cpu_stands_the_second_lane_down_cleanly(self):
+        n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        with mock.patch.object(dispatch, "steal_secs", side_effect=OSError("no /proc/stat")):
+            code, out = self.run_dispatch("run", limits=self.limits(self.TWO), lane=1)
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:todo"})
+        self.assertIn("lanes: down to one lane: cpu unreadable (no /proc/stat)", out)
+        self.assertEqual(self.latch()["lanes"], 1)
+
+    def lane_zero(self, limits):
+        with mock.patch.object(dispatch, "steal_secs", return_value=0.0):
+            return self.run_dispatch("run", limits=limits, lane=0)
+
+    def test_lane_zero_skips_the_agent_lane_one_is_running(self):
+        self.stub.add(["agent:batou", "status:working"], "portfolio: build direction B")
+        same_agent = self.stub.add(["agent:batou", "status:todo"], "nvim-trainer: add a keymap")
+        other = self.stub.add(["agent:ishikawa", "status:todo"], "ghost-in-the-machine: research it")
+        code, _ = self.lane_zero(self.limits(self.TWO))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(same_agent), {"agent:batou", "status:todo"})
+        self.assertEqual(self.stub.labels(other), {"agent:ishikawa", "status:review"})
+
+    def test_lane_zero_skips_the_repo_lane_one_is_working_in(self):
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        same_repo = self.stub.add(["agent:saito", "status:todo"], "flight-tracker: another pop")
+        unknown = self.stub.add(["agent:ishikawa", "status:todo"], "Do a thing")   # lane 0 may still take it
+        code, _ = self.lane_zero(self.limits(self.TWO))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(same_repo), {"agent:saito", "status:todo"})
+        self.assertEqual(self.stub.labels(unknown), {"agent:ishikawa", "status:review"})
+
+    def test_lane_zero_is_unchanged_with_one_lane(self):
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        first = self.stub.add(["agent:batou", "status:todo"], "flight-tracker: another pop")
+        code, _ = self.lane_zero(self.limits("lanes = 1\n[timeout_sec]\ndefault = 60\n"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(first), {"agent:batou", "status:review"})
+
     def test_the_credit_estimate_over_the_daily_guidance_drops_the_second_lane(self):
         n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
         at = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).isoformat(timespec="seconds")

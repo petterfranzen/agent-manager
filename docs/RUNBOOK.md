@@ -111,7 +111,7 @@ oldest task it may run *beside* lane 0: a different agent, and a repo no open `s
 issue is in. The repo is the issue's `repo:<name>` label, else a repo name in its title or body
 (agent-manager, section9-hq, ghost-in-the-machine, flight-tracker, nvim-trainer, dinner-planner,
 portfolio); a task with neither — and a *running* task with neither — keeps lane 1 idle, so label
-a task `repo:<name>` to let it run beside another. Both lanes sweep and pick under
+a task `repo:<name>` to let it run beside another. The repo-name match on the title and body is a best guess (the first repo named wins, and a passing mention counts), so a `repo:<name>` label is the reliable way. With `lanes = 2` lane 0 applies the same exclusion the other way round: it skips a task whose agent or repo lane 1 is running (it never stands down for an unknown repo). Both lanes sweep and pick under
 `/var/lib/section9/dispatch.pick.lock`, so they never claim the same issue, and each has its own
 run lock (`/var/lib/section9/dispatch.laneN.lock`).
 
