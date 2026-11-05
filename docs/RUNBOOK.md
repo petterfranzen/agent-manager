@@ -99,6 +99,28 @@ Tachikoma = 10800
 `install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
 the sandbox refuses the `0600` file).
 
+A **second dispatcher lane** (section9-hq #79) is off unless the same root-only file says so:
+```toml
+lanes = 2               # 1 (default): one lane. 2: a second lane may run beside the first.
+[pacing]
+quiet_hours = 3.0       # after an unsafe reading, this long before the second lane comes back
+```
+`section9-dispatch-lane1.service`/`.timer` run `dispatch.py --lane 1` on the same 2-minute cadence
+as lane 0 and stop at once between runs, so with `lanes = 1` they cost nothing. Lane 1 takes the
+oldest task it may run *beside* lane 0: a different agent, and a repo no open `status:working`
+issue is in. The repo is the issue's `repo:<name>` label, else a repo name in its title or body
+(agent-manager, section9-hq, ghost-in-the-machine, flight-tracker, nvim-trainer, dinner-planner,
+portfolio); a task with neither — and a *running* task with neither — keeps lane 1 idle, so label
+a task `repo:<name>` to let it run beside another. Both lanes sweep and pick under
+`/var/lib/section9/dispatch.pick.lock`, so they never claim the same issue, and each has its own
+run lock (`/var/lib/section9/dispatch.laneN.lock`).
+
+Lane 1 stands itself down, and says so in the journal (`lanes: lane 1 stands down: ...`), when
+CPU steal is over `[pacing] steal_pct` (Hostinger's limit is on) or the runs of the last 24 h drew
+over the 8,100-credit daily guidance in [CAPACITY.md](CAPACITY.md). It returns to two lanes only
+after `[pacing] quiet_hours` of safe readings; `/var/lib/section9/lanes.json` holds that latch.
+The **Capacity** issue reports runs and busy hours per lane, and the hours two ran at once.
+
 **hq.sectionnine.dev** is Hermes's web dashboard (Ghost in the Shell theme), wired by hand once in
 Cloudflare Zero Trust:
 - Networks, Tunnels, `section9-vps`, Public hostname: `hq.sectionnine.dev` → change the service to
@@ -161,7 +183,7 @@ board's 100 most recently updated issues: an agent older than that window counts
 longest.
 
 **Later.** Update: `git -C /opt/agent-manager pull --ff-only && /opt/agent-manager/vps/install.sh`.
-Stop everything: `systemctl disable --now section9-dispatch.timer section9-routines.timer`.
+Stop everything: `systemctl disable --now section9-dispatch.timer section9-dispatch-lane1.timer section9-routines.timer`.
 A private routine (rental watch) goes in the root-only `/etc/section9/routines.private.toml`
 as `[[routines]]` with `agent`, `title`, `description`, `cron`, `timezone`.
 Delete `/var/backups/agent-manager-secrets/` on Hetzner once the VPS works.
