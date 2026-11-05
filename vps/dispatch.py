@@ -2,6 +2,7 @@
 """Section 9 dispatcher: GitHub issues in section9-hq in, Hermes runs out.
 
   dispatch.py            run the oldest `agent:<name>` + `status:todo` issue
+  dispatch.py --lane 1   the optional second lane (root-only limits.toml: lanes = 2)
   dispatch.py routines   open the issues for routines whose cron time has come
   dispatch.py status     queue, spend and Hermes reachability (for the runbook)
   dispatch.py spend      update the open "Spend" issue with OpenRouter's figures (hourly)
@@ -9,7 +10,7 @@
   dispatch.py capacity   roll the run ledger up into the open "Capacity" issue (daily)
   dispatch.py note       update the open "Sync" issue: what the VPS did with itself
 
-Run by systemd timers on the VPS (vps/systemd). One run at a time (lock file).
+Run by systemd timers on the VPS (vps/systemd). One run at a time in each lane (lock files).
 Standard library only. Secrets come from root-only files and are never printed:
   OPENROUTER_API_KEY, API_SERVER_KEY  in <secrets-dir>/hermes.env
   GH_TOKEN                            in <secrets-dir>/sandbox.env
@@ -51,6 +52,14 @@ SAFE_CREDITS_DAY = 8100.0    # one full balance a day is the guidance the Capaci
 CLK_TCK = float(os.sysconf("SC_CLK_TCK"))   # /proc/stat counts in USER_HZ ticks, not seconds
 LEDGER_NAME = "runs.jsonl"   # one JSON line per run, under --state-dir (never in the repo)
 LEDGER_VERSION = 1
+LANE_STATE = "lanes.json"         # the lane fallback latch, under --state-dir
+PICK_LOCK = "dispatch.pick.lock"  # one lane chooses at a time; held only while choosing
+DEFAULT_QUIET_HOURS = 3.0        # safe readings this long before the second lane comes back
+SAFE_STEAL_PCT = 10.0            # above this Hostinger's limit is on (the [pacing] default)
+# The repos a task may name in its title or body when it carries no `repo:<name>` label.
+# Anything else is unknown, and an unknown task only ever runs in lane 0.
+REPOS = ("agent-manager", "section9-hq", "ghost-in-the-machine", "flight-tracker",
+         "nvim-trainer", "dinner-planner", "portfolio")
 TYPE_PREFIXES = {"qa", "review", "design", "research", "plan", "check", "sweep", "build",
                  "triage", "fix", "nightly", "report", "audit"}
 SANDBOX_CORES, HERMES_CORES = 0.4, 0.3    # keep in step with vps/compose.yaml
@@ -236,6 +245,35 @@ def activity(board, agents):
     return seen
 
 
+def repo_key(issue):
+    """The repo a task touches: its `repo:<name>` label, else a known repo named in the title or body.
+    '' means unknown, and an unknown task only ever runs in lane 0 (#79)."""
+    for name in sorted(label_names(issue)):
+        if name.startswith("repo:") and name[len("repo:"):].strip():
+            return name[len("repo:"):].strip()
+    text = ((issue.get("title") or "") + "\n" + (issue.get("body") or "")).lower()
+    return next((r for r in REPOS if r in text), "")
+
+
+def inflight(board, agents):
+    """(agents, repos, unknown) held by the open `status:working` issues: what the other lane is on.
+
+    Read from the board, not from a state file, so a killed lane leaves nothing behind. `unknown`
+    is True when a working task names no repo we recognise: then a second lane could collide with
+    it, so it stands down (a `repo:<name>` label lets it run)."""
+    names, repos, unknown = set(), set(), False
+    for issue in board.working():
+        agent = agent_of(issue, agents)
+        if agent:
+            names.add(agent["name"].lower())
+        key = repo_key(issue)
+        if key:
+            repos.add(key)
+        else:
+            unknown = True
+    return names, repos, unknown
+
+
 def load_roster(path):
     data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     return data.get("agents", []), data
@@ -372,23 +410,33 @@ def priority_rank(issue):
     return 2 if "priority:low" in names else 1
 
 
-def run_one(a, board, hermes_key, orkey, log):
-    agents, _ = load_roster(a.roster)
-    caps, preamble = limits_of(a.limits)
-    for ag in agents:
-        ag["_root"] = a.repo_root
+def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
+    """Sweep, pick one issue and claim it. Runs under the pick lock (run_one), so two lanes never
+    claim the same issue and never sweep at the same time; the lock is released before the run.
+
+    Lane 0 takes the oldest admissible task, as always. Lane 1 takes the oldest task it may run
+    *beside* the other lane: a different agent, and a repo no live run is in. The repo is the
+    `repo:<name>` label, else a known repo named in the title or body; a task with neither, or a
+    live task with neither, stands lane 1 down (two of them could touch the same repo) -- #79.
+    Returns (issue, agent, pooled, timeout, queue_before, held) or None."""
     recover_stale(board, agents, caps, log)
-    seen, todo, unassignable = None, [], []
+    seen, todo, unassignable, offered = None, [], [], 0
+    busy_agents, busy_repos, unknown = (set(), set(), False) if not lane else inflight(board, agents)
     for issue in board.todo():
         pool, why = candidates(issue, agents)
         if not pool:
             if why != "no agent label":
                 unassignable.append((issue, why))
             continue
+        offered += 1
         if seen is None and len(pool) > 1:
             seen = activity(board, agents)      # one extra read, only when a task has a pool to choose from
+        agent = min(pool, key=lambda who: (seen or {}).get(who["name"], ""))
+        key = repo_key(issue)
+        if lane and (agent["name"].lower() in busy_agents or unknown or not key or key in busy_repos):
+            continue                            # the other lane's agent, or a repo it may be in
         pooled = not any(f"agent:{who['name'].lower()}" in label_names(issue) for who in agents)
-        todo.append((issue, min(pool, key=lambda who: (seen or {}).get(who["name"], "")), pooled))
+        todo.append((issue, agent, pooled, key))
     if not todo:
         if unassignable:      # e.g. only its own author could take it: tell the Major instead of looping on it
             issue, why = unassignable[0]
@@ -396,7 +444,9 @@ def run_one(a, board, hermes_key, orkey, log):
             board.comment(issue["number"], f"Blocked by the dispatcher: {why}. Relabel it for an agent who may "
                                            f"take it, then set `status:todo` again.")
             log(f"#{issue['number']} blocked: {why}")
-        return
+        elif lane:
+            log(f"lanes: lane {lane} found nothing it may run beside lane 0")
+        return None
     # Priority before age: a stable sort, so oldest-first survives within each priority group.
     todo.sort(key=lambda t: priority_rank(t[0]))
     ok, why = spend_ok(a.openrouter, orkey)
@@ -405,18 +455,39 @@ def run_one(a, board, hermes_key, orkey, log):
         board.set_status(issue, "blocked")
         board.comment(issue["number"], why)
         log(f"#{issue['number']} blocked: spend")
-        return
-    waiting = len(todo)
+        return None
+    admitted = len(todo)                   # what this lane may take, before the pacing rule
     todo = hold_low_priority(todo, a, orkey, log)
     if not todo:
         log("pacing: nothing left to admit")
+        return None
+    issue, agent, pooled, _key = todo[0]
+    board.set_status(issue, "working", agent if pooled else None)
+    log(f"#{issue['number']} -> {agent['name']}" + (f" (lane {lane})" if lane else ""))
+    return issue, agent, pooled, ceiling(agent, caps), offered, admitted - len(todo)
+
+
+def run_one(a, board, hermes_key, orkey, log, lane=0):
+    agents, _ = load_roster(a.roster)
+    caps, preamble = limits_of(a.limits)
+    for ag in agents:
+        ag["_root"] = a.repo_root
+    lock = open(Path(a.state_dir) / PICK_LOCK, "w")
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("lanes: the other lane is choosing; nothing this tick")
+            return
+        picked = choose_and_claim(a, board, agents, caps, orkey, log, lane)
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+    if picked is None:
         return
-    issue, agent, pooled = todo[0]
+    issue, agent, pooled, timeout, queue_before, held = picked
     n = issue["number"]
     system, user = prompt_for(agent, issue, preamble, Path(a.secrets_dir) / "briefs")
-    board.set_status(issue, "working", agent if pooled else None)
-    log(f"#{n} -> {agent['name']}")
-    timeout = ceiling(agent, caps)     # the roster may lower a run, never raise it past limits.toml
     started = dt.datetime.now(dt.timezone.utc)
     usage_before, cpu_before = key_usage(a.openrouter, orkey), None
     try:
@@ -462,7 +533,8 @@ def run_one(a, board, hermes_key, orkey, log):
             "model": agent.get("model", "hermes-agent"),
             "start": started.isoformat(timespec="seconds"), "end": ended.isoformat(timespec="seconds"),
             "seconds": round(max((ended - started).total_seconds(), 0.0), 3),
-            "outcome": outcome, "queue_before": waiting, "held_low_priority": waiting - len(todo),
+            "outcome": outcome, "lane": lane, "queue_before": queue_before,
+            "held_low_priority": held,
             "usage_before": usage_before, "usage_after": usage_after,
             "cost_usd": money_delta(usage_before, usage_after),
             "tokens": tokens, "cpu": cpu, "cpu_before": cpu_before, "cpu_after": cpu_after,
@@ -674,7 +746,8 @@ def capacity(a, board, orkey, log):
               + ", ".join(f"{k} {v}" for k, v in ws["outcomes"].items()) + ".",
               f"- Queue idle (upper bound): {queue_idle_hours(week):.2f} h.",
               f"- CPU credits: {ws['credits']:.0f} against a {SAFE_CREDITS_DAY * 7:.0f} guidance for 7 days "
-              f"({100.0 * ws['credits'] / (SAFE_CREDITS_DAY * 7):.0f}%).", "",
+              f"({100.0 * ws['credits'] / (SAFE_CREDITS_DAY * 7):.0f}%).",
+              f"- Lanes: {lane_line(week)}.", "",
               "**Month to date**",
               f"- Runs: {ms['runs']}; busy: {ms['hours']:.2f} h; spend: {money(ms['cost']) if ms['priced'] else '—'}.",
               f"- Timeouts: {ms['timeouts']} ({ms['timeout_seconds'] / 3600.0:.2f} h wasted); "
@@ -849,6 +922,117 @@ def over_pace(now, cap, spend, reserve=RESERVE, slack_days=1.0):
     return float(spend) > p["linear_to_date"] + p["linear_per_day"] * slack_days
 
 
+def lanes_setting(path):
+    """The root-only `lanes = 2` switch. Absent, unreadable, or anything but 2: one lane (no change)."""
+    try:
+        value = tomllib.loads(Path(path).read_text(encoding="utf-8")).get("lanes", 1)
+    except (OSError, ValueError):
+        return 1
+    return 2 if value == 2 else 1
+
+
+def steal_secs(seconds):
+    """CPU steal over `seconds` of wall clock. Two /proc/stat reads: it spends no CPU of its own."""
+    first = cpu_sample()
+    time.sleep(max(float(seconds), 0.0))
+    return cpu_delta(first, cpu_sample())["steal_pct"]
+
+
+def ledger_credits(rows, now, hours=24.0):
+    """CPU credits above the baseline that the runs of the last `hours` drew, from the ledger.
+
+    Per-run figures, so with two lanes each counts some of the other's draw: the sum over-estimates,
+    which is the safe direction for a fallback."""
+    since = now - dt.timedelta(hours=hours)
+    return sum(float((r.get("cpu") or {}).get("credits") or 0.0)
+               for r in rows if parse_when(r.get("start")) and parse_when(r["start"]) >= since)
+
+
+def lane_fallback(a, rows, now):
+    """Why a second lane must not run right now, or ''. Steal first (Hostinger's temporary limit
+    shows there, as the hourly CPU credits issue reads it), then the runs' own credit draw."""
+    setting = pacing_settings(a.limits)
+    steal = steal_secs(setting.get("sample_seconds", 1.0))
+    limit = float(setting.get("steal_pct", SAFE_STEAL_PCT))
+    if steal > limit:
+        return f"CPU steal {steal:.1f}% is over {limit:.0f}%: Hostinger's limit is on"
+    draw = ledger_credits(rows, now)
+    if draw >= SAFE_CREDITS_DAY:
+        return f"the last 24 h drew {draw:.0f} CPU credits, over the {SAFE_CREDITS_DAY:.0f}/day guidance"
+    return ""
+
+
+def write_lane_state(path, state):
+    """The latch is advice for the next tick: a failed write is logged, never fatal."""
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    except OSError as e:
+        print(f"lanes: cannot write {path}: {e}", flush=True)
+
+
+def lane_state(a, log, now=None):
+    """(lanes allowed, why). The root-only switch, the fallback latch and the quiet period.
+
+    Two lanes only while the switch says 2, the reading is safe, and `quiet_hours` have passed
+    since the last unsafe one. An unsafe reading drops to one lane and writes the latch; the lane
+    returns only after that quiet period, so a single steal spike cannot flap it (#79)."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    if lanes_setting(a.limits) < 2:
+        return 1, "the lanes switch is 1"
+    path = Path(a.state_dir) / LANE_STATE
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    rows = read_ledger(Path(getattr(a, "ledger", "") or (Path(a.state_dir) / LEDGER_NAME)))
+    reason = lane_fallback(a, rows, now)
+    if reason:
+        write_lane_state(path, {"lanes": 1, "at": now.isoformat(timespec="seconds"),
+                                "unsafe_at": now.isoformat(timespec="seconds"), "reason": reason})
+        log(f"lanes: down to one lane: {reason}")
+        return 1, reason
+    unsafe_at = parse_when(state.get("unsafe_at"))
+    quiet = float(pacing_settings(a.limits).get("quiet_hours", DEFAULT_QUIET_HOURS))
+    if unsafe_at and (now - unsafe_at).total_seconds() < quiet * 3600.0:
+        left = (quiet * 3600.0 - (now - unsafe_at).total_seconds()) / 60.0
+        return 1, f"quiet period: {left:.0f} min left of {quiet:.0f} h after an unsafe reading"
+    if state.get("lanes") != 2:
+        write_lane_state(path, {"lanes": 2, "at": now.isoformat(timespec="seconds"),
+                                "unsafe_at": state.get("unsafe_at"), "reason": ""})
+        log("lanes: back to two lanes")
+    return 2, ""
+
+
+def concurrent_hours(rows):
+    """Hours with two or more runs in flight at once: how much the second lane was actually used."""
+    events = []
+    for r in rows:
+        start, end = parse_when(r.get("start")), parse_when(r.get("end"))
+        if start and end and end > start:
+            events += [(start, 1), (end, -1)]
+    events.sort()                       # at equal times the end (-1) sorts first: no zero-length overlap
+    live, hours, last = 0, 0.0, None
+    for at, delta in events:
+        if last is not None and live >= 2:
+            hours += (at - last).total_seconds() / 3600.0
+        live += delta
+        last = at
+    return hours
+
+
+def lane_line(rows):
+    """Runs and busy hours per lane, and the hours two ran at once. A row without a `lane` is one of
+    the single-lane runs from before the switch existed: lane 0."""
+    by_lane = {}
+    for r in rows:
+        by_lane.setdefault(int(r.get("lane") or 0), []).append(r)
+    if not by_lane:
+        return "—"
+    parts = [f"lane {n}: {len(g)} run(s), {summarise(g)['hours']:.2f} h" for n, g in sorted(by_lane.items())]
+    return "; ".join(parts) + f"; two at once {concurrent_hours(rows):.2f} h"
+
+
 def cpu_ceiling():
     """CPU one thread gets per second of wall clock: ~1.0 uncapped, ~0.25 while Hostinger's
     limit is on. One second of load, so the snapshot costs ~18 credits a day at worst."""
@@ -954,6 +1138,8 @@ def main(argv=None):
     p.add_argument("--limits", default="/etc/section9/limits.toml",
                    help="root-only run ceilings and the guardrail preamble")
     p.add_argument("--ledger", default="", help="run ledger path; default <state-dir>/runs.jsonl")
+    p.add_argument("--lane", type=int, default=0, choices=(0, 1),
+                   help="dispatch lane; 1 is the optional second lane (#79)")
     p.add_argument("--state", default="", help="note: ok or blocked")
     p.add_argument("--message", default="", help="note: what the VPS did")
     p.add_argument("--github", default="https://api.github.com")
@@ -992,13 +1178,22 @@ def main(argv=None):
             note(a, board, log)
             return 0
         Path(a.state_dir).mkdir(parents=True, exist_ok=True)
-        with open(Path(a.state_dir) / "dispatch.lock", "w") as lock:
+        lanes = lanes_setting(a.limits)
+        if a.lane >= lanes:
+            log(f"lanes: lane {a.lane} is off (the root-only limits file says {lanes} lane(s))")
+            return 0
+        with open(Path(a.state_dir) / f"dispatch.lane{a.lane}.lock", "w") as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                log("another run is in progress")
+                log(f"another run is in progress in lane {a.lane}")
                 return 0
-            run_one(a, board, hkey, orkey, log)
+            if a.lane:
+                allowed, why = lane_state(a, log)     # the second lane decides for itself, and stands down
+                if allowed < 2:
+                    log(f"lanes: lane {a.lane} stands down: {why}")
+                    return 0
+            run_one(a, board, hkey, orkey, log, a.lane)
         return 0
     except Failure as e:
         print(f"dispatch: {redact(str(e))}", file=sys.stderr)
