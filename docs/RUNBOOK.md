@@ -91,10 +91,49 @@ preamble = """
 You are read-only outside your task's repository: no change to /opt/agent-manager,
 /etc/section9 or /var/lib/section9, and none to your own brief.
 """
+cash_multiplier = 1.266  # top-level key, so it stays above every [table]. Optional: what OpenRouter usage
+                         # costs in cash. Measured on the 6 Nov invoice: a $50 top-up cost $63.30 (5.5%
+                         # credit fee + 20% UK VAT) = 1.266; with 25% Swedish VAT it would be 1.055 x 1.25
+                         # = 1.319. Set, the Capacity and Spend issues show cash next to the usage figure;
+                         # the cap and the fail-closed spend check still use usage as the key reports it.
 [timeout_sec]
 default = 3600      # a per-agent ceiling; agents/roster.toml can only lower it
 Tachikoma = 10800
+
+# Per-agent models (#101). Only these ids may run at all; agents/roster.toml may
+# name any of them, and nothing else. An agent named here is pinned to that model
+# (a one-line rollback: set it back to the default). Leave the file out and every
+# agent runs the default.
+[models]
+allow = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5.5", "moonshotai/kimi-k3.1-pro"]
+# Saito = "deepseek/deepseek-v4.1-flash"     # roll Saito back to the default
+
+# Per-agent monthly budget, USD, UTC month (#101). No entry: no guard.
+[spend]
+Saito = 8.0
+Tachikoma = 5.0
 ```
+**Per-agent models (#101).** The dispatcher sends the agent's model (from
+`agents/roster.toml`, gated by `[models].allow` above) on every run, so the
+switch needs no second gateway and no config change. `[models].<Name> = "<id>"`
+pins that agent; setting it back to `deepseek/deepseek-v4.1-flash` is the whole
+rollback. The ZDR-only provider list for each trial model lives in
+`hermes/config.yaml` under `provider_routing.models`; the per-agent budget guard
+reads `[spend]` and the ledger. Petter writes both tables (root-only) when he
+pins the change; nothing in the repo can set them.
+
+**Applying it (#101).** `hermes/config.yaml` is a bind mount, so `--accept` alone does not
+reload it: restart Hermes after it, then check the gateway answers:
+```bash
+docker compose -f /opt/agent-manager/vps/compose.yaml restart hermes
+curl -s http://127.0.0.1:8642/v1/models | head    # any answer (even 401 without the key) shows it is up
+```
+With no `[models]` table, or an agent whose resolved model is the default, the request is exactly
+the old one (model `hermes-agent`, no `provider`); only an allow-listed non-default model sends its
+id and `provider: openrouter`. There is **no auto-rollback**: if Hermes fails to start on the new
+config, no agent runs until a revert PR is merged and `--accept` is run again. Enable `[models]`
+only with Petter at the machine.
+
 `/etc/section9/briefs/<Name>.md`, if it exists, is that agent's brief instead of the repo's.
 `install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
 the sandbox refuses the `0600` file).
@@ -111,9 +150,14 @@ oldest task it may run *beside* lane 0: a different agent, and a repo no open `s
 issue is in. The repo is the issue's `repo:<name>` label, else a repo name in its title or body
 (agent-manager, section9-hq, ghost-in-the-machine, flight-tracker, nvim-trainer, dinner-planner,
 portfolio); a task with neither — and a *running* task with neither — keeps lane 1 idle, so label
-a task `repo:<name>` to let it run beside another. The repo-name match on the title and body is a best guess (the first repo named wins, and a passing mention counts), so a `repo:<name>` label is the reliable way. With `lanes = 2` lane 0 applies the same exclusion the other way round: it skips a task whose agent or repo lane 1 is running (it never stands down for an unknown repo). Both lanes sweep and pick under
+a task `repo:<name>` to let it run beside another. The repo-name match on the title and body is a best guess (the first repo named wins, and a passing mention counts), so a `repo:<name>` label is the reliable way. With `lanes = 2` lane 0 applies the same exclusion the other way round: it skips a task whose agent or repo lane 1 is running, and, while lane 1 is running anything, a task that names no repo; that exclusion stays on while lane 1 holds its run lock, so flipping `lanes` back to 1 mid-run does not open the gap. Both lanes sweep and pick under
 `/var/lib/section9/dispatch.pick.lock`, so they never claim the same issue, and each has its own
-run lock (`/var/lib/section9/dispatch.laneN.lock`).
+run lock (`/var/lib/section9/dispatch.laneN.lock`). **Deploying a change to `dispatch.py` by hand:**
+wait for any run started by the old code to finish first — the run-lock name changed from
+`dispatch.lock` to `dispatch.lane0.lock`, so the new code would not see an old run's lock. The timers
+cannot double-run on their own: each lane's unit is a `oneshot` and cannot start again while its run
+is active. While `lanes` is 1 the lane-1 timer fires every 2 minutes but logs nothing (it exits at
+once); `dispatch.py status` prints the lane count.
 
 Lane 1 stands itself down, and says so in the journal (`lanes: lane 1 stands down: ...`), when
 CPU steal is over `[pacing] steal_pct` (Hostinger's limit is on) or the runs of the last 24 h drew
@@ -154,13 +198,22 @@ Private tasks show as "On a private task": any issue labelled `private`, and any
 a term in `/etc/section9/crew-deny.txt` (one per line, root-only). Without that file only agent
 states and "On a task" are published. Create the file before you expect titles on the page.
 
-The board: `https://hq.sectionnine.dev/board` is a static page (`vps/board/index.html`) that fetches
-`/board/status.json`. `section9-hq-status` writes both under `board/` in the same folder, from
-the same `tasks` array as `status.json` (fields: `id`, `title`, `agent`, `status`, `pr`, `updated`;
-titles follow the rules above). Petter's one-time step in Cloudflare: Zero Trust -> Networks -> Tunnels ->
+The board: `https://hq.sectionnine.dev/board` is the waits page from ghost-in-the-machine
+(`hq/board/index.html`, PR #18), vendored byte-for-byte into `vps/board/index.html` next to its
+`board-sample.json` (see `vps/board/README.md` for the source sha and the file hashes). A fix goes
+through a ghost-in-the-machine PR, a copy here over that pinned commit sha, then `sync.sh --accept`
+-- `vps/` is a guarded path, so `section9-sync` will not apply the commit until Petter has read it.
+`section9-hq-status` then writes, under `board/` in the same folder, the live `board.json` the page
+polls: the same `tasks` array as `status.json` (fields `id`, `title`, `agent`, `status`, `waits`,
+`waitsText`, `url`, `pr`, `updated`) with the budget and model blocks. The `waits` column comes from
+the issue's `waits:*` label (else `agent`), its line from the latest comment starting "Waits on ...",
+and an issue labelled `private` gets no title, no link and no waits line (rules above). It keeps
+`board/status.json` for the old placeholder page (`vps/board/placeholder.html`, served only when
+`vps/board/index.html` is missing) and `board-sample.json` as the page's own fallback.
+Petter's one-time step in Cloudflare: Zero Trust -> Networks -> Tunnels ->
 the VPS tunnel -> Public hostnames -> add `hq.sectionnine.dev`, path `^/board` (a regex, anchored so that Hermes paths like /api/dashboard do not match) -> `HTTP` `localhost:8090`,
 **above** the catch-all `hq.sectionnine.dev` -> `localhost:9119`; and check that the Access application
-covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/status.json | head`.
+covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/board.json | head`.
 
 `section9-spend.timer` (hourly) keeps the open `Spend` issue in `section9-hq` current: month, cap,
 left and today from OpenRouter, with an "As of" time. Pin it in the GitHub UI if the automatic pin
@@ -171,12 +224,16 @@ issue and adds the two pace lines. The ledger, the CPU headroom numbers, the pac
 monthly forecast/budget-request procedure are in `docs/CAPACITY.md`. A run's cost is the OpenRouter
 `usage_monthly` delta; the ledger write is best effort and never blocks a run. The ledger file is
 written `0640` in a `0750` directory: it carries every run's cost and CPU draw, so it is not
-world-readable.
+world-readable. Those modes apply when the writer creates the file; it also best-effort chmods an
+existing file, so a `runs.jsonl` left `0644` by an older build (or by hand) is corrected on the
+next run.
 
 Each run reads OpenRouter `/key` twice, before it starts and after it ends, and each read waits up
 to 10 s, so a slow OpenRouter can delay a run's start by that much. The dispatcher picks
 `priority:high` first, then unlabelled, then `priority:low`, oldest first within each group; with no
-priority labels the pick is unchanged (oldest first). An issue whose `agent:<token>` names no agent
+priority labels the pick is unchanged (oldest first). Aging keeps a run of high tasks from starving
+the rest: a task that has waited 12 h moves up one level, and a `priority:low` task that has waited
+48 h moves to the top, so it runs even while `priority:high` work exists. An issue whose `agent:<token>` names no agent
 is blocked with a comment once nothing else is todo, so a typo surfaces instead of being ignored.
 `agent:any` hands the issue to the least-recently-active agent that may take it, judged from the
 board's 100 most recently updated issues: an agent older than that window counts as the one idle
@@ -184,6 +241,7 @@ longest.
 
 **Later.** Update: `git -C /opt/agent-manager pull --ff-only && /opt/agent-manager/vps/install.sh`.
 Stop everything: `systemctl disable --now section9-dispatch.timer section9-dispatch-lane1.timer section9-routines.timer`.
+A routine opens its issue at its cron time unless an issue with the same title is still `status:todo` or `status:working` for that agent; one waiting in `review` or `blocked` no longer blocks it (6 Nov: a forgotten "Nightly build" issue in review had skipped three nights). A routine may set `priority = "high"` (the nightly build does): the issue is created with `priority:high`, so with the priority ordering pinned it starts as soon as the current run ends.
 A private routine (rental watch) goes in the root-only `/etc/section9/routines.private.toml`
 as `[[routines]]` with `agent`, `title`, `description`, `cron`, `timezone`.
 Delete `/var/backups/agent-manager-secrets/` on Hetzner once the VPS works.

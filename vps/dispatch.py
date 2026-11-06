@@ -54,8 +54,11 @@ LEDGER_NAME = "runs.jsonl"   # one JSON line per run, under --state-dir (never i
 LEDGER_VERSION = 1
 LANE_STATE = "lanes.json"         # the lane fallback latch, under --state-dir
 PICK_LOCK = "dispatch.pick.lock"  # one lane chooses at a time; held only while choosing
+LANE_LOCK = "dispatch.lane{}.lock"  # one per lane, held for the whole run (#79)
 DEFAULT_QUIET_HOURS = 3.0        # safe readings this long before the second lane comes back
 SAFE_STEAL_PCT = 10.0            # above this Hostinger's limit is on (the [pacing] default)
+PRIORITY_AGING_HOURS = 12.0      # a task waiting this long moves up one priority level (#100)
+LOW_PRIORITY_AGING_HOURS = 48.0  # a priority:low task waiting this long runs ahead of high work (#100)
 # The repos a task may name in its title or body when it carries no `repo:<name>` label.
 # Anything else is unknown, and an unknown task only ever runs in lane 0.
 REPOS = ("agent-manager", "section9-hq", "ghost-in-the-machine", "flight-tracker",
@@ -63,6 +66,20 @@ REPOS = ("agent-manager", "section9-hq", "ghost-in-the-machine", "flight-tracker
 TYPE_PREFIXES = {"qa", "review", "design", "research", "plan", "check", "sweep", "build",
                  "triage", "fix", "nightly", "report", "audit"}
 SANDBOX_CORES, HERMES_CORES = 0.4, 0.3    # keep in step with vps/compose.yaml
+DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"   # in step with hermes/config.yaml model.default
+PROVIDER = "openrouter"                          # every model is reached through OpenRouter only
+# USD per million tokens (in, out) for the models an allow-list may name. Used only to price a run
+# whose measured cost the OpenRouter counter could not give; an unknown model is priced at the
+# dearest allowed rate, so a per-agent guard over-counts rather than under-counts.
+PRICES = {
+    "deepseek/deepseek-v4.1-flash": (0.05, 0.19),
+    "z-ai/glm-5.3-flash": (0.15, 0.50),
+    "minimax/minimax-m3": (0.30, 1.20),
+    "anthropic/claude-haiku-5.5": (0.10, 0.50),
+    "anthropic/claude-sonnet-5.5": (2.0, 10.0),
+    "moonshotai/kimi-k3.1-pro": (2.0, 10.0),
+}
+DEAREST_PRICE = (2.0, 10.0)
 PER_PAGE, MAX_PAGES = 100, 20     # board reads follow Link: rel="next" up to this; more than that is refused
 
 
@@ -274,6 +291,26 @@ def inflight(board, agents):
     return names, repos, unknown
 
 
+def lane_lock_held(path):
+    """True while a run holds a lane's lock file (opened "w" and flock'd for the whole run).
+
+    A `lanes` flip from 2 to 1 must not drop the exclusion while a lane-1 run is still in flight: the run
+    outlives the tick that started it. Best effort: a path that cannot be opened counts as not held."""
+    try:
+        f = open(path, "w")
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(f, fcntl.LOCK_UN)
+    finally:
+        f.close()
+    return False
+
+
 def load_roster(path):
     data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     return data.get("agents", []), data
@@ -288,6 +325,126 @@ def limits_of(path):
     except ValueError as e:
         raise Failure(f"cannot read {path}: {e}") from None
     return data.get("timeout_sec", {}), data.get("preamble", "")
+
+
+def root_table(path, name):
+    """One table from the root-only limits file. No file, no table, or a bad file: {}."""
+    try:
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    table = data.get(name, {})
+    return table if isinstance(table, dict) else {}
+
+
+def models_of(path):
+    """(pins, allow) from the root-only [models] table.
+
+    `pins` maps an agent name to a model id and wins over the roster, so one line rolls that agent
+    back to the default. `allow` is every model the dispatcher may send at all: it is what keeps a
+    repo change (agents/roster.toml) from picking an arbitrary or xAI model (#101).
+    """
+    table = root_table(path, "models")
+    raw = table.get("allow")
+    allow = [x.strip() for x in raw if isinstance(x, str) and x.strip()] if isinstance(raw, list) else []
+    pins = {k: v.strip() for k, v in table.items() if k != "allow" and isinstance(v, str) and v.strip()}
+    return pins, allow
+
+
+def model_ok(model):
+    """Refuse an xAI model. The account's ignore list is repeated here so a bad or edited
+    allow-list entry (or a typo) still can never reach Grok."""
+    low = (model or "").strip().lower()
+    return not (low.startswith("x-ai") or low.startswith("xai") or "grok" in low)
+
+
+def model_for(agent, pins, allow, log=None):
+    """The model id a run sends: the root-only pin, else the roster's, else the default.
+
+    A roster value the allow-list does not hold (an unknown id, a typo, an xAI model) is refused
+    and the run uses the gateway default, so a repo change can only pick an approved model.
+    """
+    wanted = pins.get(agent["name"]) or agent.get("model") or DEFAULT_MODEL
+    if wanted == DEFAULT_MODEL or (wanted in allow and model_ok(wanted)):
+        return wanted
+    if log:
+        log(f"{agent['name']}: model {wanted!r} is not in the root allow-list; using {DEFAULT_MODEL}")
+    return DEFAULT_MODEL
+
+
+def spend_caps(path):
+    """agent -> USD ceiling from the root-only [spend] table. Absent: no per-agent guard."""
+    caps = {}
+    for name, value in root_table(path, "spend").items():
+        try:
+            caps[name] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return caps
+
+
+def run_cost(row):
+    """One ledger row's cost: the measured OpenRouter key delta, else an estimate from its tokens.
+
+    The measured delta is exact but null when the counter did not move; the token estimate keeps a
+    per-agent guard from drifting open over a string of cheap turns.
+    """
+    if isinstance(row.get("cost_usd"), (int, float)):
+        return float(row["cost_usd"])
+    tokens = row.get("tokens") if isinstance(row.get("tokens"), dict) else {}
+    pin, pout = PRICES.get(row.get("model") or "", DEAREST_PRICE)
+    try:
+        return (float(tokens.get("prompt_tokens") or 0) * pin
+                + float(tokens.get("completion_tokens") or 0) * pout) / 1_000_000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def month_spend(rows, agent, now):
+    """Measured $ for one agent in the current UTC month, from the ledger."""
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return sum(run_cost(r) for r in rows
+               if (r.get("agent") or "") == agent
+               and parse_when(r.get("start")) and parse_when(r["start"]) >= start)
+
+
+def budget_ok(a, agent, log, now=None):
+    """(ok, why) for the root-only per-agent monthly ceiling. No [spend] entry for the agent: no guard."""
+    cap = spend_caps(a.limits).get(agent["name"])
+    if cap is None:
+        return True, ""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    rows = read_ledger(Path(getattr(a, "ledger", "") or (Path(a.state_dir) / LEDGER_NAME)))
+    spent = month_spend(rows, agent["name"], now)
+    if spent >= cap:
+        return False, (f"Blocked by the dispatcher: {agent['name']} has used ${spent:.2f} of the "
+                       f"${cap:.2f} monthly budget set for it in /etc/section9/limits.toml (from the run "
+                       f"ledger, this UTC month). Raise the budget there or wait for the month to reset, "
+                       f"then set `status:todo` again.")
+    return True, ""
+
+
+def chat_body(model, system, user):
+    """The request body. With no override (the resolved model is the default) it is exactly the old
+    one: model "hermes-agent", no provider key. Only an allow-listed non-default model adds its id
+    and `provider` (#101)."""
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    if model == DEFAULT_MODEL:
+        return {"model": "hermes-agent", "messages": messages}
+    return {"model": model, "provider": PROVIDER, "messages": messages}
+
+
+def served_model(reply, requested):
+    """The model a run is booked to: the served runtime when the gateway reports one, else the
+    reply's model field, else what we asked for. The runtime is the pair that actually served the
+    turn, so a fallback switch is booked to the fallback and not to the model we requested (#101)."""
+    if isinstance(reply, dict):
+        runtime = reply.get("runtime")
+        if isinstance(runtime, dict) and isinstance(runtime.get("model"), str) and runtime["model"].strip():
+            return runtime["model"].strip()
+        if isinstance(reply.get("model"), str) and reply["model"].strip() not in ("", "hermes-agent"):
+            return reply["model"].strip()      # the gateway's own alias says nothing about the model
+    return requested
 
 
 def ceiling(agent, caps):
@@ -341,10 +498,12 @@ def tail(text, n=20):
 
 
 def recover_stale(board, agents, caps, log, now=None):
-    """Block status:working issues whose run can't still be going. Only called holding the dispatch lock,
-    so no run is live: a dispatcher killed mid-run (reboot, OOM, the unit's TimeoutStartSec) leaves its issue
-    `working`, and todo() would never look at it again. The age limit is the same ceiling the run itself got, so a
-    run cut off by the root-only cap is swept at that cap, not the roster's longer timeout."""
+    """Block status:working issues whose run can't still be going. Called under the pick lock, so the two
+    lanes never sweep at the same time; a run in the other lane may be live, but its claim just refreshed
+    `updated_at`, so it stays under the limit. A dispatcher killed mid-run (reboot, OOM, the unit's
+    TimeoutStartSec) leaves its issue `working`, and todo() would never look at it again. The age limit is
+    the same ceiling the run itself got, so a run cut off by the root-only cap is swept at that cap, not the
+    roster's longer timeout."""
     now = now or dt.datetime.now(dt.timezone.utc)
     for issue in board.working():
         agent = agent_of(issue, agents)
@@ -387,27 +546,51 @@ def hold_low_priority(todo, a, orkey, log, now=None):
         limit = float(setting.get("steal_pct", 10.0))
         if d["steal_pct"] > limit:
             reasons.append(f"steal {d['steal_pct']:.1f}% is over {limit:.0f}% (Hostinger's limit is on)")
-    except (Failure, OSError, KeyError, ValueError) as e:
+    except (Failure, OSError, IndexError, KeyError, ValueError) as e:
         log(f"pacing: cannot read CPU ({e}); holding low-priority work (fail closed)")
         reasons.append("CPU figures unreadable")
     if not reasons:
         return todo
-    kept = [t for t in todo if "priority:low" not in {l["name"] for l in t[0]["labels"]}]
+    kept = [t for t in todo if not has_priority(t[0], "low")]
     if len(kept) < len(todo):
         log(f"pacing: holding {len(todo) - len(kept)} low-priority task(s): {'; '.join(reasons)}")
     return kept
 
 
-def priority_rank(issue):
-    """Pick order: `priority:high` first, then unlabelled, then `priority:low`. Anything else ranks 1.
+def has_priority(issue, level):
+    """True when the issue carries `priority:<level>`. Goes through label_names, which lowercases, so
+    the case of the label on GitHub never matters; the pick and the pacing rule both use this."""
+    return f"priority:{level}" in label_names(issue)
 
-    Petter, 4 Nov: a bug must not wait behind older feature requests. With no priority labels every
-    issue ranks 1, so the pick is oldest-first exactly as before.
+
+def age_hours(issue, now=None):
+    """How long the issue has waited, in hours from its `created_at`; None when that cannot be read."""
+    at = parse_when(issue.get("created_at"))
+    if at is None:
+        return None
+    now = now or dt.datetime.now(dt.timezone.utc)
+    return max((now - at).total_seconds() / 3600.0, 0.0)
+
+
+def priority_rank(issue, now=None):
+    """Pick order: `priority:high` (0), then unlabelled (1), then `priority:low` (2), oldest first
+    within each group. Anything else ranks 1.
+
+    Petter, 4 Nov: a bug must not wait behind older feature requests. Aging (Petter, 5 Nov, #100): a
+    stream of `priority:high` tasks must not starve the rest for ever. A task that has waited
+    `PRIORITY_AGING_HOURS` moves up one level, and a `priority:low` task that has waited
+    `LOW_PRIORITY_AGING_HOURS` moves to the top (0), so it runs even while high tasks exist. With no
+    priority labels and young tasks every issue ranks 1, so the pick is oldest-first exactly as before.
     """
-    names = label_names(issue)
-    if "priority:high" in names:
+    rank = 0 if has_priority(issue, "high") else (2 if has_priority(issue, "low") else 1)
+    age = age_hours(issue, now)
+    if age is None:
+        return rank
+    if has_priority(issue, "low") and age >= LOW_PRIORITY_AGING_HOURS:
         return 0
-    return 2 if "priority:low" in names else 1
+    if age >= PRIORITY_AGING_HOURS:
+        rank = max(rank - 1, 0)
+    return rank
 
 
 def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
@@ -418,13 +601,19 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
     *beside* the other lane: a different agent, and a repo no live run is in. The repo is the
     `repo:<name>` label, else a known repo named in the title or body; a task with neither, or a
     live task with neither, stands lane 1 down (two of them could touch the same repo) -- #79.
+    Lane 0 applies the same exclusion the other way: it skips a task whose agent or repo the other lane is
+    running, and, while the other lane is running anything, a task that names no repo (#100). That exclusion
+    stays on while the other lane holds its run lock, so flipping `lanes` back to 1 mid-run does not open the
+    gap (#100).
     Returns (issue, agent, pooled, timeout, queue_before, held) or None."""
     recover_stale(board, agents, caps, log)
-    seen, todo, unassignable, offered = None, [], [], 0
+    seen, todo, unassignable, offered, over, budget_of = None, [], [], 0, [], {}
     # Symmetric exclusion: with lanes = 2 even lane 0 keeps off the agent and repo the other lane is in.
-    # With one lane nothing is read and nothing changes. Lane 0 never stands down for an unknown repo.
-    two = bool(lane) or lanes_setting(a.limits) == 2
+    # With one lane nothing is read and nothing changes. Lane 0 stands down for an unknown repo only
+    # while the other lane is running something.
+    two = bool(lane) or lanes_setting(a.limits) == 2 or lane_lock_held(Path(a.state_dir) / LANE_LOCK.format(1))
     busy_agents, busy_repos, unknown = inflight(board, agents) if two else (set(), set(), False)
+    other_running = bool(busy_agents or busy_repos or unknown)   # the other lane is running something
     for issue in board.todo():
         pool, why = candidates(issue, agents)
         if not pool:
@@ -438,12 +627,25 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
         key = repo_key(issue)
         if lane and (agent["name"].lower() in busy_agents or unknown or not key or key in busy_repos):
             continue                            # the other lane's agent, or a repo it may be in
-        if two and not lane and (agent["name"].lower() in busy_agents or (key and key in busy_repos)):
-            continue                            # lane 0 beside a live lane-1 run
+        if two and not lane and (agent["name"].lower() in busy_agents
+                                 or (key in busy_repos if key else other_running)):
+            continue                            # lane 0 beside a live lane-1 run; an unknown repo conflicts with any
         pooled = not any(f"agent:{who['name'].lower()}" in label_names(issue) for who in agents)
+        if agent["name"] not in budget_of:                                        # one ledger read per agent
+            budget_of[agent["name"]] = budget_ok(a, agent, log)
+        ok, why = budget_of[agent["name"]]
+        if not ok:
+            over.append((issue, agent, why))
+            continue
         todo.append((issue, agent, pooled, key))
     if not todo:
-        if unassignable:      # e.g. only its own author could take it: tell the Major instead of looping on it
+        if over:              # the only work left is an agent over its monthly budget: say so, once
+            over.sort(key=lambda t: priority_rank(t[0]))
+            issue, agent, why = over[0]
+            board.set_status(issue, "blocked")
+            board.comment(issue["number"], why)
+            log(f"#{issue['number']} blocked: {agent['name']} over budget")
+        elif unassignable:      # e.g. only its own author could take it: tell the Major instead of looping on it
             issue, why = unassignable[0]
             board.set_status(issue, "blocked")
             board.comment(issue["number"], f"Blocked by the dispatcher: {why}. Relabel it for an agent who may "
@@ -467,9 +669,13 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
         log("pacing: nothing left to admit")
         return None
     issue, agent, pooled, _key = todo[0]
-    board.set_status(issue, "working", agent if pooled else None)
+    fresh = board.call("GET", f"/issues/{issue['number']}")   # cheap re-check: the list read above may be stale
+    if "status:todo" not in {l["name"] for l in fresh["labels"]}:
+        log(f"#{issue['number']} is no longer todo; nothing claimed this tick")
+        return None
+    board.set_status(fresh, "working", agent if pooled else None)
     log(f"#{issue['number']} -> {agent['name']}" + (f" (lane {lane})" if lane else ""))
-    return issue, agent, pooled, ceiling(agent, caps), offered, admitted - len(todo)
+    return fresh, agent, pooled, ceiling(agent, caps), offered, admitted - len(todo)
 
 
 def run_one(a, board, hermes_key, orkey, log, lane=0):
@@ -492,19 +698,20 @@ def run_one(a, board, hermes_key, orkey, log, lane=0):
         return
     issue, agent, pooled, timeout, queue_before, held = picked
     n = issue["number"]
+    pins, allow = models_of(a.limits)
+    model = model_for(agent, pins, allow, log)         # root-only allow-list gates a repo's choice
     system, user = prompt_for(agent, issue, preamble, Path(a.secrets_dir) / "briefs")
     started = dt.datetime.now(dt.timezone.utc)
     usage_before, cpu_before = key_usage(a.openrouter, orkey), None
     try:
         cpu_before = cpu_sample()
-    except (Failure, OSError):
+    except (Failure, OSError, IndexError):
         pass
     out, problem, reply = "", "", None
     try:
         reply = http("POST", a.hermes.rstrip("/") + "/v1/chat/completions", hermes_key, timeout=timeout,
                      headers={"X-Hermes-Session-Id": f"issue-{n}"},
-                     body={"model": "hermes-agent", "messages": [{"role": "system", "content": system},
-                                                                  {"role": "user", "content": user}]})
+                     body=chat_body(model, system, user))
         out = (((reply or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     except Failure as e:
         problem = str(e)
@@ -526,7 +733,7 @@ def run_one(a, board, hermes_key, orkey, log, lane=0):
         if cpu_before is not None:
             cpu_after = cpu_sample()
             cpu = cpu_delta(cpu_before, cpu_after)
-    except (Failure, OSError):
+    except (Failure, OSError, IndexError):
         cpu, cpu_after = None, None
     tokens = None
     if isinstance(reply, dict) and isinstance(reply.get("usage"), dict):
@@ -535,7 +742,7 @@ def run_one(a, board, hermes_key, orkey, log, lane=0):
         record = {
             "v": LEDGER_VERSION, "issue": n, "type": task_type(issue.get("title")),
             "agent": agent["name"], "role": agent.get("role", ""),
-            "model": agent.get("model", "hermes-agent"),
+            "model": served_model(reply, model), "model_requested": model,
             "start": started.isoformat(timespec="seconds"), "end": ended.isoformat(timespec="seconds"),
             "seconds": round(max((ended - started).total_seconds(), 0.0), 3),
             "outcome": outcome, "lane": lane, "queue_before": queue_before,
@@ -597,10 +804,18 @@ def routines(a, board, log):
             continue
         label = f"agent:{name.lower()}"
         open_ = board.pages(f"/issues?labels={urllib.parse.quote(label)}&state=open")
-        if any(i["title"] == r["title"] for i in open_):
-            log(f"{name}: '{r['title']}' is still open; skipped")
+        # Only an issue that has not run yet (todo) or is running blocks a new one. An older one that is
+        # waiting in review (its PR is still being QA'd), blocked or forgotten must NOT stop tonight's
+        # run: "one build a night" has to happen every night (Petter, 6 Nov).
+        pending = [i for i in open_ if i["title"] == r["title"]
+                   and {"status:todo", "status:working"} & {l["name"] for l in i["labels"]}]
+        if pending:
+            log(f"{name}: '{r['title']}' (#{pending[0]['number']}) is still waiting or running; skipped")
             continue
-        board.call("POST", "/issues", {"title": r["title"], "body": r.get("description", ""), "labels": [label, "status:todo"]})
+        labels = [label, "status:todo"]
+        if r.get("priority") in ("high", "low"):      # a routine can claim a priority: the nightly build is high
+            labels.append(f"priority:{r['priority']}")
+        board.call("POST", "/issues", {"title": r["title"], "body": r.get("description", ""), "labels": labels})
         log(f"{name}: opened '{r['title']}' ({when:%Y-%m-%d %H:%M %Z})")
     Path(a.state_dir).mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps({"at": now.isoformat()}))
@@ -611,6 +826,7 @@ def status(a, board, hermes_key, orkey, log):
     log(f"queue: {len(todo)} todo ({', '.join('#%d' % i['number'] for i in todo[:10]) or 'none'})")
     ok, why = spend_ok(a.openrouter, orkey)
     log("spend: ok" if ok else "spend: " + why)
+    log(f"lanes: {lanes_setting(a.limits)}")
     try:
         http("GET", a.hermes.rstrip("/") + "/v1/models", hermes_key, timeout=10)
         log("hermes: reachable")
@@ -624,15 +840,21 @@ def spend(a, board, orkey, log):
     if "usage_monthly" not in k:
         raise Failure("OpenRouter /key reply has no usage_monthly")
     money = lambda key: f"${Decimal(str(k[key])):.2f}" if k.get(key) is not None else "n/a"
+    mult = cash_multiplier(a.limits)
+    cash = lambda key: f"${Decimal(str(k[key])) * Decimal(str(mult)):.2f}" if k.get(key) is not None else "n/a"  # noqa: E731
     now = dt.datetime.now(dt.timezone.utc)
-    body = "\n".join([
+    lines = [
         f"**Live snapshot, updated hourly by the VPS.** As of {now:%Y-%m-%d %H:%M} UTC.", "",
         "OpenRouter (the key the agents use; true cost):",
         f"- This month (UTC): {money('usage_monthly')}",
         f"- Cap: {money('limit')}" + (f" ({k['limit_reset']} reset)" if k.get("limit_reset") else ""),
         f"- Left: {money('limit_remaining')}",
-        f"- Today (UTC): {money('usage_daily')}", "",
-        "Rewritten every hour; don't edit. Leave this issue open and pinned."])
+        f"- Today (UTC): {money('usage_daily')}"]
+    if mult != 1.0:
+        lines.append(f"- Cash (x{mult:g} fees and tax): {cash('usage_monthly')} this month, "
+                     f"{cash('usage_daily')} today. The cap stays usage, not cash.")
+    lines += ["", "Rewritten every hour; don't edit. Leave this issue open and pinned."]
+    body = "\n".join(lines)
     open_ = board.pages("/issues?state=open&sort=created&direction=asc")
     issue = next((i for i in open_ if i["title"] == "Spend" and "pull_request" not in i), None)
     if issue:
@@ -740,8 +962,14 @@ def capacity(a, board, orkey, log):
                   f"{' (' + format(float(spend) / p['linear_to_date'], '.1f') + 'x)' if p['linear_to_date'] else ''}.",
                   f"- Remaining-days pace (after the ${RESERVE:.0f} reserve): {money(p['remaining_per_day'])}/day "
                   f"for {p['left_days']:.1f} days, from {money(left)} left.",
-                  f"- Today (UTC): {money(today)} used, fixed pace {money(p['linear_per_day'])}.",
-                  ""]
+                  f"- Today (UTC): {money(today)} used, fixed pace {money(p['linear_per_day'])}."]
+        mult = cash_multiplier(a.limits)
+        if mult != 1.0:
+            cash_today = money(float(today) * mult) if isinstance(today, (int, float)) else "—"
+            lines += [f"- **Cash (x{mult:g} fees and tax):** {money(float(spend) * mult)} of "
+                      f"{money(float(cap) * mult)} used; today {cash_today}. The cap and the fail-closed "
+                      "check still use the usage figures above."]
+        lines += [""]
     else:
         lines += ["**Pace:** OpenRouter's cap or month-to-date usage could not be read; no pace line this run.", ""]
     lines += ["**Last 7 days**",
@@ -768,7 +996,11 @@ def capacity(a, board, orkey, log):
     by_type = {}
     for r in week:
         by_type.setdefault(r.get("type") or "task", []).append(r)
+    by_agent_model = {}
+    for r in week:
+        by_agent_model.setdefault(f"{r.get('agent') or 'unknown'} \u00b7 {r.get('model') or 'unknown'}", []).append(r)
     lines += ["**Last 7 days by agent**"] + table(sorted(by_agent.items()), "Agent") + [""]
+    lines += ["**Last 7 days by agent and model**"] + table(sorted(by_agent_model.items()), "Agent \u00b7 model") + [""]
     lines += ["**Last 7 days by task type**"] + table(sorted(by_type.items()), "Type") + [""]
     stale = [r for r in rows if not isinstance(r.get("cost_usd"), (int, float))]
     if stale:
@@ -877,6 +1109,10 @@ def append_ledger(path, record):
     p = Path(path)
     p.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o640)
+    try:
+        os.fchmod(fd, 0o640)     # the mode above applies only when the file is created: fix an older, wider file
+    except OSError:
+        pass                     # best effort: a chmod that fails must not stop the run
     with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
 
@@ -936,6 +1172,20 @@ def lanes_setting(path):
     return 2 if value == 2 else 1
 
 
+def cash_multiplier(path):
+    """The root-only `cash_multiplier` (default 1.0): what OpenRouter's usage costs in cash once its credit
+    fee and tax are added, for example 1.266 (5.5% credit fee + 20% VAT, measured on an invoice). Absent, unreadable or not a number: 1.0. The
+    cap and the fail-closed spend check keep using usage as OpenRouter reports it (the key's own figure)."""
+    try:
+        value = tomllib.loads(Path(path).read_text(encoding="utf-8")).get("cash_multiplier", 1.0)
+    except (OSError, ValueError):
+        return 1.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def steal_secs(seconds):
     """CPU steal over `seconds` of wall clock. Two /proc/stat reads: it spends no CPU of its own."""
     first = cpu_sample()
@@ -959,7 +1209,7 @@ def lane_fallback(a, rows, now):
     setting = pacing_settings(a.limits)
     try:
         steal = steal_secs(setting.get("sample_seconds", 1.0))
-    except (Failure, OSError, KeyError, ValueError) as e:
+    except (Failure, OSError, IndexError, KeyError, ValueError) as e:
         return f"cpu unreadable ({e})"
     limit = float(setting.get("steal_pct", SAFE_STEAL_PCT))
     if steal > limit:
@@ -1188,9 +1438,8 @@ def main(argv=None):
         Path(a.state_dir).mkdir(parents=True, exist_ok=True)
         lanes = lanes_setting(a.limits)
         if a.lane >= lanes:
-            log(f"lanes: lane {a.lane} is off (the root-only limits file says {lanes} lane(s))")
-            return 0
-        with open(Path(a.state_dir) / f"dispatch.lane{a.lane}.lock", "w") as lock:
+            return 0            # quiet: the lane-1 timer fires every 2 min, its "off" line is pure noise (#78 nit 2)
+        with open(Path(a.state_dir) / LANE_LOCK.format(a.lane), "w") as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
