@@ -94,6 +94,10 @@ You are read-only outside your task's repository: no change to /opt/agent-manage
 [timeout_sec]
 default = 3600      # a per-agent ceiling; agents/roster.toml can only lower it
 Tachikoma = 10800
+cash_multiplier = 1.266  # optional: what OpenRouter usage costs in cash. Measured on the 6 Nov invoice: a
+                         # $50 top-up cost $63.30 (5.5% credit fee + 20% UK VAT) = 1.266; with 25% Swedish
+                         # VAT it would be 1.055 x 1.25 = 1.319. Set, the Capacity and Spend issues show cash next to the usage figure;
+                         # the cap and the fail-closed spend check still use usage as the key reports it.
 ```
 `/etc/section9/briefs/<Name>.md`, if it exists, is that agent's brief instead of the repo's.
 `install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
@@ -111,9 +115,14 @@ oldest task it may run *beside* lane 0: a different agent, and a repo no open `s
 issue is in. The repo is the issue's `repo:<name>` label, else a repo name in its title or body
 (agent-manager, section9-hq, ghost-in-the-machine, flight-tracker, nvim-trainer, dinner-planner,
 portfolio); a task with neither — and a *running* task with neither — keeps lane 1 idle, so label
-a task `repo:<name>` to let it run beside another. The repo-name match on the title and body is a best guess (the first repo named wins, and a passing mention counts), so a `repo:<name>` label is the reliable way. With `lanes = 2` lane 0 applies the same exclusion the other way round: it skips a task whose agent or repo lane 1 is running (it never stands down for an unknown repo). Both lanes sweep and pick under
+a task `repo:<name>` to let it run beside another. The repo-name match on the title and body is a best guess (the first repo named wins, and a passing mention counts), so a `repo:<name>` label is the reliable way. With `lanes = 2` lane 0 applies the same exclusion the other way round: it skips a task whose agent or repo lane 1 is running, and, while lane 1 is running anything, a task that names no repo; that exclusion stays on while lane 1 holds its run lock, so flipping `lanes` back to 1 mid-run does not open the gap. Both lanes sweep and pick under
 `/var/lib/section9/dispatch.pick.lock`, so they never claim the same issue, and each has its own
-run lock (`/var/lib/section9/dispatch.laneN.lock`).
+run lock (`/var/lib/section9/dispatch.laneN.lock`). **Deploying a change to `dispatch.py` by hand:**
+wait for any run started by the old code to finish first — the run-lock name changed from
+`dispatch.lock` to `dispatch.lane0.lock`, so the new code would not see an old run's lock. The timers
+cannot double-run on their own: each lane's unit is a `oneshot` and cannot start again while its run
+is active. While `lanes` is 1 the lane-1 timer fires every 2 minutes but logs nothing (it exits at
+once); `dispatch.py status` prints the lane count.
 
 Lane 1 stands itself down, and says so in the journal (`lanes: lane 1 stands down: ...`), when
 CPU steal is over `[pacing] steal_pct` (Hostinger's limit is on) or the runs of the last 24 h drew
@@ -171,12 +180,16 @@ issue and adds the two pace lines. The ledger, the CPU headroom numbers, the pac
 monthly forecast/budget-request procedure are in `docs/CAPACITY.md`. A run's cost is the OpenRouter
 `usage_monthly` delta; the ledger write is best effort and never blocks a run. The ledger file is
 written `0640` in a `0750` directory: it carries every run's cost and CPU draw, so it is not
-world-readable.
+world-readable. Those modes apply when the writer creates the file; it also best-effort chmods an
+existing file, so a `runs.jsonl` left `0644` by an older build (or by hand) is corrected on the
+next run.
 
 Each run reads OpenRouter `/key` twice, before it starts and after it ends, and each read waits up
 to 10 s, so a slow OpenRouter can delay a run's start by that much. The dispatcher picks
 `priority:high` first, then unlabelled, then `priority:low`, oldest first within each group; with no
-priority labels the pick is unchanged (oldest first). An issue whose `agent:<token>` names no agent
+priority labels the pick is unchanged (oldest first). Aging keeps a run of high tasks from starving
+the rest: a task that has waited 12 h moves up one level, and a `priority:low` task that has waited
+48 h moves to the top, so it runs even while `priority:high` work exists. An issue whose `agent:<token>` names no agent
 is blocked with a comment once nothing else is todo, so a typo surfaces instead of being ignored.
 `agent:any` hands the issue to the least-recently-active agent that may take it, judged from the
 board's 100 most recently updated issues: an agent older than that window counts as the one idle

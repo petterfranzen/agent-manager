@@ -60,7 +60,9 @@ class Stub:
         n = self.next
         self.next += 1
         updated = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=age_min or 0)   # without age_min: a fixed stamp, or "now" for status:working
-        self.issues[n] = {"number": n, "title": title, "body": f"body of {n}", "state": state, "updated_at": "2026-11-01T10:00:00Z" if age_min is None and "status:working" not in labels else updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        self.issues[n] = {"number": n, "title": title, "body": f"body of {n}", "state": state,
+                          "created_at": updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          "updated_at": "2026-11-01T10:00:00Z" if age_min is None and "status:working" not in labels else updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
                           "html_url": f"https://github.com/petterfranzen/section9-hq/issues/{n}",
                           "labels": [{"name": x} for x in labels]}
         return n
@@ -281,6 +283,18 @@ class TestDispatch(Base):
         self.assertEqual(self.stub.labels(second), {"agent:ishikawa", "status:todo"})
         self.assertEqual(self.stub.comments, [])
 
+    def test_a_picked_issue_that_is_no_longer_todo_is_not_claimed(self):
+        # #78 should-fix 3: the todo list read may be stale; re-check the issue right before claiming.
+        n = self.stub.add(["agent:batou", "status:todo"])
+        def steal(todo, *args, **kwargs):
+            self.stub.issues[n]["labels"] = [{"name": "agent:batou"}, {"name": "status:working"}]
+            return todo
+        with mock.patch.object(dispatch, "hold_low_priority", side_effect=steal):
+            code, out = self.run_dispatch()
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:working"})
+        self.assertIn("no longer todo", out)
+
     def test_no_final_status_blocks_with_last_lines(self):
         self.stub.hermes = "silent"
         n = self.stub.add(["agent:batou", "status:todo"])
@@ -319,6 +333,7 @@ class TestDispatch(Base):
         _, out = self.run_dispatch("status")
         self.assertIn("1 todo", out)
         self.assertIn("hermes: reachable", out)
+        self.assertIn("lanes: 1", out)
 
     def test_refuses_plain_http_to_a_remote_host(self):
         argv = ["--secrets-dir", str(self.t / "secrets"), "--github", "http://example.com"]
@@ -456,6 +471,15 @@ class TestSpend(Base):
         self.assertEqual(len(self.stub.issues), 1)
         self.assertIn("Left: $9.50", issue["body"])
         self.assertEqual(self.stub.todo_count(), 0)
+
+    def test_the_cash_multiplier_is_shown_alongside_usage(self):
+        limits = str(self.t / "limits.toml")
+        Path(limits).write_text("cash_multiplier = 1.32\n")
+        self.run_dispatch("spend", limits=limits)
+        (n, issue), = self.stub.issues.items()
+        self.assertIn("This month (UTC): $5.00", issue["body"])
+        self.assertIn("$6.60", issue["body"])           # cash = 5.00 x 1.32
+        self.assertIn("Cash (x1.32", issue["body"])
 
     def test_dispatcher_ignores_it(self):
         self.run_dispatch("spend")
@@ -1086,6 +1110,16 @@ class TestLedger(Base):
         mode = (self.t / "state" / "runs.jsonl").stat().st_mode & 0o777
         self.assertEqual(mode, 0o640)
 
+    def test_the_ledger_writer_fixes_an_existing_files_mode(self):
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"start": "old"}\n')
+        path.chmod(0o644)                       # an older build (or a hand edit) left it world-readable
+        self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(path.read_text().splitlines()[0], '{"start": "old"}')   # and it appended, not rewrote
+
 
 class TestCpuUnits(unittest.TestCase):
     def test_proc_stat_ticks_are_converted_to_seconds(self):
@@ -1121,6 +1155,19 @@ class TestPace(unittest.TestCase):
         self.assertTrue(dispatch.over_pace(now, 40, just_over, slack_days=0.0))
 
 
+class TestCash(unittest.TestCase):
+    def test_the_multiplier_defaults_to_one_and_reads_a_number(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "limits.toml"
+            self.assertEqual(dispatch.cash_multiplier(p), 1.0)          # absent file
+            p.write_text("cash_multiplier = 1.32\n")
+            self.assertEqual(dispatch.cash_multiplier(p), 1.32)
+            p.write_text("cash_multiplier = \"lots\"\n")                # not a number
+            self.assertEqual(dispatch.cash_multiplier(p), 1.0)
+            p.write_text("lanes = 2\n")
+            self.assertEqual(dispatch.cash_multiplier(p), 1.0)
+
+
 class TestPacing(Base):
     def limits(self, body):
         path = self.t / "limits.toml"
@@ -1147,6 +1194,36 @@ class TestPacing(Base):
         self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
         self.assertIn("holding 1 low-priority", out)
 
+    def test_over_pace_holds_a_low_priority_task_whatever_the_label_case(self):
+        # The pick lowercases labels; the pacing hold must normalise the same way (was a raw compare).
+        low = self.stub.add(["agent:batou", "status:todo", "priority:Low"])
+        normal = self.stub.add(["agent:ishikawa", "status:todo"])
+        with mock.patch.object(dispatch, "month_pace",
+                               return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
+                                             "days": 30, "left_days": 29, "remaining_per_day": 1}), \
+                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+            code, out = self.run_dispatch(limits=self.limits(
+                "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
+        self.assertEqual(code, 0)
+        self.assertIn("status:todo", self.stub.labels(low))
+        self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
+        self.assertIn("holding 1 low-priority", out)
+
+    def test_an_index_error_reading_the_cpu_holds_low_priority_not_crashes(self):
+        # #78 nit 1: a short /proc/stat line (IndexError) must fail closed, not crash the tick.
+        low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
+        normal = self.stub.add(["agent:ishikawa", "status:todo"])
+        with mock.patch.object(dispatch, "month_pace",
+                               return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
+                                             "days": 30, "left_days": 29, "remaining_per_day": 1}), \
+                mock.patch.object(dispatch, "cpu_sample", side_effect=IndexError("short cpu line")):
+            code, out = self.run_dispatch(limits=self.limits(
+                "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
+        self.assertEqual(code, 0)
+        self.assertIn("status:todo", self.stub.labels(low))
+        self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
+        self.assertIn("CPU figures unreadable", out)
+
     def test_under_pace_admits_the_low_priority_task_too(self):
         low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
         with mock.patch.object(dispatch, "month_pace",
@@ -1159,10 +1236,27 @@ class TestPacing(Base):
 
 
 class TestCapacity(Base):
-    def capacity(self):
-        code, out = self.run_dispatch("capacity")
+    def capacity(self, limits=None):
+        code, out = self.run_dispatch("capacity", limits=limits)
         self.assertEqual(code, 0, out)
         return out
+
+    def test_the_cash_multiplier_shows_both_usage_and_cash(self):
+        limits = str(self.t / "limits.toml")
+        Path(limits).write_text("cash_multiplier = 1.32\n")
+        self.stub.bump = 0.03
+        self.stub.add(["agent:batou", "status:todo"], "QA: check the spacing")
+        self.run_dispatch()
+        self.capacity(limits=limits)
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertIn("$5.03", body)            # usage, as OpenRouter reports it
+        self.assertIn("$6.64", body)            # cash = 5.03 x 1.32
+        self.assertIn("Cash (x1.32", body)
+
+    def test_without_the_multiplier_there_is_no_cash_line(self):
+        self.capacity()
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertNotIn("Cash (x", body)
 
     def test_creates_then_updates_one_pinned_issue_with_the_roll_up(self):
         self.stub.bump = 0.03
@@ -1496,6 +1590,40 @@ class TestPriority(Base):
         self.assertEqual(self.stub.labels(bad), {"agent:ghost", "status:todo"})
         self.assertEqual(self.stub.labels(good), {"agent:batou", "status:review"})
 
+    def test_priority_rank_ages_a_waiting_task_up_one_level(self):
+        # Direct, so the rule is pinned: a task over 12 h rises one level, a low one over 48 h tops out.
+        now = dt.datetime(2026, 11, 5, 12, tzinfo=dt.timezone.utc)
+        def rank(labels, ago_h):
+            issue = {"labels": [{"name": x} for x in labels],
+                     "created_at": (now - dt.timedelta(hours=ago_h)).isoformat()}
+            return dispatch.priority_rank(issue, now)
+        self.assertEqual(rank([], 0), 1)
+        self.assertEqual(rank(["priority:high"], 0), 0)
+        self.assertEqual(rank(["priority:Low"], 0), 2)         # label case never matters
+        self.assertEqual(rank(["Priority:HIGH"], 0), 0)
+        self.assertEqual(rank([], 5), 1)                       # under the line: unchanged
+        self.assertEqual(rank([], 13), 0)                      # an old ordinary joins the high group
+        self.assertEqual(rank(["priority:low"], 13), 1)        # a low one rises one level
+        self.assertEqual(rank(["priority:low"], 47), 1)
+        self.assertEqual(rank(["priority:low"], 49), 0)        # over 48 h it tops out
+        self.assertEqual(rank(["priority:high"], 49), 0)       # already at the top
+
+    def test_a_starving_ordinary_task_overtakes_a_fresh_high_task(self):
+        old = self.stub.add(["agent:batou", "status:todo"], "Old ordinary, waiting", age_min=13 * 60)
+        bug = self.stub.add(["agent:batou", "status:todo", "priority:high"], "Fresh high bug")
+        self.run_dispatch()
+        self.assertIn("Old ordinary, waiting", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+        self.assertEqual(self.stub.labels(old), {"agent:batou", "status:review"})
+        self.assertEqual(self.stub.labels(bug), {"agent:batou", "priority:high", "status:todo"})
+
+    def test_a_low_task_over_48h_overtakes_a_high_task(self):
+        low = self.stub.add(["agent:batou", "status:todo", "priority:low"], "Low, waiting 49 h", age_min=49 * 60)
+        high = self.stub.add(["agent:batou", "status:todo", "priority:high"], "High, fresh")
+        self.run_dispatch()
+        self.assertIn("Low, waiting 49 h", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+        self.assertEqual(self.stub.labels(low), {"agent:batou", "priority:low", "status:review"})
+        self.assertEqual(self.stub.labels(high), {"agent:batou", "priority:high", "status:todo"})
+
 class TestLanes(Base):
     """#79: the second lane -- the lanes switch, what it may run beside lane 0, and the fallback."""
 
@@ -1525,8 +1653,7 @@ class TestLanes(Base):
     def test_lane_one_is_off_unless_the_switch_says_two(self):
         n = self.stub.add(["agent:batou", "status:todo"])
         code, out = self.run_dispatch(lane=1)                      # no limits file at all: one lane
-        self.assertEqual((code, self.stub.hermes_calls), (0, []))
-        self.assertIn("lane 1 is off", out)
+        self.assertEqual((code, self.stub.hermes_calls, out), (0, [], ""))   # quiet: no per-tick line while lanes = 1
         self.assertEqual(self.stub.labels(n), {"agent:batou", "status:todo"})
         code, out = self.run_dispatch(lane=1, limits=self.limits("lanes = 1\n[timeout_sec]\ndefault = 60\n"))
         self.assertEqual((code, self.stub.hermes_calls), (0, []))
@@ -1643,11 +1770,46 @@ class TestLanes(Base):
     def test_lane_zero_skips_the_repo_lane_one_is_working_in(self):
         self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
         same_repo = self.stub.add(["agent:saito", "status:todo"], "flight-tracker: another pop")
-        unknown = self.stub.add(["agent:ishikawa", "status:todo"], "Do a thing")   # lane 0 may still take it
+        other = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
         code, _ = self.lane_zero(self.limits(self.TWO))
         self.assertEqual(code, 0)
         self.assertEqual(self.stub.labels(same_repo), {"agent:saito", "status:todo"})
-        self.assertEqual(self.stub.labels(unknown), {"agent:ishikawa", "status:review"})
+        self.assertEqual(self.stub.labels(other), {"agent:ishikawa", "status:review"})
+
+    def test_lane_zero_skips_an_unknown_repo_task_while_lane_one_runs(self):
+        # #78 should-fix 1: while the other lane is running anything, an unknown-repo task conflicts too.
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        unknown = self.stub.add(["agent:ishikawa", "status:todo"], "Do a thing")
+        code, _ = self.lane_zero(self.limits(self.TWO))
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(unknown), {"agent:ishikawa", "status:todo"})
+
+    def test_lane_zero_keeps_the_exclusion_while_lane_one_holds_its_run_lock(self):
+        # #78 should-fix 2: lanes flipped back to 1 mid-run must not open the gap beside a live lane-1 run.
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        same_repo = self.stub.add(["agent:saito", "status:todo"], "flight-tracker: another pop")
+        other = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        (self.t / "state").mkdir(exist_ok=True)
+        lock = open(self.t / "state" / "dispatch.lane1.lock", "w")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            code, _ = self.run_dispatch("run", limits=self.limits("lanes = 1\n[timeout_sec]\ndefault = 60\n"), lane=0)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            lock.close()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(same_repo), {"agent:saito", "status:todo"})
+        self.assertEqual(self.stub.labels(other), {"agent:ishikawa", "status:review"})
+
+    def test_lane_one_stands_down_cleanly_on_an_index_error(self):
+        # #78 nit 1: a short /proc/stat line must not crash the lane.
+        n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        with mock.patch.object(dispatch, "cpu_sample", side_effect=IndexError("short cpu line")):
+            code, out = self.run_dispatch("run", limits=self.limits(self.TWO), lane=1)
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:todo"})
+        self.assertIn("cpu unreadable", out)
+        self.assertEqual(self.latch()["lanes"], 1)
 
     def test_lane_zero_is_unchanged_with_one_lane(self):
         self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
