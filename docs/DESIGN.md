@@ -124,6 +124,44 @@ Account settings, done 2026-10-26:
 **No xAI models.** That's Petter's choice: SpaceXAI ZDR is on, `provider_routing.ignore`
 lists `x-ai`, and no config names an `x-ai/*` model.
 
+### Per-agent models (section9-hq #101)
+
+An agent may run on a model other than the default. The switch needs no second
+gateway, no profile and no config rewrite: the dispatcher names the model per
+request. `vps/dispatch.py` reads the agent's `model` from `agents/roster.toml`
+and sends it on `/v1/chat/completions` as `{"model": "<id>", "provider":
+"openrouter"}`. The gateway resolves that provider for the turn and runs the
+named model for that turn only (Hermes: "per-request model selection"; a request
+that sends an explicit `provider` is always honoured, so the bare-model opt-in
+flag is not needed). Nothing about the running gateway changes.
+
+Guardrails, all outside the repo where a commit cannot touch them:
+
+- **The root-only allow-list.** `[models].allow` in `/etc/section9/limits.toml`
+  is the set of ids the dispatcher may send at all. A `roster.toml` value not in
+  it (an unknown id, a typo, an `x-ai/*` model) is refused and the run uses the
+  default; `model_ok` also refuses any xAI id outright. A repo change therefore
+  cannot pick an arbitrary or xAI model.
+- **ZDR only, per model.** `provider_routing.models.<id>` in `hermes/config.yaml`
+  pins each trial model to its ZDR endpoint list with `data_collection: deny`,
+  `ignore: ["x-ai"]` and `sort: price`; the flat block still covers every other
+  model.
+- **Fallbacks fail to the cheapest model.** `fallback_providers` is ordered
+  DeepSeek first, so an agent on a $2/$10 model falls to DeepSeek and never to a
+  dearer model. An entry equal to the primary is skipped, so a DeepSeek agent
+  falls through to GLM as before.
+- **A per-agent monthly budget.** `[spend].<Name>` in the same root-only file is
+  a USD ceiling; the dispatcher sums that agent's runs from the ledger for the
+  UTC month (the measured `/key` delta, else a token estimate at the model's
+  price) and blocks the agent's task, with a comment, when it is reached.
+- **Rollback is one line.** `[models].<Name> = "deepseek/deepseek-v4.1-flash"`
+  pins that agent back to the default; the roster is untouched.
+
+The ledger records both the model that answered (`model`, from the reply's
+`runtime.model` when the gateway reports one, else the reply's `model`) and the
+model asked for (`model_requested`), and the Capacity issue rolls spend up by
+agent *and* model.
+
 ## Images
 
 `paperclip` runs a slim repackaging of the official Paperclip image, not the

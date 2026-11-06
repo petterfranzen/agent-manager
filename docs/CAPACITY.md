@@ -74,7 +74,8 @@ inside the same guard as the write, so neither can stop a run.
 
 | field | meaning |
 |---|---|
-| `issue`, `agent`, `role`, `type`, `model` | what ran; `type` comes from the title prefix (`QA:`, `Research:`, `Design:` …) |
+| `issue`, `agent`, `role`, `type` | what ran; `type` comes from the title prefix (`QA:`, `Research:`, `Design:` …) |
+| `model`, `model_requested` | `model` is the model that answered (the reply's `runtime.model`, else the reply's `model`); `model_requested` is the id the dispatcher sent (#101). They differ only after a fallback switch |
 | `start`, `end`, `seconds` | UTC ISO times and wall-clock length |
 | `outcome` | `ok`, `timeout`, `blocked`, `no-output` |
 | `lane` | `0` or `1`: the dispatcher lane that ran it; a row from before the switch is lane 0 |
@@ -83,6 +84,24 @@ inside the same guard as the write, so neither can stop a run.
 | `cost_usd` | the `usage_monthly` delta; `null` when the counter did not move or could not be read |
 | `tokens` | Hermes's `usage` object, when the reply carries one |
 | `cpu`, `cpu_before`, `cpu_after` | `wall_seconds`, `steal_pct`, `core_seconds`, `credits`, plus the raw snapshots |
+
+## The per-agent budget (#101)
+
+`[spend]` in the same root-only file is a per-agent USD ceiling for the UTC month:
+
+```toml
+[spend]
+Saito = 8.0
+Tachikoma = 5.0
+```
+
+Before it claims a task the dispatcher sums that agent's ledger rows for the
+current month — the measured `/key` delta when the counter moved, else a token
+estimate at the model's price (`PRICES` in `vps/dispatch.py`; an unknown model is
+priced at the dearest allowed rate, so the guard over-counts, never under-counts)
+— and, when it is at or over the ceiling, blocks the task with a comment naming
+the figure. An agent with no `[spend]` entry has no guard. The month is UTC, the
+same clock as the Spend issue.
 
 ## The pacing rule
 
@@ -142,7 +161,8 @@ only while the 7-day credits/day stay under 8,100; the fallback above is what en
 
 `section9-capacity.timer` runs `dispatch.py capacity` once a day and rewrites one
 open **Capacity** issue in `section9-hq` (pinned like **Spend**): last 7 days and
-month to date, runs, busy hours, $ and $/hour by agent and task type, timeouts and the
+month to date, runs, busy hours, $ and $/hour by agent, by task type and by agent
+and model, timeouts and the
 hours they wasted, queue idle (an upper bound: the ledger only sees runs), CPU credits
 against the daily guidance, the runs and busy hours per lane with the hours two ran at once, and
 both pace lines with today's spend against them. It guesses nothing: a run whose cost delta was

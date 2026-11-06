@@ -50,6 +50,7 @@ class Stub:
         self.key_calls, self.key_fail_after = 0, None   # key_fail_after: fail /key reads after this many
         self.page_size, self.link = None, None     # page_size: serve issue lists in pages of this size
         self.hermes = "report"      # report | silent | slow | error
+        self.hermes_model, self.hermes_runtime = None, None   # what the reply echoes / served
         self.next = 1
         self.gh_comments, self.pinned, self.crew_auth = [], None, "unset"
         self.crew_sha, self.checks = "tree1", []
@@ -159,8 +160,12 @@ class Stub:
                 time.sleep(2.5)
             if self.hermes in ("report", "slow-report"):   # what the agent does with s9-task
                 self.issues[n]["labels"] = [{"name": x} for x in self.labels(n) - {"status:working"}] + [{"name": "status:review"}]
-            return 200, {"choices": [{"message": {"content": "line 1\nline 2\nall done"}}],
-                         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+            reply = {"model": self.hermes_model or body.get("model", "hermes-agent"),
+                     "choices": [{"message": {"content": "line 1\nline 2\nall done"}}],
+                     "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+            if self.hermes_runtime:
+                reply["runtime"] = self.hermes_runtime
+            return 200, reply
         return 404, {}
 
 
@@ -222,6 +227,21 @@ description = "Sweep."
 cron = "*/5 * * * *"
 timezone = "Europe/Stockholm"
 active = false
+"""
+
+
+# A roster that names a per-agent model (#101).
+ROSTER_MODEL = """
+[[agents]]
+name = "Batou"
+brief = "agents/coder.md"
+timeout_sec = 60
+
+[[agents]]
+name = "Saito"
+brief = "agents/ops.md"
+model = "anthropic/claude-sonnet-5.5"
+timeout_sec = 60
 """
 
 
@@ -1027,8 +1047,10 @@ class TestLedger(Base):
         n = self.stub.add(["agent:batou", "status:todo"], "QA: check the spacing")
         self.assertEqual(self.run_dispatch()[0], 0)
         (row,) = self.ledger()
+        # The model is what the run asked for (the gateway default here), plus the model it was booked to.
         self.assertEqual((row["v"], row["issue"], row["agent"], row["role"], row["type"], row["model"]),
-                         (1, n, "Batou", "", "qa", "hermes-agent"))
+                         (1, n, "Batou", "", "qa", dispatch.DEFAULT_MODEL))
+        self.assertEqual(row["model_requested"], dispatch.DEFAULT_MODEL)
         self.assertEqual((row["outcome"], row["queue_before"]), ("ok", 1))
         self.assertGreaterEqual(row["seconds"], 0)
         self.assertEqual(row["cost_usd"], 0.03)
@@ -1166,6 +1188,34 @@ class TestCash(unittest.TestCase):
             self.assertEqual(dispatch.cash_multiplier(p), 1.0)
             p.write_text("lanes = 2\n")
             self.assertEqual(dispatch.cash_multiplier(p), 1.0)
+
+
+class TestLimitsExample(unittest.TestCase):
+    """The two follow-ups meet in /etc/section9/limits.toml: #100's top-level cash_multiplier and #101's
+    [models] and [spend] tables. A top-level key placed after a table would silently become part of it."""
+
+    def runbook_limits(self):
+        text = (Path(__file__).resolve().parent.parent / "docs" / "RUNBOOK.md").read_text(encoding="utf-8")
+        marker = "# /etc/section9/limits.toml"
+        start = text.index(marker)
+        return dispatch.tomllib.loads(text[start:text.index("```", start)])
+
+    def test_the_runbook_example_parses_with_every_key_where_the_dispatcher_reads_it(self):
+        data = self.runbook_limits()
+        self.assertEqual(data["cash_multiplier"], 1.266)             # top level, not inside [timeout_sec]
+        self.assertNotIn("cash_multiplier", data["timeout_sec"])
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "limits.toml"
+            p.write_text((Path(__file__).resolve().parent.parent / "docs" / "RUNBOOK.md").read_text(
+                encoding="utf-8").split("# /etc/section9/limits.toml", 1)[1].split("```", 1)[0].split("\n", 1)[1])
+            self.assertEqual(dispatch.cash_multiplier(p), 1.266)
+            self.assertEqual(dispatch.spend_caps(p), {"Saito": 8.0, "Tachikoma": 5.0})
+            pins, allow = dispatch.models_of(p)
+            self.assertIn("anthropic/claude-sonnet-5.5", allow)
+            self.assertEqual(pins, {})
+
+    def test_the_allow_list_in_the_example_holds_no_xai_model(self):
+        self.assertTrue(all(dispatch.model_ok(m) for m in self.runbook_limits()["models"]["allow"]))
 
 
 class TestPacing(Base):
@@ -1906,6 +1956,121 @@ class TestLanes(Base):
         self.assertAlmostEqual(dispatch.concurrent_hours(rows), 0.5)
         self.assertTrue(dispatch.lane_line(rows).endswith("two at once 0.50 h"))
         self.assertEqual(dispatch.lane_line([]), "—")
+
+
+class TestModels(Base):
+    """#101: the per-agent model, the root-only allow-list and the per-agent spend guard."""
+
+    def limits(self, body):
+        path = self.t / "limits.toml"
+        path.write_text(body)
+        return str(path)
+
+    def seed(self, rows):
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def body_of(self, index=0):
+        return self.stub.hermes_calls[index][0]
+
+    def test_a_roster_model_in_the_allow_list_is_sent_with_the_provider(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        limits = self.limits('[models]\nallow = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5.5"]\n')
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=limits)
+        body = self.body_of()
+        self.assertEqual(body["model"], "anthropic/claude-sonnet-5.5")
+        self.assertEqual(body["provider"], "openrouter")
+
+    def test_a_roster_model_outside_the_allow_list_falls_back_to_the_default(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        limits = self.limits('[models]\nallow = ["deepseek/deepseek-v4.1-flash"]\n')
+        self.stub.add(["agent:saito", "status:todo"])
+        code, out = self.run_dispatch(limits=limits)
+        self.assertEqual((code, self.body_of()["model"]), (0, dispatch.DEFAULT_MODEL))
+        self.assertIn("not in the root allow-list", out)
+
+    def test_without_an_allow_list_the_roster_model_is_not_used(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch()                     # no limits file at all
+        self.assertEqual(self.body_of()["model"], dispatch.DEFAULT_MODEL)
+
+    def test_an_xai_model_is_refused_even_if_the_allow_list_names_it(self):
+        pins, allow = dispatch.models_of(self.limits(
+            '[models]\nallow = ["x-ai/grok-9-turbo"]\n'))
+        self.assertEqual(dispatch.model_for({"name": "Saito", "model": "x-ai/grok-9-turbo"}, pins, allow),
+                         dispatch.DEFAULT_MODEL)
+
+    def test_the_root_pin_rolls_the_agent_back_with_one_line(self):
+        pins, allow = dispatch.models_of(self.limits(
+            '[models]\nallow = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5.5"]\n'
+            'Saito = "deepseek/deepseek-v4.1-flash"\n'))
+        self.assertEqual(dispatch.model_for({"name": "Saito", "model": "anthropic/claude-sonnet-5.5"}, pins, allow),
+                         dispatch.DEFAULT_MODEL)
+
+    def test_the_ledger_records_the_model_that_answered(self):
+        self.stub.hermes_runtime = {"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash",
+                                    "route_source": "raw_request"}
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\n'))
+        (row,) = [json.loads(l) for l in (self.t / "state" / "runs.jsonl").read_text().splitlines()]
+        self.assertEqual(row["model"], "deepseek/deepseek-v4.1-flash")       # the served model, not the asked one
+        self.assertEqual(row["model_requested"], "anthropic/claude-sonnet-5.5")
+
+    def test_the_ledger_falls_back_to_the_reply_model_when_no_runtime_is_reported(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\n'))
+        (row,) = [json.loads(l) for l in (self.t / "state" / "runs.jsonl").read_text().splitlines()]
+        self.assertEqual(row["model"], row["model_requested"])
+
+    def test_the_agent_is_blocked_when_its_monthly_budget_is_reached(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self.seed([{"start": now, "agent": "Saito", "model": "anthropic/claude-sonnet-5.5", "cost_usd": 6.5}])
+        n = self.stub.add(["agent:saito", "status:todo"])
+        code, out = self.run_dispatch(limits=self.limits("[spend]\nSaito = 6.0\n"))
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:saito", "status:blocked"})
+        self.assertIn("monthly budget", self.stub.comments[0][1])
+        self.assertIn("$6.50", self.stub.comments[0][1])
+
+    def test_a_run_under_the_budget_still_goes(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self.seed([{"start": now, "agent": "Saito", "model": "anthropic/claude-sonnet-5.5", "cost_usd": 1.0}])
+        n = self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=self.limits("[spend]\nSaito = 6.0\n"))
+        self.assertEqual(self.stub.labels(n), {"agent:saito", "status:review"})
+
+    def test_an_agent_without_a_spend_entry_has_no_guard(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self.seed([{"start": now, "agent": "Saito", "cost_usd": 99.0}])
+        n = self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=self.limits("[spend]\nTachikoma = 6.0\n"))
+        self.assertEqual(self.stub.labels(n), {"agent:saito", "status:review"})
+
+    def test_the_guard_estimates_a_run_the_counter_could_not_price(self):
+        self.assertAlmostEqual(dispatch.run_cost({"model": "anthropic/claude-sonnet-5.5", "cost_usd": None,
+                                                  "tokens": {"prompt_tokens": 1000, "completion_tokens": 1000}}),
+                               0.012)
+        self.assertEqual(dispatch.run_cost({"model": "who/knows", "tokens": {"completion_tokens": 1_000_000}}),
+                         10.0)              # an unknown model is priced at the dearest allowed rate
+
+    def test_capacity_shows_cost_by_agent_and_model(self):
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self.seed([{"start": now, "end": now, "agent": "Saito", "model": "anthropic/claude-sonnet-5.5",
+                    "type": "review", "seconds": 600, "outcome": "ok", "cost_usd": 0.2, "cpu": {"credits": 10},
+                    "queue_before": 1}])
+        code, out = self.run_dispatch("capacity")
+        self.assertEqual(code, 0, out)
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertIn("by agent and model", body)
+        self.assertIn("Saito \u00b7 anthropic/claude-sonnet-5.5", body)
 
 
 if __name__ == "__main__":

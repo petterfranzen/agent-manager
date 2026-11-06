@@ -91,14 +91,37 @@ preamble = """
 You are read-only outside your task's repository: no change to /opt/agent-manager,
 /etc/section9 or /var/lib/section9, and none to your own brief.
 """
+cash_multiplier = 1.266  # top-level key, so it stays above every [table]. Optional: what OpenRouter usage
+                         # costs in cash. Measured on the 6 Nov invoice: a $50 top-up cost $63.30 (5.5%
+                         # credit fee + 20% UK VAT) = 1.266; with 25% Swedish VAT it would be 1.055 x 1.25
+                         # = 1.319. Set, the Capacity and Spend issues show cash next to the usage figure;
+                         # the cap and the fail-closed spend check still use usage as the key reports it.
 [timeout_sec]
 default = 3600      # a per-agent ceiling; agents/roster.toml can only lower it
 Tachikoma = 10800
-cash_multiplier = 1.266  # optional: what OpenRouter usage costs in cash. Measured on the 6 Nov invoice: a
-                         # $50 top-up cost $63.30 (5.5% credit fee + 20% UK VAT) = 1.266; with 25% Swedish
-                         # VAT it would be 1.055 x 1.25 = 1.319. Set, the Capacity and Spend issues show cash next to the usage figure;
-                         # the cap and the fail-closed spend check still use usage as the key reports it.
+
+# Per-agent models (#101). Only these ids may run at all; agents/roster.toml may
+# name any of them, and nothing else. An agent named here is pinned to that model
+# (a one-line rollback: set it back to the default). Leave the file out and every
+# agent runs the default.
+[models]
+allow = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5.5", "moonshotai/kimi-k3.1-pro"]
+# Saito = "deepseek/deepseek-v4.1-flash"     # roll Saito back to the default
+
+# Per-agent monthly budget, USD, UTC month (#101). No entry: no guard.
+[spend]
+Saito = 8.0
+Tachikoma = 5.0
 ```
+**Per-agent models (#101).** The dispatcher sends the agent's model (from
+`agents/roster.toml`, gated by `[models].allow` above) on every run, so the
+switch needs no second gateway and no config change. `[models].<Name> = "<id>"`
+pins that agent; setting it back to `deepseek/deepseek-v4.1-flash` is the whole
+rollback. The ZDR-only provider list for each trial model lives in
+`hermes/config.yaml` under `provider_routing.models`; the per-agent budget guard
+reads `[spend]` and the ledger. Petter writes both tables (root-only) when he
+pins the change; nothing in the repo can set them.
+
 `/etc/section9/briefs/<Name>.md`, if it exists, is that agent's brief instead of the repo's.
 `install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
 the sandbox refuses the `0600` file).

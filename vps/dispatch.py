@@ -66,6 +66,20 @@ REPOS = ("agent-manager", "section9-hq", "ghost-in-the-machine", "flight-tracker
 TYPE_PREFIXES = {"qa", "review", "design", "research", "plan", "check", "sweep", "build",
                  "triage", "fix", "nightly", "report", "audit"}
 SANDBOX_CORES, HERMES_CORES = 0.4, 0.3    # keep in step with vps/compose.yaml
+DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"   # in step with hermes/config.yaml model.default
+PROVIDER = "openrouter"                          # every model is reached through OpenRouter only
+# USD per million tokens (in, out) for the models an allow-list may name. Used only to price a run
+# whose measured cost the OpenRouter counter could not give; an unknown model is priced at the
+# dearest allowed rate, so a per-agent guard over-counts rather than under-counts.
+PRICES = {
+    "deepseek/deepseek-v4.1-flash": (0.05, 0.19),
+    "z-ai/glm-5.3-flash": (0.15, 0.50),
+    "minimax/minimax-m3": (0.30, 1.20),
+    "anthropic/claude-haiku-5.5": (0.10, 0.50),
+    "anthropic/claude-sonnet-5.5": (2.0, 10.0),
+    "moonshotai/kimi-k3.1-pro": (2.0, 10.0),
+}
+DEAREST_PRICE = (2.0, 10.0)
 PER_PAGE, MAX_PAGES = 100, 20     # board reads follow Link: rel="next" up to this; more than that is refused
 
 
@@ -313,6 +327,116 @@ def limits_of(path):
     return data.get("timeout_sec", {}), data.get("preamble", "")
 
 
+def root_table(path, name):
+    """One table from the root-only limits file. No file, no table, or a bad file: {}."""
+    try:
+        data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    table = data.get(name, {})
+    return table if isinstance(table, dict) else {}
+
+
+def models_of(path):
+    """(pins, allow) from the root-only [models] table.
+
+    `pins` maps an agent name to a model id and wins over the roster, so one line rolls that agent
+    back to the default. `allow` is every model the dispatcher may send at all: it is what keeps a
+    repo change (agents/roster.toml) from picking an arbitrary or xAI model (#101).
+    """
+    table = root_table(path, "models")
+    raw = table.get("allow")
+    allow = [x.strip() for x in raw if isinstance(x, str) and x.strip()] if isinstance(raw, list) else []
+    pins = {k: v.strip() for k, v in table.items() if k != "allow" and isinstance(v, str) and v.strip()}
+    return pins, allow
+
+
+def model_ok(model):
+    """Refuse an xAI model. The account's ignore list is repeated here so a bad or edited
+    allow-list entry (or a typo) still can never reach Grok."""
+    low = (model or "").strip().lower()
+    return not (low.startswith("x-ai") or low.startswith("xai") or "grok" in low)
+
+
+def model_for(agent, pins, allow, log=None):
+    """The model id a run sends: the root-only pin, else the roster's, else the default.
+
+    A roster value the allow-list does not hold (an unknown id, a typo, an xAI model) is refused
+    and the run uses the gateway default, so a repo change can only pick an approved model.
+    """
+    wanted = pins.get(agent["name"]) or agent.get("model") or DEFAULT_MODEL
+    if wanted == DEFAULT_MODEL or (wanted in allow and model_ok(wanted)):
+        return wanted
+    if log:
+        log(f"{agent['name']}: model {wanted!r} is not in the root allow-list; using {DEFAULT_MODEL}")
+    return DEFAULT_MODEL
+
+
+def spend_caps(path):
+    """agent -> USD ceiling from the root-only [spend] table. Absent: no per-agent guard."""
+    caps = {}
+    for name, value in root_table(path, "spend").items():
+        try:
+            caps[name] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return caps
+
+
+def run_cost(row):
+    """One ledger row's cost: the measured OpenRouter key delta, else an estimate from its tokens.
+
+    The measured delta is exact but null when the counter did not move; the token estimate keeps a
+    per-agent guard from drifting open over a string of cheap turns.
+    """
+    if isinstance(row.get("cost_usd"), (int, float)):
+        return float(row["cost_usd"])
+    tokens = row.get("tokens") if isinstance(row.get("tokens"), dict) else {}
+    pin, pout = PRICES.get(row.get("model") or "", DEAREST_PRICE)
+    try:
+        return (float(tokens.get("prompt_tokens") or 0) * pin
+                + float(tokens.get("completion_tokens") or 0) * pout) / 1_000_000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def month_spend(rows, agent, now):
+    """Measured $ for one agent in the current UTC month, from the ledger."""
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return sum(run_cost(r) for r in rows
+               if (r.get("agent") or "") == agent
+               and parse_when(r.get("start")) and parse_when(r["start"]) >= start)
+
+
+def budget_ok(a, agent, log, now=None):
+    """(ok, why) for the root-only per-agent monthly ceiling. No [spend] entry for the agent: no guard."""
+    cap = spend_caps(a.limits).get(agent["name"])
+    if cap is None:
+        return True, ""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    rows = read_ledger(Path(getattr(a, "ledger", "") or (Path(a.state_dir) / LEDGER_NAME)))
+    spent = month_spend(rows, agent["name"], now)
+    if spent >= cap:
+        return False, (f"Blocked by the dispatcher: {agent['name']} has used ${spent:.2f} of the "
+                       f"${cap:.2f} monthly budget set for it in /etc/section9/limits.toml (from the run "
+                       f"ledger, this UTC month). Raise the budget there or wait for the month to reset, "
+                       f"then set `status:todo` again.")
+    return True, ""
+
+
+def served_model(reply, requested):
+    """The model a run is booked to: the served runtime when the gateway reports one, else the
+    reply's model field, else what we asked for. The runtime is the pair that actually served the
+    turn, so a fallback switch is booked to the fallback and not to the model we requested (#101)."""
+    if isinstance(reply, dict):
+        runtime = reply.get("runtime")
+        if isinstance(runtime, dict) and isinstance(runtime.get("model"), str) and runtime["model"].strip():
+            return runtime["model"].strip()
+        if isinstance(reply.get("model"), str) and reply["model"].strip():
+            return reply["model"].strip()
+    return requested
+
+
 def ceiling(agent, caps):
     """The agent's run timeout, never above the root-only ceiling for that agent."""
     want = int(agent.get("timeout_sec", DEFAULT_TIMEOUT))
@@ -473,7 +597,7 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
     gap (#100).
     Returns (issue, agent, pooled, timeout, queue_before, held) or None."""
     recover_stale(board, agents, caps, log)
-    seen, todo, unassignable, offered = None, [], [], 0
+    seen, todo, unassignable, offered, over, budget_of = None, [], [], 0, [], {}
     # Symmetric exclusion: with lanes = 2 even lane 0 keeps off the agent and repo the other lane is in.
     # With one lane nothing is read and nothing changes. Lane 0 stands down for an unknown repo only
     # while the other lane is running something.
@@ -497,9 +621,21 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
                                  or (key in busy_repos if key else other_running)):
             continue                            # lane 0 beside a live lane-1 run; an unknown repo conflicts with any
         pooled = not any(f"agent:{who['name'].lower()}" in label_names(issue) for who in agents)
+        if agent["name"] not in budget_of:                                        # one ledger read per agent
+            budget_of[agent["name"]] = budget_ok(a, agent, log)
+        ok, why = budget_of[agent["name"]]
+        if not ok:
+            over.append((issue, agent, why))
+            continue
         todo.append((issue, agent, pooled, key))
     if not todo:
-        if unassignable:      # e.g. only its own author could take it: tell the Major instead of looping on it
+        if over:              # the only work left is an agent over its monthly budget: say so, once
+            over.sort(key=lambda t: priority_rank(t[0]))
+            issue, agent, why = over[0]
+            board.set_status(issue, "blocked")
+            board.comment(issue["number"], why)
+            log(f"#{issue['number']} blocked: {agent['name']} over budget")
+        elif unassignable:      # e.g. only its own author could take it: tell the Major instead of looping on it
             issue, why = unassignable[0]
             board.set_status(issue, "blocked")
             board.comment(issue["number"], f"Blocked by the dispatcher: {why}. Relabel it for an agent who may "
@@ -552,6 +688,8 @@ def run_one(a, board, hermes_key, orkey, log, lane=0):
         return
     issue, agent, pooled, timeout, queue_before, held = picked
     n = issue["number"]
+    pins, allow = models_of(a.limits)
+    model = model_for(agent, pins, allow, log)         # root-only allow-list gates a repo's choice
     system, user = prompt_for(agent, issue, preamble, Path(a.secrets_dir) / "briefs")
     started = dt.datetime.now(dt.timezone.utc)
     usage_before, cpu_before = key_usage(a.openrouter, orkey), None
@@ -563,8 +701,9 @@ def run_one(a, board, hermes_key, orkey, log, lane=0):
     try:
         reply = http("POST", a.hermes.rstrip("/") + "/v1/chat/completions", hermes_key, timeout=timeout,
                      headers={"X-Hermes-Session-Id": f"issue-{n}"},
-                     body={"model": "hermes-agent", "messages": [{"role": "system", "content": system},
-                                                                  {"role": "user", "content": user}]})
+                     body={"model": model, "provider": PROVIDER,
+                           "messages": [{"role": "system", "content": system},
+                                        {"role": "user", "content": user}]})
         out = (((reply or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     except Failure as e:
         problem = str(e)
@@ -595,7 +734,7 @@ def run_one(a, board, hermes_key, orkey, log, lane=0):
         record = {
             "v": LEDGER_VERSION, "issue": n, "type": task_type(issue.get("title")),
             "agent": agent["name"], "role": agent.get("role", ""),
-            "model": agent.get("model", "hermes-agent"),
+            "model": served_model(reply, model), "model_requested": model,
             "start": started.isoformat(timespec="seconds"), "end": ended.isoformat(timespec="seconds"),
             "seconds": round(max((ended - started).total_seconds(), 0.0), 3),
             "outcome": outcome, "lane": lane, "queue_before": queue_before,
@@ -841,7 +980,11 @@ def capacity(a, board, orkey, log):
     by_type = {}
     for r in week:
         by_type.setdefault(r.get("type") or "task", []).append(r)
+    by_agent_model = {}
+    for r in week:
+        by_agent_model.setdefault(f"{r.get('agent') or 'unknown'} \u00b7 {r.get('model') or 'unknown'}", []).append(r)
     lines += ["**Last 7 days by agent**"] + table(sorted(by_agent.items()), "Agent") + [""]
+    lines += ["**Last 7 days by agent and model**"] + table(sorted(by_agent_model.items()), "Agent \u00b7 model") + [""]
     lines += ["**Last 7 days by task type**"] + table(sorted(by_type.items()), "Type") + [""]
     stale = [r for r in rows if not isinstance(r.get("cost_usd"), (int, float))]
     if stale:
