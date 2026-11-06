@@ -2065,14 +2065,40 @@ class TestModels(Base):
         limits = self.limits('[models]\nallow = ["deepseek/deepseek-v4.1-flash"]\n')
         self.stub.add(["agent:saito", "status:todo"])
         code, out = self.run_dispatch(limits=limits)
-        self.assertEqual((code, self.body_of()["model"]), (0, dispatch.DEFAULT_MODEL))
+        self.assertEqual((code, self.body_of()["model"]), (0, "hermes-agent"))
         self.assertIn("not in the root allow-list", out)
 
     def test_without_an_allow_list_the_roster_model_is_not_used(self):
         (self.t / "roster.toml").write_text(ROSTER_MODEL)
         self.stub.add(["agent:saito", "status:todo"])
         self.run_dispatch()                     # no limits file at all
-        self.assertEqual(self.body_of()["model"], dispatch.DEFAULT_MODEL)
+        self.assertEqual(self.body_of()["model"], "hermes-agent")
+
+    def test_the_default_request_is_exactly_the_old_shape(self):
+        self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()                     # no [models] table, roster names no model
+        body = self.body_of()
+        self.assertEqual(set(body), {"model", "messages"})
+        self.assertEqual(body["model"], "hermes-agent")
+        self.assertNotIn("provider", body)
+        self.assertEqual([m["role"] for m in body["messages"]], ["system", "user"])
+
+    def test_a_default_resolved_model_also_sends_the_old_shape(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        limits = self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\nSaito = "deepseek/deepseek-v4.1-flash"\n')
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=limits)
+        body = self.body_of()
+        self.assertEqual((set(body), body["model"]), ({"model", "messages"}, "hermes-agent"))
+
+    def test_the_saito_override_request_body_is_exact(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        limits = self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\n')
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=limits)
+        body = self.body_of()
+        self.assertEqual(set(body), {"model", "provider", "messages"})
+        self.assertEqual((body["model"], body["provider"]), ("anthropic/claude-sonnet-5.5", "openrouter"))
 
     def test_an_xai_model_is_refused_even_if_the_allow_list_names_it(self):
         pins, allow = dispatch.models_of(self.limits(

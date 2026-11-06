@@ -424,6 +424,16 @@ def budget_ok(a, agent, log, now=None):
     return True, ""
 
 
+def chat_body(model, system, user):
+    """The request body. With no override (the resolved model is the default) it is exactly the old
+    one: model "hermes-agent", no provider key. Only an allow-listed non-default model adds its id
+    and `provider` (#101)."""
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    if model == DEFAULT_MODEL:
+        return {"model": "hermes-agent", "messages": messages}
+    return {"model": model, "provider": PROVIDER, "messages": messages}
+
+
 def served_model(reply, requested):
     """The model a run is booked to: the served runtime when the gateway reports one, else the
     reply's model field, else what we asked for. The runtime is the pair that actually served the
@@ -432,8 +442,8 @@ def served_model(reply, requested):
         runtime = reply.get("runtime")
         if isinstance(runtime, dict) and isinstance(runtime.get("model"), str) and runtime["model"].strip():
             return runtime["model"].strip()
-        if isinstance(reply.get("model"), str) and reply["model"].strip():
-            return reply["model"].strip()
+        if isinstance(reply.get("model"), str) and reply["model"].strip() not in ("", "hermes-agent"):
+            return reply["model"].strip()      # the gateway's own alias says nothing about the model
     return requested
 
 
@@ -701,9 +711,7 @@ def run_one(a, board, hermes_key, orkey, log, lane=0):
     try:
         reply = http("POST", a.hermes.rstrip("/") + "/v1/chat/completions", hermes_key, timeout=timeout,
                      headers={"X-Hermes-Session-Id": f"issue-{n}"},
-                     body={"model": model, "provider": PROVIDER,
-                           "messages": [{"role": "system", "content": system},
-                                        {"role": "user", "content": user}]})
+                     body=chat_body(model, system, user))
         out = (((reply or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     except Failure as e:
         problem = str(e)

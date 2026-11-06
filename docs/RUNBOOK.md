@@ -122,6 +122,18 @@ rollback. The ZDR-only provider list for each trial model lives in
 reads `[spend]` and the ledger. Petter writes both tables (root-only) when he
 pins the change; nothing in the repo can set them.
 
+**Applying it (#101).** `hermes/config.yaml` is a bind mount, so `--accept` alone does not
+reload it: restart Hermes after it, then check the gateway answers:
+```bash
+docker compose -f /opt/agent-manager/vps/compose.yaml restart hermes
+curl -s http://127.0.0.1:8642/v1/models | head    # any answer (even 401 without the key) shows it is up
+```
+With no `[models]` table, or an agent whose resolved model is the default, the request is exactly
+the old one (model `hermes-agent`, no `provider`); only an allow-listed non-default model sends its
+id and `provider: openrouter`. There is **no auto-rollback**: if Hermes fails to start on the new
+config, no agent runs until a revert PR is merged and `--accept` is run again. Enable `[models]`
+only with Petter at the machine.
+
 `/etc/section9/briefs/<Name>.md`, if it exists, is that agent's brief instead of the repo's.
 `install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
 the sandbox refuses the `0600` file).
