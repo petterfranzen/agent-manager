@@ -3,7 +3,7 @@
 # (`shoot`), and the pinned Ponytail skill under /opt/skills.
 # No model keys ever live here.
 # Everything is pinned; bump versions only once a release is 24 h old.
-FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
+FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
 
 ARG GITLEAKS_VERSION=8.30.1
 ARG MISE_VERSION=2026.10.19
