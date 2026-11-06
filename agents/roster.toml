@@ -1,6 +1,12 @@
 # The team as code. vps/dispatch.py reads this on the VPS: agent names, models,
 # timeouts and routines (docs/RUNBOOK.md).
 #
+# `model` is the OpenRouter model id an agent runs on, when it is not the
+# default (deepseek/deepseek-v4.1-flash). The dispatcher sends it per run and
+# only ever for an id the root-only [models].allow list in /etc/section9/limits.toml
+# holds, so this file cannot pick an arbitrary or xAI model. To roll an agent back,
+# pin it in that file (one line) -- no change here (section9-hq #101).
+#
 # Routines stay `active = false` (created paused) until the Major has done a
 # supervised first run. Then flip them to true in a PR and re-apply.
 #
@@ -30,6 +36,7 @@ name = "Tachikoma"
 role = "engineer"
 title = "Nightly builder"
 brief = "agents/nightly-builder.md"
+model = "moonshotai/kimi-k3.1-pro"     # Petter, 5 Nov: on trial for 3 days (#101)
 avatar = "agents/avatars/tachikoma.png"
 # What's left of the $19 after the others. Real nights cost cents (about $1.50
 # for the whole team in October's first busy week), so $4 is ample.
@@ -87,6 +94,7 @@ name = "Saito"
 role = "devops"
 title = "Senior thinker and ops (read-only)"
 brief = "agents/ops.md"
+model = "anthropic/claude-sonnet-5.5"  # Petter, 5 Nov: on trial for 3 days (#101)
 avatar = "agents/avatars/saito.png"
 budget_monthly_cents = 300
 timeout_sec = 3600

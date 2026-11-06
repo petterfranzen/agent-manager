@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -50,6 +51,7 @@ class Stub:
         self.key_calls, self.key_fail_after = 0, None   # key_fail_after: fail /key reads after this many
         self.page_size, self.link = None, None     # page_size: serve issue lists in pages of this size
         self.hermes = "report"      # report | silent | slow | error
+        self.hermes_model, self.hermes_runtime = None, None   # what the reply echoes / served
         self.next = 1
         self.gh_comments, self.pinned, self.crew_auth = [], None, "unset"
         self.crew_sha, self.checks = "tree1", []
@@ -60,7 +62,9 @@ class Stub:
         n = self.next
         self.next += 1
         updated = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=age_min or 0)   # without age_min: a fixed stamp, or "now" for status:working
-        self.issues[n] = {"number": n, "title": title, "body": f"body of {n}", "state": state, "updated_at": "2026-11-01T10:00:00Z" if age_min is None and "status:working" not in labels else updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        self.issues[n] = {"number": n, "title": title, "body": f"body of {n}", "state": state,
+                          "created_at": updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          "updated_at": "2026-11-01T10:00:00Z" if age_min is None and "status:working" not in labels else updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
                           "html_url": f"https://github.com/petterfranzen/section9-hq/issues/{n}",
                           "labels": [{"name": x} for x in labels]}
         return n
@@ -157,8 +161,12 @@ class Stub:
                 time.sleep(2.5)
             if self.hermes in ("report", "slow-report"):   # what the agent does with s9-task
                 self.issues[n]["labels"] = [{"name": x} for x in self.labels(n) - {"status:working"}] + [{"name": "status:review"}]
-            return 200, {"choices": [{"message": {"content": "line 1\nline 2\nall done"}}],
-                         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+            reply = {"model": self.hermes_model or body.get("model", "hermes-agent"),
+                     "choices": [{"message": {"content": "line 1\nline 2\nall done"}}],
+                     "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+            if self.hermes_runtime:
+                reply["runtime"] = self.hermes_runtime
+            return 200, reply
         return 404, {}
 
 
@@ -223,6 +231,21 @@ active = false
 """
 
 
+# A roster that names a per-agent model (#101).
+ROSTER_MODEL = """
+[[agents]]
+name = "Batou"
+brief = "agents/coder.md"
+timeout_sec = 60
+
+[[agents]]
+name = "Saito"
+brief = "agents/ops.md"
+model = "anthropic/claude-sonnet-5.5"
+timeout_sec = 60
+"""
+
+
 class Base(unittest.TestCase):
     timeout = 60
 
@@ -281,6 +304,18 @@ class TestDispatch(Base):
         self.assertEqual(self.stub.labels(second), {"agent:ishikawa", "status:todo"})
         self.assertEqual(self.stub.comments, [])
 
+    def test_a_picked_issue_that_is_no_longer_todo_is_not_claimed(self):
+        # #78 should-fix 3: the todo list read may be stale; re-check the issue right before claiming.
+        n = self.stub.add(["agent:batou", "status:todo"])
+        def steal(todo, *args, **kwargs):
+            self.stub.issues[n]["labels"] = [{"name": "agent:batou"}, {"name": "status:working"}]
+            return todo
+        with mock.patch.object(dispatch, "hold_low_priority", side_effect=steal):
+            code, out = self.run_dispatch()
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:working"})
+        self.assertIn("no longer todo", out)
+
     def test_no_final_status_blocks_with_last_lines(self):
         self.stub.hermes = "silent"
         n = self.stub.add(["agent:batou", "status:todo"])
@@ -319,6 +354,7 @@ class TestDispatch(Base):
         _, out = self.run_dispatch("status")
         self.assertIn("1 todo", out)
         self.assertIn("hermes: reachable", out)
+        self.assertIn("lanes: 1", out)
 
     def test_refuses_plain_http_to_a_remote_host(self):
         argv = ["--secrets-dir", str(self.t / "secrets"), "--github", "http://example.com"]
@@ -456,6 +492,15 @@ class TestSpend(Base):
         self.assertEqual(len(self.stub.issues), 1)
         self.assertIn("Left: $9.50", issue["body"])
         self.assertEqual(self.stub.todo_count(), 0)
+
+    def test_the_cash_multiplier_is_shown_alongside_usage(self):
+        limits = str(self.t / "limits.toml")
+        Path(limits).write_text("cash_multiplier = 1.32\n")
+        self.run_dispatch("spend", limits=limits)
+        (n, issue), = self.stub.issues.items()
+        self.assertIn("This month (UTC): $5.00", issue["body"])
+        self.assertIn("$6.60", issue["body"])           # cash = 5.00 x 1.32
+        self.assertIn("Cash (x1.32", issue["body"])
 
     def test_dispatcher_ignores_it(self):
         self.run_dispatch("spend")
@@ -886,8 +931,8 @@ class TestHq(Base):
         self.assertEqual(self.agent(doc, "Saito")["recent"][0]["text"], "On a private task")
         self.assertNotIn("url", self.agent(doc, "Saito")["recent"][0])
         raw = json.dumps(doc)
-        for leak in ("private errand", "secret-garden", "Morning ops", "$", "sk-or", "section9-hq"):
-            self.assertNotIn(leak, raw)
+        for leak in ("private errand", "secret-garden", "Morning ops", "$", "sk-or"):
+            self.assertNotIn(leak, raw)          # section9-hq appears only in a public task's url
 
     def test_tasks_carry_status_agent_and_a_public_pr_and_nothing_private(self):
         self.board()
@@ -896,17 +941,18 @@ class TestHq(Base):
         tasks = self.status()["tasks"]
         by_title = {t["title"]: t for t in tasks}
         for t in tasks:
-            self.assertEqual(set(t), {"id", "title", "agent", "status", "pr", "updated"})
+            self.assertEqual(set(t), {"id", "title", "agent", "status", "waits", "waitsText", "url", "pr", "updated"})
         self.assertEqual((by_title["Fix the crew page layout"]["status"], by_title["Fix the crew page layout"]["agent"]),
                          ("working", "batou"))
         self.assertEqual(by_title["Add dark mode"]["status"], "review")
         self.assertEqual(by_title["Add dark mode"]["pr"], "https://github.com/petterfranzen/ghost-in-the-machine/pull/12")
+        self.assertEqual(by_title["Add dark mode"]["url"], "https://github.com/petterfranzen/section9-hq/issues/4")
         self.assertEqual(by_title["Nightly build"]["status"], "done")
         private = [t for t in tasks if t["title"] == "On a private task"]
         self.assertEqual(len(private), 3)       # the label, the deny term, the private report
-        self.assertTrue(all(t["pr"] is None for t in private))
+        self.assertTrue(all(t["pr"] is None and t["url"] is None for t in private))
         raw = json.dumps(tasks)
-        for leak in ("private errand", "secret-garden", "Morning ops", "$", "section9-hq"):
+        for leak in ("private errand", "secret-garden", "Morning ops", "$"):
             self.assertNotIn(leak, raw)
 
     def test_without_a_deny_file_task_titles_are_not_published(self):
@@ -914,12 +960,59 @@ class TestHq(Base):
         self.assertEqual(self.run_hq("status")[0], 0)
         self.assertEqual({t["title"] for t in self.status()["tasks"]}, {"On a task", "On a private task"})
 
-    def test_status_also_writes_the_board_page_and_a_copy_of_status_json(self):
+    def test_status_writes_the_live_data_and_installs_the_vendored_page(self):
         self.board()
         self.assertEqual(self.run_hq("status")[0], 0)
         site = self.t / "site"
-        self.assertEqual((site / "board" / "status.json").read_text(), (site / "status.json").read_text())
+        live = (site / "status.json").read_text()
+        self.assertEqual((site / "board" / "board.json").read_text(), live)     # what the waits page polls
+        self.assertEqual((site / "board" / "status.json").read_text(), live)    # the placeholder's feed
         self.assertEqual((site / "board" / "index.html").read_bytes(), (ROOT / "vps" / "board" / "index.html").read_bytes())
+        self.assertEqual((site / "board" / "board-sample.json").read_bytes(),
+                         (ROOT / "vps" / "board" / "board-sample.json").read_bytes())
+
+    def test_the_waits_column_comes_from_the_waits_label_and_the_line_from_the_comment(self):
+        petter = self.stub.add(["agent:batou", "status:todo", "waits:petter"], "Decide the palette")
+        qa = self.stub.add(["agent:togusa", "status:review", "waits:qa"], "QA the crew page")
+        plain = self.stub.add(["agent:batou", "status:working"], "Tidy the README")          # no label -> agent
+        unknown = self.stub.add(["agent:batou", "status:working", "waits:someday"], "Guess")  # unknown -> agent
+        self.stub.gh_comments = [
+            {"issue_url": f"https://api.github.com/repos/x/y/issues/{petter}", "body": "Waits on the earlier ask"},
+            {"issue_url": f"https://api.github.com/repos/x/y/issues/{petter}", "body": "Waits on a yes or no on the palette\nsecond line"},
+            {"issue_url": f"https://api.github.com/repos/x/y/issues/{qa}", "body": "first\n  Waits on the crew PR to be checked"},
+            {"issue_url": f"https://api.github.com/repos/x/y/issues/{plain}", "body": "Waits on the palette decision (#101)"},
+        ]
+        (self.t / "secrets" / "crew-deny.txt").write_text("secret-garden\n")
+        self.assertEqual(self.run_hq("status")[0], 0)
+        by = {t["id"]: t for t in self.status()["tasks"]}
+        self.assertEqual((by[petter]["waits"], by[petter]["waitsText"]),
+                         ("petter", "Waits on a yes or no on the palette"))     # the latest comment wins
+        self.assertEqual((by[qa]["waits"], by[qa]["waitsText"]), ("qa", "Waits on the crew PR to be checked"))
+        self.assertEqual((by[plain]["waits"], by[plain]["waitsText"]),
+                         ("agent", "Waits on the palette decision (#101)"))
+        self.assertEqual((by[unknown]["waits"], by[unknown]["waitsText"]), ("agent", ""))
+
+    def test_a_private_task_gets_no_url_and_no_waits_line(self):
+        n = self.stub.add(["agent:batou", "status:working", "private"], "Look at private errand")
+        self.stub.gh_comments = [{"issue_url": f"https://api.github.com/repos/x/y/issues/{n}",
+                                  "body": "Waits on the private errand details"}]
+        (self.t / "secrets" / "crew-deny.txt").write_text("secret-garden\n")
+        self.assertEqual(self.run_hq("status")[0], 0)
+        (t,) = self.status()["tasks"]
+        self.assertEqual((t["title"], t["url"], t["waitsText"]), ("On a private task", None, ""))
+
+    def test_the_page_falls_back_to_the_placeholder_when_the_real_one_is_missing(self):
+        root = self.t / "root"
+        (root / "vps" / "board").mkdir(parents=True)
+        (root / "vps" / "board" / "placeholder.html").write_text("PLACEHOLDER")
+        self.assertEqual(hq.board_assets(root), (b"PLACEHOLDER", None))
+        (root / "vps" / "board" / "index.html").write_text("REAL")
+        (root / "vps" / "board" / "board-sample.json").write_text("{}")
+        self.assertEqual(hq.board_assets(root), (b"REAL", b"{}"))
+        (root / "vps" / "board" / "index.html").unlink()
+        (root / "vps" / "board" / "placeholder.html").unlink()
+        with self.assertRaises(hq.Failure):
+            hq.board_assets(root)
 
     def test_without_a_deny_file_only_states_and_on_a_task(self):
         self.board()
@@ -1032,8 +1125,10 @@ class TestLedger(Base):
         n = self.stub.add(["agent:batou", "status:todo"], "QA: check the spacing")
         self.assertEqual(self.run_dispatch()[0], 0)
         (row,) = self.ledger()
+        # The model is what the run asked for (the gateway default here), plus the model it was booked to.
         self.assertEqual((row["v"], row["issue"], row["agent"], row["role"], row["type"], row["model"]),
-                         (1, n, "Batou", "", "qa", "hermes-agent"))
+                         (1, n, "Batou", "", "qa", dispatch.DEFAULT_MODEL))
+        self.assertEqual(row["model_requested"], dispatch.DEFAULT_MODEL)
         self.assertEqual((row["outcome"], row["queue_before"]), ("ok", 1))
         self.assertGreaterEqual(row["seconds"], 0)
         self.assertEqual(row["cost_usd"], 0.03)
@@ -1115,6 +1210,16 @@ class TestLedger(Base):
         mode = (self.t / "state" / "runs.jsonl").stat().st_mode & 0o777
         self.assertEqual(mode, 0o640)
 
+    def test_the_ledger_writer_fixes_an_existing_files_mode(self):
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"start": "old"}\n')
+        path.chmod(0o644)                       # an older build (or a hand edit) left it world-readable
+        self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()
+        self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(path.read_text().splitlines()[0], '{"start": "old"}')   # and it appended, not rewrote
+
 
 class TestCpuUnits(unittest.TestCase):
     def test_proc_stat_ticks_are_converted_to_seconds(self):
@@ -1150,6 +1255,47 @@ class TestPace(unittest.TestCase):
         self.assertTrue(dispatch.over_pace(now, 40, just_over, slack_days=0.0))
 
 
+class TestCash(unittest.TestCase):
+    def test_the_multiplier_defaults_to_one_and_reads_a_number(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "limits.toml"
+            self.assertEqual(dispatch.cash_multiplier(p), 1.0)          # absent file
+            p.write_text("cash_multiplier = 1.32\n")
+            self.assertEqual(dispatch.cash_multiplier(p), 1.32)
+            p.write_text("cash_multiplier = \"lots\"\n")                # not a number
+            self.assertEqual(dispatch.cash_multiplier(p), 1.0)
+            p.write_text("lanes = 2\n")
+            self.assertEqual(dispatch.cash_multiplier(p), 1.0)
+
+
+class TestLimitsExample(unittest.TestCase):
+    """The two follow-ups meet in /etc/section9/limits.toml: #100's top-level cash_multiplier and #101's
+    [models] and [spend] tables. A top-level key placed after a table would silently become part of it."""
+
+    def runbook_limits(self):
+        text = (Path(__file__).resolve().parent.parent / "docs" / "RUNBOOK.md").read_text(encoding="utf-8")
+        marker = "# /etc/section9/limits.toml"
+        start = text.index(marker)
+        return dispatch.tomllib.loads(text[start:text.index("```", start)])
+
+    def test_the_runbook_example_parses_with_every_key_where_the_dispatcher_reads_it(self):
+        data = self.runbook_limits()
+        self.assertEqual(data["cash_multiplier"], 1.266)             # top level, not inside [timeout_sec]
+        self.assertNotIn("cash_multiplier", data["timeout_sec"])
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "limits.toml"
+            p.write_text((Path(__file__).resolve().parent.parent / "docs" / "RUNBOOK.md").read_text(
+                encoding="utf-8").split("# /etc/section9/limits.toml", 1)[1].split("```", 1)[0].split("\n", 1)[1])
+            self.assertEqual(dispatch.cash_multiplier(p), 1.266)
+            self.assertEqual(dispatch.spend_caps(p), {"Saito": 8.0, "Tachikoma": 5.0})
+            pins, allow = dispatch.models_of(p)
+            self.assertIn("anthropic/claude-sonnet-5.5", allow)
+            self.assertEqual(pins, {})
+
+    def test_the_allow_list_in_the_example_holds_no_xai_model(self):
+        self.assertTrue(all(dispatch.model_ok(m) for m in self.runbook_limits()["models"]["allow"]))
+
+
 class TestPacing(Base):
     def limits(self, body):
         path = self.t / "limits.toml"
@@ -1176,6 +1322,36 @@ class TestPacing(Base):
         self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
         self.assertIn("holding 1 low-priority", out)
 
+    def test_over_pace_holds_a_low_priority_task_whatever_the_label_case(self):
+        # The pick lowercases labels; the pacing hold must normalise the same way (was a raw compare).
+        low = self.stub.add(["agent:batou", "status:todo", "priority:Low"])
+        normal = self.stub.add(["agent:ishikawa", "status:todo"])
+        with mock.patch.object(dispatch, "month_pace",
+                               return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
+                                             "days": 30, "left_days": 29, "remaining_per_day": 1}), \
+                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+            code, out = self.run_dispatch(limits=self.limits(
+                "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
+        self.assertEqual(code, 0)
+        self.assertIn("status:todo", self.stub.labels(low))
+        self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
+        self.assertIn("holding 1 low-priority", out)
+
+    def test_an_index_error_reading_the_cpu_holds_low_priority_not_crashes(self):
+        # #78 nit 1: a short /proc/stat line (IndexError) must fail closed, not crash the tick.
+        low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
+        normal = self.stub.add(["agent:ishikawa", "status:todo"])
+        with mock.patch.object(dispatch, "month_pace",
+                               return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
+                                             "days": 30, "left_days": 29, "remaining_per_day": 1}), \
+                mock.patch.object(dispatch, "cpu_sample", side_effect=IndexError("short cpu line")):
+            code, out = self.run_dispatch(limits=self.limits(
+                "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
+        self.assertEqual(code, 0)
+        self.assertIn("status:todo", self.stub.labels(low))
+        self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
+        self.assertIn("CPU figures unreadable", out)
+
     def test_under_pace_admits_the_low_priority_task_too(self):
         low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
         with mock.patch.object(dispatch, "month_pace",
@@ -1188,10 +1364,27 @@ class TestPacing(Base):
 
 
 class TestCapacity(Base):
-    def capacity(self):
-        code, out = self.run_dispatch("capacity")
+    def capacity(self, limits=None):
+        code, out = self.run_dispatch("capacity", limits=limits)
         self.assertEqual(code, 0, out)
         return out
+
+    def test_the_cash_multiplier_shows_both_usage_and_cash(self):
+        limits = str(self.t / "limits.toml")
+        Path(limits).write_text("cash_multiplier = 1.32\n")
+        self.stub.bump = 0.03
+        self.stub.add(["agent:batou", "status:todo"], "QA: check the spacing")
+        self.run_dispatch()
+        self.capacity(limits=limits)
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertIn("$5.03", body)            # usage, as OpenRouter reports it
+        self.assertIn("$6.64", body)            # cash = 5.03 x 1.32
+        self.assertIn("Cash (x1.32", body)
+
+    def test_without_the_multiplier_there_is_no_cash_line(self):
+        self.capacity()
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertNotIn("Cash (x", body)
 
     def test_creates_then_updates_one_pinned_issue_with_the_roll_up(self):
         self.stub.bump = 0.03
@@ -1240,6 +1433,34 @@ class TestCapacity(Base):
 
 
 class TestDashboard(unittest.TestCase):
+    def test_the_vendored_board_is_the_real_waits_page(self):
+        # ghost-in-the-machine hq/board/index.html at commit 5643f3b (PR #18), vendored under
+        # vps/board/. Its own build.sh checks these; the same checks here stop the copy drifting.
+        page = (ROOT / "vps" / "board" / "index.html").read_text(encoding="utf-8")
+        sample = json.loads((ROOT / "vps" / "board" / "board-sample.json").read_text(encoding="utf-8"))
+        m = re.search(r'<script type="application/json" id="board-sample">(.*?)</script>', page, re.S)
+        self.assertIsNotNone(m, "index.html has no inline #board-sample block")
+        self.assertEqual(json.loads(m.group(1)), sample)          # the offline copy has not drifted
+        self.assertEqual(sample.get("sample"), True)
+        self.assertEqual(set(sample) - {"sample"}, {"generatedAt", "budget", "model", "agents", "tasks"})
+        for needle in ("fetch('./board.json'", "POLL_MS = 60000", "START_LIMIT = 3", "prefers-reduced-motion",
+                       "max-width:700px", "prefers-color-scheme", 'class="column waits-', 'class="pr"',
+                       'id="lanes"', 'id="start-here"', 'id="chips"', 'id="columns"', 'id="filter-line"'):
+            self.assertIn(needle, page, needle)
+
+    def test_the_vendored_files_match_the_hashes_recorded_beside_them(self):
+        import hashlib
+        readme = (ROOT / "vps" / "board" / "README.md").read_text(encoding="utf-8")
+        for name in ("index.html", "board-sample.json"):
+            want = re.search(r"`%s`\s+sha256 `([0-9a-f]{64})`" % re.escape(name), readme)
+            self.assertIsNotNone(want, name)
+            have = hashlib.sha256((ROOT / "vps" / "board" / name).read_bytes()).hexdigest()
+            self.assertEqual(have, want.group(1), f"{name} changed without its README hash")
+
+    def test_the_placeholder_page_is_kept_and_reads_status_json(self):
+        page = (ROOT / "vps" / "board" / "placeholder.html").read_text(encoding="utf-8")
+        self.assertIn("/board/status.json", page)                 # the fallback's own feed
+
     def test_compose_enables_the_dashboard_on_loopback_with_themes_read_only(self):
         text = (ROOT / "vps" / "compose.yaml").read_text()
         for line in ('HERMES_DASHBOARD: "1"', 'HERMES_DASHBOARD_HOST: "127.0.0.1"', 'HERMES_DASHBOARD_PORT: "9119"',
@@ -1525,6 +1746,40 @@ class TestPriority(Base):
         self.assertEqual(self.stub.labels(bad), {"agent:ghost", "status:todo"})
         self.assertEqual(self.stub.labels(good), {"agent:batou", "status:review"})
 
+    def test_priority_rank_ages_a_waiting_task_up_one_level(self):
+        # Direct, so the rule is pinned: a task over 12 h rises one level, a low one over 48 h tops out.
+        now = dt.datetime(2026, 11, 5, 12, tzinfo=dt.timezone.utc)
+        def rank(labels, ago_h):
+            issue = {"labels": [{"name": x} for x in labels],
+                     "created_at": (now - dt.timedelta(hours=ago_h)).isoformat()}
+            return dispatch.priority_rank(issue, now)
+        self.assertEqual(rank([], 0), 1)
+        self.assertEqual(rank(["priority:high"], 0), 0)
+        self.assertEqual(rank(["priority:Low"], 0), 2)         # label case never matters
+        self.assertEqual(rank(["Priority:HIGH"], 0), 0)
+        self.assertEqual(rank([], 5), 1)                       # under the line: unchanged
+        self.assertEqual(rank([], 13), 0)                      # an old ordinary joins the high group
+        self.assertEqual(rank(["priority:low"], 13), 1)        # a low one rises one level
+        self.assertEqual(rank(["priority:low"], 47), 1)
+        self.assertEqual(rank(["priority:low"], 49), 0)        # over 48 h it tops out
+        self.assertEqual(rank(["priority:high"], 49), 0)       # already at the top
+
+    def test_a_starving_ordinary_task_overtakes_a_fresh_high_task(self):
+        old = self.stub.add(["agent:batou", "status:todo"], "Old ordinary, waiting", age_min=13 * 60)
+        bug = self.stub.add(["agent:batou", "status:todo", "priority:high"], "Fresh high bug")
+        self.run_dispatch()
+        self.assertIn("Old ordinary, waiting", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+        self.assertEqual(self.stub.labels(old), {"agent:batou", "status:review"})
+        self.assertEqual(self.stub.labels(bug), {"agent:batou", "priority:high", "status:todo"})
+
+    def test_a_low_task_over_48h_overtakes_a_high_task(self):
+        low = self.stub.add(["agent:batou", "status:todo", "priority:low"], "Low, waiting 49 h", age_min=49 * 60)
+        high = self.stub.add(["agent:batou", "status:todo", "priority:high"], "High, fresh")
+        self.run_dispatch()
+        self.assertIn("Low, waiting 49 h", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+        self.assertEqual(self.stub.labels(low), {"agent:batou", "priority:low", "status:review"})
+        self.assertEqual(self.stub.labels(high), {"agent:batou", "priority:high", "status:todo"})
+
 class TestLanes(Base):
     """#79: the second lane -- the lanes switch, what it may run beside lane 0, and the fallback."""
 
@@ -1554,8 +1809,7 @@ class TestLanes(Base):
     def test_lane_one_is_off_unless_the_switch_says_two(self):
         n = self.stub.add(["agent:batou", "status:todo"])
         code, out = self.run_dispatch(lane=1)                      # no limits file at all: one lane
-        self.assertEqual((code, self.stub.hermes_calls), (0, []))
-        self.assertIn("lane 1 is off", out)
+        self.assertEqual((code, self.stub.hermes_calls, out), (0, [], ""))   # quiet: no per-tick line while lanes = 1
         self.assertEqual(self.stub.labels(n), {"agent:batou", "status:todo"})
         code, out = self.run_dispatch(lane=1, limits=self.limits("lanes = 1\n[timeout_sec]\ndefault = 60\n"))
         self.assertEqual((code, self.stub.hermes_calls), (0, []))
@@ -1672,11 +1926,46 @@ class TestLanes(Base):
     def test_lane_zero_skips_the_repo_lane_one_is_working_in(self):
         self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
         same_repo = self.stub.add(["agent:saito", "status:todo"], "flight-tracker: another pop")
-        unknown = self.stub.add(["agent:ishikawa", "status:todo"], "Do a thing")   # lane 0 may still take it
+        other = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
         code, _ = self.lane_zero(self.limits(self.TWO))
         self.assertEqual(code, 0)
         self.assertEqual(self.stub.labels(same_repo), {"agent:saito", "status:todo"})
-        self.assertEqual(self.stub.labels(unknown), {"agent:ishikawa", "status:review"})
+        self.assertEqual(self.stub.labels(other), {"agent:ishikawa", "status:review"})
+
+    def test_lane_zero_skips_an_unknown_repo_task_while_lane_one_runs(self):
+        # #78 should-fix 1: while the other lane is running anything, an unknown-repo task conflicts too.
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        unknown = self.stub.add(["agent:ishikawa", "status:todo"], "Do a thing")
+        code, _ = self.lane_zero(self.limits(self.TWO))
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(unknown), {"agent:ishikawa", "status:todo"})
+
+    def test_lane_zero_keeps_the_exclusion_while_lane_one_holds_its_run_lock(self):
+        # #78 should-fix 2: lanes flipped back to 1 mid-run must not open the gap beside a live lane-1 run.
+        self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
+        same_repo = self.stub.add(["agent:saito", "status:todo"], "flight-tracker: another pop")
+        other = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        (self.t / "state").mkdir(exist_ok=True)
+        lock = open(self.t / "state" / "dispatch.lane1.lock", "w")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            code, _ = self.run_dispatch("run", limits=self.limits("lanes = 1\n[timeout_sec]\ndefault = 60\n"), lane=0)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            lock.close()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(same_repo), {"agent:saito", "status:todo"})
+        self.assertEqual(self.stub.labels(other), {"agent:ishikawa", "status:review"})
+
+    def test_lane_one_stands_down_cleanly_on_an_index_error(self):
+        # #78 nit 1: a short /proc/stat line must not crash the lane.
+        n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
+        with mock.patch.object(dispatch, "cpu_sample", side_effect=IndexError("short cpu line")):
+            code, out = self.run_dispatch("run", limits=self.limits(self.TWO), lane=1)
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:todo"})
+        self.assertIn("cpu unreadable", out)
+        self.assertEqual(self.latch()["lanes"], 1)
 
     def test_lane_zero_is_unchanged_with_one_lane(self):
         self.stub.add(["agent:batou", "status:working"], "flight-tracker: fix the popping")
@@ -1773,6 +2062,147 @@ class TestLanes(Base):
         self.assertAlmostEqual(dispatch.concurrent_hours(rows), 0.5)
         self.assertTrue(dispatch.lane_line(rows).endswith("two at once 0.50 h"))
         self.assertEqual(dispatch.lane_line([]), "—")
+
+
+class TestModels(Base):
+    """#101: the per-agent model, the root-only allow-list and the per-agent spend guard."""
+
+    def limits(self, body):
+        path = self.t / "limits.toml"
+        path.write_text(body)
+        return str(path)
+
+    def seed(self, rows):
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def body_of(self, index=0):
+        return self.stub.hermes_calls[index][0]
+
+    def test_a_roster_model_in_the_allow_list_is_sent_with_the_provider(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        limits = self.limits('[models]\nallow = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5.5"]\n')
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=limits)
+        body = self.body_of()
+        self.assertEqual(body["model"], "anthropic/claude-sonnet-5.5")
+        self.assertEqual(body["provider"], "openrouter")
+
+    def test_a_roster_model_outside_the_allow_list_falls_back_to_the_default(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        limits = self.limits('[models]\nallow = ["deepseek/deepseek-v4.1-flash"]\n')
+        self.stub.add(["agent:saito", "status:todo"])
+        code, out = self.run_dispatch(limits=limits)
+        self.assertEqual((code, self.body_of()["model"]), (0, "hermes-agent"))
+        self.assertIn("not in the root allow-list", out)
+
+    def test_without_an_allow_list_the_roster_model_is_not_used(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch()                     # no limits file at all
+        self.assertEqual(self.body_of()["model"], "hermes-agent")
+
+    def test_the_default_request_is_exactly_the_old_shape(self):
+        self.stub.add(["agent:batou", "status:todo"])
+        self.run_dispatch()                     # no [models] table, roster names no model
+        body = self.body_of()
+        self.assertEqual(set(body), {"model", "messages"})
+        self.assertEqual(body["model"], "hermes-agent")
+        self.assertNotIn("provider", body)
+        self.assertEqual([m["role"] for m in body["messages"]], ["system", "user"])
+
+    def test_a_default_resolved_model_also_sends_the_old_shape(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        limits = self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\nSaito = "deepseek/deepseek-v4.1-flash"\n')
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=limits)
+        body = self.body_of()
+        self.assertEqual((set(body), body["model"]), ({"model", "messages"}, "hermes-agent"))
+
+    def test_the_saito_override_request_body_is_exact(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        limits = self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\n')
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=limits)
+        body = self.body_of()
+        self.assertEqual(set(body), {"model", "provider", "messages"})
+        self.assertEqual((body["model"], body["provider"]), ("anthropic/claude-sonnet-5.5", "openrouter"))
+
+    def test_an_xai_model_is_refused_even_if_the_allow_list_names_it(self):
+        pins, allow = dispatch.models_of(self.limits(
+            '[models]\nallow = ["x-ai/grok-9-turbo"]\n'))
+        self.assertEqual(dispatch.model_for({"name": "Saito", "model": "x-ai/grok-9-turbo"}, pins, allow),
+                         dispatch.DEFAULT_MODEL)
+
+    def test_the_root_pin_rolls_the_agent_back_with_one_line(self):
+        pins, allow = dispatch.models_of(self.limits(
+            '[models]\nallow = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5.5"]\n'
+            'Saito = "deepseek/deepseek-v4.1-flash"\n'))
+        self.assertEqual(dispatch.model_for({"name": "Saito", "model": "anthropic/claude-sonnet-5.5"}, pins, allow),
+                         dispatch.DEFAULT_MODEL)
+
+    def test_the_ledger_records_the_model_that_answered(self):
+        self.stub.hermes_runtime = {"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash",
+                                    "route_source": "raw_request"}
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\n'))
+        (row,) = [json.loads(l) for l in (self.t / "state" / "runs.jsonl").read_text().splitlines()]
+        self.assertEqual(row["model"], "deepseek/deepseek-v4.1-flash")       # the served model, not the asked one
+        self.assertEqual(row["model_requested"], "anthropic/claude-sonnet-5.5")
+
+    def test_the_ledger_falls_back_to_the_reply_model_when_no_runtime_is_reported(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\n'))
+        (row,) = [json.loads(l) for l in (self.t / "state" / "runs.jsonl").read_text().splitlines()]
+        self.assertEqual(row["model"], row["model_requested"])
+
+    def test_the_agent_is_blocked_when_its_monthly_budget_is_reached(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self.seed([{"start": now, "agent": "Saito", "model": "anthropic/claude-sonnet-5.5", "cost_usd": 6.5}])
+        n = self.stub.add(["agent:saito", "status:todo"])
+        code, out = self.run_dispatch(limits=self.limits("[spend]\nSaito = 6.0\n"))
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:saito", "status:blocked"})
+        self.assertIn("monthly budget", self.stub.comments[0][1])
+        self.assertIn("$6.50", self.stub.comments[0][1])
+
+    def test_a_run_under_the_budget_still_goes(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self.seed([{"start": now, "agent": "Saito", "model": "anthropic/claude-sonnet-5.5", "cost_usd": 1.0}])
+        n = self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=self.limits("[spend]\nSaito = 6.0\n"))
+        self.assertEqual(self.stub.labels(n), {"agent:saito", "status:review"})
+
+    def test_an_agent_without_a_spend_entry_has_no_guard(self):
+        (self.t / "roster.toml").write_text(ROSTER_MODEL)
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self.seed([{"start": now, "agent": "Saito", "cost_usd": 99.0}])
+        n = self.stub.add(["agent:saito", "status:todo"])
+        self.run_dispatch(limits=self.limits("[spend]\nTachikoma = 6.0\n"))
+        self.assertEqual(self.stub.labels(n), {"agent:saito", "status:review"})
+
+    def test_the_guard_estimates_a_run_the_counter_could_not_price(self):
+        self.assertAlmostEqual(dispatch.run_cost({"model": "anthropic/claude-sonnet-5.5", "cost_usd": None,
+                                                  "tokens": {"prompt_tokens": 1000, "completion_tokens": 1000}}),
+                               0.012)
+        self.assertEqual(dispatch.run_cost({"model": "who/knows", "tokens": {"completion_tokens": 1_000_000}}),
+                         10.0)              # an unknown model is priced at the dearest allowed rate
+
+    def test_capacity_shows_cost_by_agent_and_model(self):
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self.seed([{"start": now, "end": now, "agent": "Saito", "model": "anthropic/claude-sonnet-5.5",
+                    "type": "review", "seconds": 600, "outcome": "ok", "cost_usd": 0.2, "cpu": {"credits": 10},
+                    "queue_before": 1}])
+        code, out = self.run_dispatch("capacity")
+        self.assertEqual(code, 0, out)
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertIn("by agent and model", body)
+        self.assertIn("Saito \u00b7 anthropic/claude-sonnet-5.5", body)
 
 
 if __name__ == "__main__":

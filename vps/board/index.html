@@ -1,164 +1,881 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Section 9 — Board</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Section 9 — Waits</title>
+<meta name="description" content="Section 9 waits board: one column per who a task waits on — Petter, the Major, QA, an agent, or another task.">
+<meta name="theme-color" content="#060b09">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap">
 <style>
-  :root {
-    --bg: #0b0f14;
-    --panel: #121821;
-    --line: #1e2836;
-    --text: #c9d1d9;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --working: #3fb950;
-    --review: #d29922;
-    --blocked: #f85149;
-    --done: #6e7681;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: var(--bg);
-    color: var(--text);
-  }
-  header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel);
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
-  header h1 { font-size: 1.1rem; margin: 0; letter-spacing: 0.08em; text-transform: uppercase; }
-  header .meta { color: var(--muted); font-size: 0.8rem; }
-  .board {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(220px, 1fr));
-    gap: 1rem;
-    padding: 1.5rem;
-    align-items: start;
-    min-height: calc(100vh - 60px);
-  }
-  .column {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 0.75rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    min-height: 120px;
-  }
-  .column h2 {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin: 0;
-    color: var(--muted);
-    display: flex;
-    justify-content: space-between;
-  }
-  .card {
-    background: #0d131b;
-    border: 1px solid var(--line);
-    border-left: 3px solid var(--muted);
-    border-radius: 6px;
-    padding: 0.6rem 0.7rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-  .card.working { border-left-color: var(--working); }
-  .card.review { border-left-color: var(--review); }
-  .card.blocked { border-left-color: var(--blocked); }
-  .card.done { border-left-color: var(--done); opacity: 0.7; }
-  .card .title { font-size: 0.85rem; font-weight: 600; }
-  .card .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
-  .card .agent { color: var(--accent); font-size: 0.75rem; }
-  .card .time { color: var(--muted); font-size: 0.7rem; }
-  .card a { color: var(--accent); text-decoration: none; font-size: 0.75rem; }
-  .card a:hover { text-decoration: underline; }
-  .empty { color: var(--muted); font-size: 0.75rem; font-style: italic; }
-  .error { color: var(--blocked); padding: 1rem 1.5rem; }
-  @media (max-width: 900px) {
-    .board { grid-template-columns: 1fr; }
-  }
+:root{
+  --bg:#060b09;
+  --panel:#0b1410;
+  --panel-2:#0e1a15;
+  --line:rgba(139,255,190,.20);
+  --line-strong:rgba(139,255,190,.42);
+  --phos:#8bffbe;
+  --phos-rgb:139,255,190;
+  --amber:#ffb454;
+  --warn:#ff8a5c;
+  --cyan:#5be7d8;
+  --ink:#e6f2ea;
+  --muted:#9db3a7;
+  --dim:#7f958a;
+  --petter:#ffb454;
+  --major:#5be7d8;
+  --qa:#b39ddb;
+  --agent:#8bffbe;
+  --task:#9db3a7;
+  --ag-major:#5be7d8;
+  --ag-aramaki:#ffb454;
+  --ag-batou:#8bffbe;
+  --ag-tachikoma:#7fd4ff;
+  --ag-togusa:#b39ddb;
+  --ag-ishikawa:#f2a1c0;
+  --ag-saito:#9db3a7;
+  --ag-jev:#ff8a5c;
+  --state-working:var(--phos);
+  --state-idle:#7fd4ff;
+  --state-blocked:var(--amber);
+  --state-sleeping:var(--muted);
+  --font-sans:"Share Tech Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  --font-display:"Rajdhani","Segoe UI",system-ui,sans-serif;
+  --clip:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);
+  --clip-sm:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px);
+}
+html[data-theme="light"]{
+  --bg:#f3f7f4;
+  --panel:#ffffff;
+  --panel-2:#eef4ef;
+  --line:rgba(18,70,46,.18);
+  --line-strong:rgba(18,70,46,.42);
+  --phos:#0f7a4a;
+  --phos-rgb:15,122,74;
+  --amber:#8a5200;
+  --warn:#b23a12;
+  --cyan:#0b5f66;
+  --ink:#0d1a14;
+  --muted:#4b6157;
+  --dim:#6b8078;
+  --petter:#8a5200;
+  --major:#0b5f66;
+  --qa:#5b3b8a;
+  --agent:#0f7a4a;
+  --task:#4b6157;
+  --ag-major:#0b5f66;
+  --ag-aramaki:#8a5200;
+  --ag-batou:#0f7a4a;
+  --ag-tachikoma:#155e75;
+  --ag-togusa:#5b3b8a;
+  --ag-ishikawa:#8a2f52;
+  --ag-saito:#4b6157;
+  --ag-jev:#b23a12;
+  --state-working:var(--phos);
+  --state-idle:#155e75;
+  --state-blocked:var(--amber);
+  --state-sleeping:var(--muted);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  min-height:100vh;
+  background-color:var(--bg);
+  background-image:radial-gradient(120% 70% at 50% -15%,rgba(80,255,170,.12),transparent 62%);
+  color:var(--ink);
+  font-family:var(--font-sans);
+  font-size:15px;
+  line-height:1.5;
+  letter-spacing:.02em;
+  overflow-x:hidden;
+}
+html[data-theme="light"] body{
+  background-image:radial-gradient(120% 70% at 50% -15%,rgba(15,122,74,.10),transparent 62%);
+}
+/* Fixed wireframe grid, behind the content. */
+body::before{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(var(--phos-rgb),.055) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(var(--phos-rgb),.055) 1px,transparent 1px);
+  background-size:48px 48px;
+  -webkit-mask-image:radial-gradient(130% 100% at 50% 0%,#000 25%,rgba(0,0,0,.35) 70%,transparent 100%);
+          mask-image:radial-gradient(130% 100% at 50% 0%,#000 25%,rgba(0,0,0,.35) 70%,transparent 100%);
+}
+/* CRT scanlines over the whole shell (dark theme only). */
+body::after{
+  content:"";position:fixed;inset:0;z-index:100;pointer-events:none;
+  background:repeating-linear-gradient(to bottom,transparent 0 2px,rgba(var(--phos-rgb),.035) 3px,rgba(var(--phos-rgb),.035) 4px);
+  mix-blend-mode:screen;
+}
+html[data-theme="light"] body::after{display:none}
+a{color:var(--cyan)}
+a:hover{color:var(--phos)}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+::selection{background:var(--phos);color:var(--bg)}
+.skip{position:absolute;left:-999px;top:8px;z-index:200;background:var(--phos);color:var(--bg);padding:.5em .9em;font-weight:700;text-decoration:none}
+.skip:focus{left:8px}
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.hud{
+  position:sticky;top:0;z-index:10;
+  display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  padding:12px clamp(14px,3vw,28px);
+  background:linear-gradient(180deg,rgba(11,20,16,.98),rgba(6,11,9,.92));
+  box-shadow:inset 0 -1px 0 rgba(var(--phos-rgb),.22);
+}
+html[data-theme="light"] .hud{background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(243,247,244,.94))}
+.brand{display:flex;align-items:baseline;gap:12px;min-width:0}
+.brand .ja{color:var(--amber);font-size:.85rem;letter-spacing:.12em;white-space:nowrap}
+h1{
+  font-family:var(--font-display);font-size:clamp(1.15rem,2.2vw,1.65rem);
+  margin:0;letter-spacing:.04em;text-transform:uppercase;line-height:1.1;
+  text-shadow:0 0 12px rgba(var(--phos-rgb),.14);white-space:nowrap;
+}
+.tick{display:inline-block;width:.55em;height:.12em;margin-left:.45em;vertical-align:.14em;background:var(--amber);opacity:.75}
+.meta{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:.35rem 1rem;color:var(--muted);font-size:.78rem;text-align:right}
+.meta b{color:var(--ink);font-weight:400}
+.sample-badge{color:var(--amber);border:1px solid var(--amber);padding:0 .45em;white-space:nowrap}
+.theme-toggle{
+  font:inherit;font-size:.78rem;color:var(--muted);background:transparent;
+  border:1px solid var(--line);padding:0 .8em;cursor:pointer;white-space:nowrap;
+  display:inline-flex;align-items:center;min-height:44px;
+}
+.theme-toggle:hover{border-color:var(--line-strong);color:var(--ink)}
+.wrap{position:relative;z-index:1;padding:clamp(14px,2.4vw,28px);display:flex;flex-direction:column;gap:clamp(20px,2.8vw,34px)}
+.section-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+h2{font-family:var(--font-display);font-size:1.05rem;margin:0;text-transform:uppercase;letter-spacing:.08em;color:var(--ink)}
+.hint{color:var(--muted);font-size:.78rem;margin:0}
+.filter-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.8rem;color:var(--muted)}
+.filter-line b{color:var(--phos);font-weight:400}
+.clear-filter{font:inherit;font-size:.75rem;color:var(--bg);background:var(--amber);border:0;padding:.25em .7em;cursor:pointer}
+.clear-filter:hover{background:var(--ink)}
+.lanes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.lane{
+  display:flex;flex-direction:column;gap:7px;text-align:left;
+  background:var(--panel);border:1px solid var(--line);
+  padding:10px 12px;color:var(--ink);min-width:0;
+}
+.lane-top{display:flex;align-items:center;gap:9px;min-width:0}
+.avatar{width:36px;height:36px;object-fit:cover;flex:none;border:1px solid var(--line);background:var(--bg);filter:grayscale(1) contrast(1.12) brightness(.92)}
+.lane-id{min-width:0;display:flex;flex-direction:column;line-height:1.15}
+.lane-id .name{font-family:var(--font-display);font-size:1.05rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane-id .role{color:var(--muted);font-size:.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.state{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--state-sleeping);box-shadow:0 0 6px currentColor;flex:none}
+.state-working{color:var(--state-working)}
+.state-working .dot{background:var(--state-working)}
+.state-idle{color:var(--state-idle)}
+.state-idle .dot{background:var(--state-idle)}
+.state-blocked{color:var(--state-blocked)}
+.state-blocked .dot{background:var(--state-blocked)}
+.state-sleeping{color:var(--state-sleeping)}
+.state-sleeping .dot{background:var(--state-sleeping);box-shadow:none}
+.lane-task{font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--ink)}
+.lane-task.empty{color:var(--muted);font-style:italic}
+.lane-foot{display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:.7rem;min-width:0}
+.lane-foot .model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lane-foot .last{white-space:nowrap}
+.start-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.chip{
+  appearance:none;-webkit-appearance:none;font:inherit;font-size:.78rem;
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--panel);border:1px solid var(--line);color:var(--ink);
+  padding:.5em .8em;cursor:pointer;border-radius:999px;min-width:0;min-height:44px;
+}
+.chip:hover{border-color:var(--line-strong)}
+.chip[aria-pressed="true"]{border-color:var(--phos);box-shadow:inset 0 0 0 1px var(--phos);color:var(--phos)}
+.chip-count{color:var(--muted);font-size:.72rem}
+.chip[aria-pressed="true"] .chip-count{color:inherit}
+.mark{width:10px;height:10px;border-radius:2px;background:var(--dim);flex:none;display:inline-block}
+.mark[data-agent="major"]{background:var(--ag-major)}
+.mark[data-agent="aramaki"]{background:var(--ag-aramaki)}
+.mark[data-agent="batou"]{background:var(--ag-batou)}
+.mark[data-agent="tachikoma"]{background:var(--ag-tachikoma)}
+.mark[data-agent="togusa"]{background:var(--ag-togusa)}
+.mark[data-agent="ishikawa"]{background:var(--ag-ishikawa)}
+.mark[data-agent="saito"]{background:var(--ag-saito)}
+.mark[data-agent="jev"]{background:var(--ag-jev)}
+.columns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;align-items:start}
+.column{
+  background:linear-gradient(180deg,rgba(14,26,21,.72),rgba(11,20,16,.9));
+  border:1px solid var(--line);clip-path:var(--clip);
+  padding:10px;min-width:0;
+}
+html[data-theme="light"] .column{background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(238,244,239,.95))}
+.column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 2px 9px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.column-head h3{font-family:var(--font-display);font-size:.92rem;margin:0;text-transform:uppercase;letter-spacing:.08em}
+.pill{
+  display:inline-block;min-width:1.6em;text-align:center;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:999px;
+  padding:0 .45em;font-size:.72rem;color:var(--muted);white-space:nowrap;
+}
+.col-sub{color:var(--muted);font-size:.7rem;margin:0 0 9px;line-height:1.35}
+.column.waits-petter{border-color:var(--petter);box-shadow:inset 0 0 0 1px var(--petter)}
+.column.waits-petter .column-head h3{color:var(--petter)}
+.column.waits-petter .pill{border-color:var(--petter);color:var(--petter)}
+.cards{display:flex;flex-direction:column;gap:8px}
+.card{
+  background:linear-gradient(180deg,rgba(14,26,21,.96),rgba(11,20,16,.98));
+  border:1px solid var(--line);border-left:3px solid var(--dim);
+  clip-path:var(--clip-sm);padding:9px 10px;
+  display:flex;flex-direction:column;gap:5px;min-width:0;
+}
+html[data-theme="light"] .card{background:linear-gradient(180deg,#ffffff,#f6faf7)}
+.card.waits-petter{border-left-color:var(--petter)}
+.card.waits-major{border-left-color:var(--major)}
+.card.waits-qa{border-left-color:var(--qa)}
+.card.waits-agent{border-left-color:var(--agent)}
+.card.waits-task{border-left-color:var(--task)}
+.card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.72rem;color:var(--muted)}
+.top-left{display:flex;align-items:center;gap:4px;min-width:0}
+.issue{color:var(--phos);font-weight:700;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px}
+a.issue:hover{text-decoration:underline}
+.pr{color:var(--cyan);text-decoration:none;font-size:.75rem;display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;white-space:nowrap}
+.pr:hover{color:var(--phos);text-decoration:underline}
+.card .title{font-family:var(--font-display);font-size:.98rem;font-weight:600;line-height:1.25;margin:0;overflow-wrap:anywhere}
+.waits-on{font-size:.76rem;color:var(--muted);margin:0;overflow-wrap:anywhere;line-height:1.35}
+.waits-k{color:var(--cyan)}
+.card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.74rem;color:var(--muted);min-width:0;flex-wrap:wrap}
+.who{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.who .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.who.anon{font-style:italic}
+.unblocks{color:var(--petter);border:1px solid var(--petter);padding:0 .4em;font-size:.68rem;white-space:nowrap}
+.empty{color:var(--muted);font-size:.76rem;font-style:italic;padding:3px 2px}
+.error{border:1px solid var(--warn);color:var(--warn);padding:12px 14px;background:rgba(255,138,92,.06)}
+@media (max-width:1200px){.columns{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:900px){
+  .lanes{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .columns{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .start-strip{grid-template-columns:1fr}
+}
+@media (max-width:700px){
+  .columns{grid-template-columns:1fr}
+  body{font-size:16px}
+  .card .title{font-size:16px}
+  .waits-on{font-size:15px}
+  .col-sub{font-size:.76rem}
+}
+@media (max-width:560px){
+  .lanes{grid-template-columns:1fr}
+  .hud{flex-direction:column;align-items:flex-start}
+  .meta{justify-content:flex-start;text-align:left}
+}
+@media (prefers-reduced-motion:no-preference){
+  .state-working .dot{animation:pulse 2.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.42}}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
 </style>
 </head>
 <body>
-<header>
-  <h1>Section 9 — Board</h1>
+<a class="skip" href="#board">Skip to the board</a>
+<header class="hud">
+  <div class="brand">
+    <span class="ja" lang="ja">公安9課</span>
+    <h1>Section 9 — Waits<span class="tick" aria-hidden="true"></span></h1>
+  </div>
   <div class="meta" id="meta">loading…</div>
 </header>
-<main class="board" id="board"></main>
+<main class="wrap">
+  <section id="agents" aria-labelledby="agents-head">
+    <div class="section-head">
+      <h2 id="agents-head">Crew<span class="tick" aria-hidden="true"></span></h2>
+      <p class="hint">Who is where, and what they are on.</p>
+    </div>
+    <div class="lanes" id="lanes"></div>
+  </section>
+  <section id="start" aria-labelledby="start-head">
+    <div class="section-head">
+      <h2 id="start-head">Start here<span class="tick" aria-hidden="true"></span></h2>
+      <p class="hint">The three things only Petter can move.</p>
+    </div>
+    <div class="start-strip" id="start-here"></div>
+  </section>
+  <section id="board" aria-labelledby="board-head">
+    <div class="section-head">
+      <h2 id="board-head">Waits on<span class="tick" aria-hidden="true"></span></h2>
+      <div class="filter-line" id="filter-line"></div>
+    </div>
+    <div class="chips" id="chips" role="group" aria-label="Filter by agent"></div>
+    <div class="columns" id="columns"></div>
+  </section>
+</main>
+<div class="sr-only" id="live" aria-live="polite"></div>
+<script type="application/json" id="board-sample">{
+  "generatedAt": "2026-11-02T09:30:00Z",
+  "sample": true,
+  "budget": {
+    "usedPercent": 37,
+    "month": "2026-11"
+  },
+  "model": "deepseek/deepseek-v4.1-flash",
+  "agents": [
+    {
+      "name": "Major",
+      "role": "Coordinator",
+      "state": "working",
+      "now": "Routing the tunnel task",
+      "model": "claude-sonnet-4.5",
+      "lastActiveAt": "2026-11-02T09:24:00Z"
+    },
+    {
+      "name": "Aramaki",
+      "role": "Chief",
+      "state": "idle",
+      "now": null,
+      "model": "claude-opus-4.1",
+      "lastActiveAt": "2026-11-02T07:10:00Z"
+    },
+    {
+      "name": "Batou",
+      "role": "Coder",
+      "state": "working",
+      "now": "Fixing the flaky touch handler",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "lastActiveAt": "2026-11-02T09:26:00Z"
+    },
+    {
+      "name": "Tachikoma",
+      "role": "Nightly builder",
+      "state": "working",
+      "now": "Building tonight's app",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "lastActiveAt": "2026-11-02T08:50:00Z"
+    },
+    {
+      "name": "Togusa",
+      "role": "QA",
+      "state": "blocked",
+      "now": "Waiting on two PRs to review",
+      "model": "gpt-5-codex",
+      "lastActiveAt": "2026-11-02T08:05:00Z"
+    },
+    {
+      "name": "Ishikawa",
+      "role": "Researcher",
+      "state": "idle",
+      "now": null,
+      "model": "claude-sonnet-4.5",
+      "lastActiveAt": "2026-11-01T14:00:00Z"
+    },
+    {
+      "name": "Saito",
+      "role": "Ops",
+      "state": "paused",
+      "now": null,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "lastActiveAt": "2026-11-01T06:30:00Z"
+    },
+    {
+      "name": "Jev",
+      "role": "Security",
+      "state": "sleeping",
+      "now": null,
+      "model": "claude-haiku-4.5",
+      "lastActiveAt": "2026-11-01T22:00:00Z"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 101,
+      "title": "Approve the palette for the ops page",
+      "agent": "saito",
+      "status": "review",
+      "waits": "petter",
+      "waitsText": "a yes or no on the palette",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/101",
+      "blocks": 4,
+      "updated": "2026-11-02T09:20:00Z"
+    },
+    {
+      "id": 102,
+      "title": "Pick the storage bucket",
+      "agent": "saito",
+      "status": "todo",
+      "waits": "petter",
+      "waitsText": "which bucket to use",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/102",
+      "blocks": 2,
+      "updated": "2026-11-02T08:40:00Z"
+    },
+    {
+      "id": 103,
+      "title": "Sign off the nightly schedule",
+      "agent": "tachikoma",
+      "status": "todo",
+      "waits": "petter",
+      "waitsText": "the nightly start time",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/103",
+      "blocks": 1,
+      "updated": "2026-11-02T07:55:00Z"
+    },
+    {
+      "id": 104,
+      "title": "Apply the dependency bump",
+      "agent": "saito",
+      "status": "review",
+      "waits": "major",
+      "waitsText": "the bump PR to merge",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/104",
+      "updated": "2026-11-02T09:05:00Z",
+      "pr": "https://github.com/petterfranzen/ghost-in-the-machine/pull/900"
+    },
+    {
+      "id": 105,
+      "title": "Merge the docs tidy-up",
+      "agent": "batou",
+      "status": "review",
+      "waits": "major",
+      "waitsText": "the docs PR to merge",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/105",
+      "updated": "2026-11-02T08:30:00Z"
+    },
+    {
+      "id": 106,
+      "title": "Route the tunnel task to QA",
+      "agent": "major",
+      "status": "working",
+      "waits": "major",
+      "waitsText": "routing to QA",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/106",
+      "updated": "2026-11-02T09:22:00Z"
+    },
+    {
+      "id": 107,
+      "title": "QA: 390 px pass on the crew page",
+      "agent": "togusa",
+      "status": "review",
+      "waits": "qa",
+      "waitsText": "the crew PR to be checked",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/107",
+      "updated": "2026-11-02T08:10:00Z"
+    },
+    {
+      "id": 108,
+      "title": "QA: keyboard navigation on the board",
+      "agent": "togusa",
+      "status": "review",
+      "waits": "qa",
+      "waitsText": "the board PR to be checked",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/108",
+      "updated": "2026-11-02T07:40:00Z"
+    },
+    {
+      "id": 109,
+      "title": "Fix the flaky touch handler",
+      "agent": "batou",
+      "status": "working",
+      "waits": "agent",
+      "waitsText": "a fix from Batou",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/109",
+      "updated": "2026-11-02T09:18:00Z"
+    },
+    {
+      "id": 110,
+      "title": "Tidy the README examples",
+      "agent": "batou",
+      "status": "todo",
+      "waits": "agent",
+      "waitsText": "the README pass",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/110",
+      "updated": "2026-11-02T06:50:00Z"
+    },
+    {
+      "id": 111,
+      "title": "Research the queue gateway",
+      "agent": "ishikawa",
+      "status": "working",
+      "waits": "agent",
+      "waitsText": "more research from Ishikawa",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/111",
+      "updated": "2026-11-02T06:20:00Z"
+    },
+    {
+      "id": 112,
+      "title": "Publish behind the tunnel rule",
+      "agent": "saito",
+      "status": "todo",
+      "waits": "task",
+      "waitsText": "the palette decision (#101)",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/112",
+      "updated": "2026-11-02T08:00:00Z"
+    },
+    {
+      "id": 113,
+      "title": "Switch the sync to the new queue",
+      "agent": "saito",
+      "status": "blocked",
+      "waits": "task",
+      "waitsText": "the dependency bump (#104)",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/113",
+      "updated": "2026-11-02T07:15:00Z"
+    }
+  ]
+}</script>
 <script>
 (function () {
-  const COLUMNS = [
-    ["todo", "Todo"],
-    ["working", "Working"],
-    ["review", "Review"],
-    ["blocked", "Blocked"],
-    ["done", "Done"],
+  'use strict';
+
+  var AVATAR_BASE = 'https://raw.githubusercontent.com/petterfranzen/ghost-in-the-machine/main/crew/avatars/';
+  var ROSTER = [
+    { id: 'major',     name: 'Major',     role: 'Coordinator',     avatar: AVATAR_BASE + 'major.png' },
+    { id: 'aramaki',   name: 'Aramaki',   role: 'Chief',           avatar: AVATAR_BASE + 'aramaki.png' },
+    { id: 'batou',     name: 'Batou',     role: 'Coder',           avatar: AVATAR_BASE + 'batou.png' },
+    { id: 'tachikoma', name: 'Tachikoma', role: 'Nightly builder', avatar: AVATAR_BASE + 'tachikoma.png' },
+    { id: 'togusa',    name: 'Togusa',    role: 'QA',              avatar: AVATAR_BASE + 'togusa.png' },
+    { id: 'ishikawa',  name: 'Ishikawa',  role: 'Researcher',      avatar: AVATAR_BASE + 'ishikawa.png' },
+    { id: 'saito',     name: 'Saito',     role: 'Ops',             avatar: AVATAR_BASE + 'saito.png' },
+    { id: 'jev',       name: 'Jev',       role: 'Security',        avatar: AVATAR_BASE + 'jev.png' }
   ];
-  const board = document.getElementById("board");
-  const meta = document.getElementById("meta");
+  var WAITS = [
+    { key: 'petter', label: 'Needs Petter',                sub: 'a decision, approval or answer' },
+    { key: 'major',  label: 'Needs the Major',             sub: 'apply, merge, route or close' },
+    { key: 'qa',     label: 'In QA',                       sub: 'PR open and green, waiting for Togusa' },
+    { key: 'agent',  label: 'With an agent',               sub: 'an agent has changes to make' },
+    { key: 'task',   label: 'Waiting behind another task', sub: 'nothing to do until something else lands' }
+  ];
+  var START_LIMIT = 3;
+  var POLL_MS = 60000;
+  var STATUSES = ['todo', 'working', 'review', 'blocked', 'done'];
+  var state = { data: null, filter: 'all', source: 'loading' };
+
+  var lanesEl = document.getElementById('lanes');
+  var startEl = document.getElementById('start-here');
+  var chipsEl = document.getElementById('chips');
+  var columnsEl = document.getElementById('columns');
+  var metaEl = document.getElementById('meta');
+  var filterLineEl = document.getElementById('filter-line');
+  var liveEl = document.getElementById('live');
 
   function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
 
-  function render(data) {
-    const tasks = Array.isArray(data.tasks) ? data.tasks : [];
-    const byStatus = {};
-    for (const [key] of COLUMNS) byStatus[key] = [];
-    for (const t of tasks) {
-      const s = byStatus[t.status] ? t.status : "todo";
-      byStatus[s].push(t);
+  function stateOf(s) {
+    var v = String(s || '').toLowerCase();
+    if (v === 'working' || v === 'active') return 'working';
+    if (v === 'idle') return 'idle';
+    if (v === 'blocked') return 'blocked';
+    return 'sleeping'; // paused, off, sleeping, unknown
+  }
+
+  function rosterOf(id) {
+    for (var i = 0; i < ROSTER.length; i++) if (ROSTER[i].id === id) return ROSTER[i];
+    return null;
+  }
+
+  function waitsMeta(key) {
+    for (var i = 0; i < WAITS.length; i++) if (WAITS[i].key === key) return WAITS[i];
+    return null;
+  }
+
+  function rel(iso) {
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return '—';
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) return s + 's';
+    var m = Math.round(s / 60);
+    if (m < 60) return m + 'm';
+    var h = Math.round(m / 60);
+    if (h < 48) return h + 'h';
+    var d = Math.round(h / 24);
+    return d + 'd';
+  }
+
+  function abs(iso) {
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return '';
+    try { return new Date(t).toISOString().replace('T', ' ').replace('.000Z', 'Z'); }
+    catch (e) { return iso; }
+  }
+
+  // "Waits on the tunnel rule" -> "the tunnel rule" (the line the card shows).
+  function cleanWaits(txt) {
+    return String(txt == null ? '' : txt).replace(/^\s*waits\s+on\s*[:\-\u2013\u2014]?\s*/i, '').trim();
+  }
+
+  // Raw board.json (old or new) -> display model.
+  function normalize(raw) {
+    raw = raw || {};
+    var records = {};
+    (raw.agents || []).forEach(function (a) {
+      var id = String(a.id || a.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      var rec = {
+        id: id, name: a.name || id, role: a.role || '', state: stateOf(a.state),
+        task: a.now || '', model: a.model || raw.model || '—', lastActiveAt: a.lastActiveAt || null
+      };
+      records[id] = rec;
+      records[String(a.name || '').toLowerCase()] = rec;
+    });
+    var tasks = (raw.tasks || []).map(function (t) {
+      var st = String(t.status || 'todo').toLowerCase();
+      if (STATUSES.indexOf(st) < 0) st = 'todo';
+      var w = String(t.waits || '').toLowerCase();
+      if (!waitsMeta(w)) w = 'agent'; // unknown label: treat as an agent's job
+      return {
+        id: t.id,
+        title: t.title || 'On a task',
+        agent: String(t.agent || 'unassigned').toLowerCase(),
+        status: st,
+        waits: w,
+        waitsText: typeof t.waitsText === 'string' ? t.waitsText : '',
+        pr: (typeof t.pr === 'string' && /^https?:\/\//i.test(t.pr)) ? t.pr : null,
+        url: (typeof t.url === 'string' && /^https?:\/\//i.test(t.url)) ? t.url : null,
+        blocks: (typeof t.blocks === 'number' && isFinite(t.blocks)) ? t.blocks : null,
+        updated: t.updated || raw.generatedAt || null
+      };
+    }).filter(function (t) { return t.status !== 'done'; }); // the board is open tasks only
+    var agents = ROSTER.map(function (r) {
+      var rec = records[r.id];
+      if (rec) {
+        return { id: r.id, name: r.name, role: rec.role || r.role, avatar: r.avatar,
+                 state: rec.state, task: rec.task, model: rec.model, lastActiveAt: rec.lastActiveAt };
+      }
+      var mine = tasks.filter(function (t) { return t.agent === r.id; });
+      var working = mine.filter(function (t) { return t.status === 'working'; })[0];
+      var blocked = mine.filter(function (t) { return t.status === 'blocked'; })[0];
+      var review = mine.filter(function (t) { return t.status === 'review'; })[0];
+      var st = working ? 'working' : blocked ? 'blocked' : review ? 'idle' : 'sleeping';
+      return { id: r.id, name: r.name, role: r.role, avatar: r.avatar, state: st,
+               task: (working || blocked || review || {}).title || '', model: raw.model || '—', lastActiveAt: null };
+    });
+    return {
+      generatedAt: raw.generatedAt || null,
+      budget: raw.budget || null,
+      model: raw.model || '—',
+      sample: raw.sample === true,
+      agents: agents,
+      tasks: tasks
+    };
+  }
+
+  function filteredTasks(d) {
+    if (state.filter === 'all') return d.tasks.slice();
+    return d.tasks.filter(function (t) { return t.agent === state.filter; });
+  }
+
+  // How many open tasks mention each issue (#NN) in their "waits on" line.
+  function refCounts(tasks) {
+    var counts = {};
+    tasks.forEach(function (t) {
+      var m = String(t.waitsText || '').match(/#\d+/g) || [];
+      m.forEach(function (r) { var n = r.slice(1); counts[n] = (counts[n] || 0) + 1; });
+    });
+    return counts;
+  }
+
+  function startHere(d) {
+    var counts = refCounts(d.tasks);
+    var petter = d.tasks.filter(function (t) { return t.waits === 'petter'; });
+    petter.forEach(function (t) {
+      // Prefer the count the server sends; fall back to counting "#NN" references.
+      t.unblocks = (t.blocks != null) ? t.blocks : (counts[String(t.id)] || 0);
+    });
+    petter.sort(function (a, b) {
+      return (b.unblocks - a.unblocks) || ((Date.parse(b.updated) || 0) - (Date.parse(a.updated) || 0));
+    });
+    return petter.slice(0, START_LIMIT);
+  }
+
+  function themeMode() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  }
+
+  function setTheme(mode) {
+    var m = mode === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', m);
+    var tc = document.querySelector('meta[name="theme-color"]');
+    if (tc) tc.setAttribute('content', m === 'light' ? '#f3f7f4' : '#060b09');
+    try { localStorage.setItem('s9-board-theme', m); } catch (e) {}
+  }
+
+  function renderMeta(d) {
+    var bits = [];
+    if (d.generatedAt) bits.push('as of <b title="' + esc(abs(d.generatedAt)) + '">' + esc(rel(d.generatedAt)) + ' ago</b>');
+    if (d.budget && d.budget.usedPercent != null) bits.push('budget <b>' + esc(d.budget.usedPercent) + '%</b>');
+    if (d.model) bits.push('model <b>' + esc(d.model) + '</b>');
+    if (state.source === 'file' || state.source === 'sample' || d.sample) {
+      bits.push('<span class="sample-badge" title="Sample data — the live feed is not published here.">Sample data</span>');
     }
-    for (const k of Object.keys(byStatus)) {
-      byStatus[k].sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
-    }
-    board.innerHTML = COLUMNS.map(([key, label]) => {
-      const items = byStatus[key].map(t => {
-        const pr = t.pr ? `<a href="${esc(t.pr)}" target="_blank" rel="noopener">PR</a>` : "";
-        return `<div class="card ${esc(t.status)}">
-          <div class="title">${esc(t.title)}</div>
-          <div class="row">
-            <span class="agent">${esc(t.agent)}</span>
-            <span class="time">${esc(t.updated)}</span>
-            ${pr}
-          </div>
-        </div>`;
-      }).join("");
-      return `<section class="column">
-        <h2><span>${esc(label)}</span><span>${byStatus[key].length}</span></h2>
-        ${items || '<div class="empty">none</div>'}
-      </section>`;
-    }).join("");
-    const b = data.budget || {};
-    meta.textContent = `updated ${data.generatedAt || "?"} · budget ${b.usedPercent != null ? b.usedPercent + "%" : "?"} · model ${data.model || "?"}`;
+    var m = themeMode();
+    bits.push('<button type="button" class="theme-toggle" aria-label="Switch to the ' + (m === 'light' ? 'dark' : 'light') +
+      ' theme">theme <b>' + m + '</b></button>');
+    metaEl.innerHTML = bits.join(' <span aria-hidden="true">·</span> ');
+  }
+
+  function renderLanes(d) {
+    lanesEl.innerHTML = d.agents.map(function (a) {
+      var task = a.task ? esc(a.task) : 'No current task';
+      return '<article class="lane" title="' + esc(a.name + ' — ' + a.role) + '">' +
+        '<span class="lane-top">' +
+          '<img class="avatar" src="' + esc(a.avatar) + '" alt="" width="36" height="36" loading="lazy">' +
+          '<span class="lane-id"><span class="name">' + esc(a.name) + '</span><span class="role">' + esc(a.role) + '</span></span>' +
+          '<span class="state state-' + esc(a.state) + '"><span class="dot" aria-hidden="true"></span>' + esc(a.state) + '</span>' +
+        '</span>' +
+        '<span class="lane-task' + (a.task ? '' : ' empty') + '">' + task + '</span>' +
+        '<span class="lane-foot"><span class="model" title="' + esc(a.model) + '">' + esc(a.model) + '</span>' +
+        '<span class="last" title="' + esc(a.lastActiveAt ? abs(a.lastActiveAt) : 'No activity recorded') + '">' +
+        (a.lastActiveAt ? esc(rel(a.lastActiveAt)) + ' ago' : '—') + '</span></span>' +
+      '</article>';
+    }).join('');
+  }
+
+  function renderCard(t, compact) {
+    var r = rosterOf(t.agent);
+    var who = r
+      ? '<span class="who"><span class="mark" data-agent="' + esc(r.id) + '" aria-hidden="true"></span><span class="name">' + esc(r.name) + '</span></span>'
+      : '<span class="who anon"><span class="name">' + esc(t.agent === 'unassigned' ? 'Unassigned' : t.agent) + '</span></span>';
+    var issue = t.url
+      ? '<a class="issue" href="' + esc(t.url) + '" target="_blank" rel="noopener noreferrer" aria-label="Open issue ' + esc(t.id) + ' in section9-hq">#' + esc(t.id) + '</a>'
+      : '<span class="issue">#' + esc(t.id) + '</span>';
+    var pr = (t.pr && /^https?:\/\//i.test(t.pr))
+      ? '<a class="pr" href="' + esc(t.pr) + '" target="_blank" rel="noopener noreferrer" aria-label="Open the pull request for issue ' + esc(t.id) + '">PR \u2197</a>'
+      : '';
+    var wt = cleanWaits(t.waitsText);
+    var waitsOn = wt ? '<p class="waits-on"><span class="waits-k">waits on</span> ' + esc(wt) + '</p>' : '';
+    var badge = (compact && t.unblocks != null)
+      ? '<span class="unblocks" title="Open tasks that clear when this does">unblocks ' + esc(t.unblocks) + '</span>' : '';
+    return '<article class="card waits-' + esc(t.waits) + (compact ? ' is-start' : '') + '">' +
+      '<div class="card-top"><span class="top-left">' + issue + pr + '</span>' +
+        '<span class="age" title="' + esc(t.updated ? 'updated ' + abs(t.updated) : 'update time unknown') + '">' +
+        esc(t.updated ? rel(t.updated) : '—') + '</span></div>' +
+      '<h3 class="title">' + esc(t.title) + '</h3>' +
+      waitsOn +
+      '<div class="card-foot">' + who + badge + '</div>' +
+    '</article>';
+  }
+
+  function renderStart(d) {
+    var top = startHere(d);
+    if (!top.length) { startEl.innerHTML = '<p class="empty">Nothing is waiting on Petter.</p>'; return; }
+    startEl.innerHTML = top.map(function (t) { return renderCard(t, true); }).join('');
+  }
+
+  function renderChips(d) {
+    var counts = {};
+    d.tasks.forEach(function (t) { counts[t.agent] = (counts[t.agent] || 0) + 1; });
+    var out = ['<button type="button" class="chip" data-agent="all" aria-pressed="' +
+      (state.filter === 'all' ? 'true' : 'false') + '">All<span class="chip-count">' + d.tasks.length + '</span></button>'];
+    ROSTER.forEach(function (r) {
+      var n = counts[r.id] || 0;
+      out.push('<button type="button" class="chip" data-agent="' + esc(r.id) + '" aria-pressed="' +
+        (state.filter === r.id ? 'true' : 'false') + '" title="' + esc('Show only ' + r.name + '\u2019s tasks') + '">' +
+        '<span class="mark" data-agent="' + esc(r.id) + '" aria-hidden="true"></span>' + esc(r.name) +
+        '<span class="chip-count">' + n + '</span></button>');
+    });
+    chipsEl.innerHTML = out.join('');
+  }
+
+  function renderFilter(d) {
+    if (state.filter === 'all') { filterLineEl.innerHTML = ''; return; }
+    var r = rosterOf(state.filter);
+    filterLineEl.innerHTML = '<span>showing <b>' + esc(r ? r.name : state.filter) + '</b></span>' +
+      '<button type="button" class="clear-filter">show all agents</button>';
+  }
+
+  function renderColumns(d) {
+    var tasks = filteredTasks(d);
+    var by = {};
+    WAITS.forEach(function (w) { by[w.key] = []; });
+    tasks.forEach(function (t) { by[t.waits].push(t); });
+    WAITS.forEach(function (w) {
+      by[w.key].sort(function (a, b) { return (Date.parse(b.updated) || 0) - (Date.parse(a.updated) || 0); });
+    });
+    columnsEl.innerHTML = WAITS.map(function (w, idx) {
+      var list = by[w.key];
+      return '<section class="column waits-' + esc(w.key) + '" aria-labelledby="col-' + esc(w.key) + '">' +
+        '<div class="column-head"><h3 id="col-' + esc(w.key) + '">' + esc(w.label) + '</h3>' +
+          '<span class="pill" aria-label="' + esc(list.length + ' tasks') + '">' + list.length + '</span></div>' +
+        '<p class="col-sub">' + esc(w.sub) + '</p>' +
+        '<div class="cards">' + (list.length ? list.map(function (t) { return renderCard(t, false); }).join('') : (idx === 0 ? '<p class="empty">Nothing here</p>' : '')) + '</div>' +
+      '</section>';
+    }).join('');
+  }
+
+  function render() {
+    if (!state.data) return;
+    renderMeta(state.data);
+    renderLanes(state.data);
+    renderStart(state.data);
+    renderChips(state.data);
+    renderFilter(state.data);
+    renderColumns(state.data);
+  }
+
+  function showError(msg) {
+    columnsEl.innerHTML = '<div class="error" role="alert">' + esc(msg) + '</div>';
+    metaEl.textContent = 'live feed unavailable';
+  }
+
+  function apply(raw, source) {
+    state.data = normalize(raw);
+    state.source = source;
+    render();
+    var d = state.data;
+    var petter = d.tasks.filter(function (t) { return t.waits === 'petter'; }).length;
+    liveEl.textContent = 'Board updated. ' + d.tasks.length + ' open tasks, ' + petter + ' waiting on Petter.' +
+      (source === 'file' || source === 'sample' ? ' Sample data.' : '');
   }
 
   function load() {
-    fetch("/board/status.json", { cache: "no-store" })
-      .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
-      .then(render)
-      .catch(e => {
-        board.innerHTML = `<div class="error">cannot load status.json: ${esc(e.message)}</div>`;
+    if (location.protocol === 'file:') {
+      var el = document.getElementById('board-sample');
+      try { apply(JSON.parse(el.textContent), 'file'); }
+      catch (e) { showError('The sample data is not valid JSON.'); }
+      return;
+    }
+    fetch('./board.json', { cache: 'no-store' }).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }).then(function (raw) {
+      apply(raw, 'live');
+    }).catch(function () {
+      fetch('./board-sample.json', { cache: 'no-store' }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }).then(function (raw) {
+        apply(raw, 'sample');
+      }).catch(function () {
+        showError('Could not load board.json or board-sample.json.');
       });
+    });
   }
 
+  // Theme: saved choice, else the OS preference, default dark.
+  (function () {
+    var saved = null;
+    try { saved = localStorage.getItem('s9-board-theme'); } catch (e) {}
+    if (saved !== 'light' && saved !== 'dark') {
+      saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+    }
+    setTheme(saved);
+  })();
+
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    var chip = el.closest ? el.closest('.chip') : null;
+    if (chip) {
+      var id = chip.getAttribute('data-agent');
+      state.filter = (id === 'all' || state.filter === id) ? 'all' : id;
+      render();
+      return;
+    }
+    var clear = el.closest ? el.closest('.clear-filter') : null;
+    if (clear) { state.filter = 'all'; render(); return; }
+    var th = el.closest ? el.closest('.theme-toggle') : null;
+    if (th) { setTheme(themeMode() === 'light' ? 'dark' : 'light'); render(); }
+  });
+
   load();
-  setInterval(load, 60000);
+  setInterval(function () { if (location.protocol !== 'file:') load(); }, POLL_MS);
 })();
 </script>
 </body>
