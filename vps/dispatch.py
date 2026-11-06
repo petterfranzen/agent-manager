@@ -804,10 +804,18 @@ def routines(a, board, log):
             continue
         label = f"agent:{name.lower()}"
         open_ = board.pages(f"/issues?labels={urllib.parse.quote(label)}&state=open")
-        if any(i["title"] == r["title"] for i in open_):
-            log(f"{name}: '{r['title']}' is still open; skipped")
+        # Only an issue that has not run yet (todo) or is running blocks a new one. An older one that is
+        # waiting in review (its PR is still being QA'd), blocked or forgotten must NOT stop tonight's
+        # run: "one build a night" has to happen every night (Petter, 6 Nov).
+        pending = [i for i in open_ if i["title"] == r["title"]
+                   and {"status:todo", "status:working"} & {l["name"] for l in i["labels"]}]
+        if pending:
+            log(f"{name}: '{r['title']}' (#{pending[0]['number']}) is still waiting or running; skipped")
             continue
-        board.call("POST", "/issues", {"title": r["title"], "body": r.get("description", ""), "labels": [label, "status:todo"]})
+        labels = [label, "status:todo"]
+        if r.get("priority") in ("high", "low"):      # a routine can claim a priority: the nightly build is high
+            labels.append(f"priority:{r['priority']}")
+        board.call("POST", "/issues", {"title": r["title"], "body": r.get("description", ""), "labels": labels})
         log(f"{name}: opened '{r['title']}' ({when:%Y-%m-%d %H:%M %Z})")
     Path(a.state_dir).mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps({"at": now.isoformat()}))

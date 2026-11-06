@@ -49,6 +49,7 @@ description = "Build tonight's app, following your brief."
 cron = "0 1 * * *"
 timezone = "Europe/Stockholm"
 active = true
+priority = "high"   # Petter, 6 Nov: one build a night must happen every night, so it jumps the queue
 
 [[agents]]
 name = "Batou"

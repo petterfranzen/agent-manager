@@ -241,6 +241,7 @@ longest.
 
 **Later.** Update: `git -C /opt/agent-manager pull --ff-only && /opt/agent-manager/vps/install.sh`.
 Stop everything: `systemctl disable --now section9-dispatch.timer section9-dispatch-lane1.timer section9-routines.timer`.
+A routine opens its issue at its cron time unless an issue with the same title is still `status:todo` or `status:working` for that agent; one waiting in `review` or `blocked` no longer blocks it (6 Nov: a forgotten "Nightly build" issue in review had skipped three nights). A routine may set `priority = "high"` (the nightly build does): the issue is created with `priority:high`, so with the priority ordering pinned it starts as soon as the current run ends.
 A private routine (rental watch) goes in the root-only `/etc/section9/routines.private.toml`
 as `[[routines]]` with `agent`, `title`, `description`, `cron`, `timezone`.
 Delete `/var/backups/agent-manager-secrets/` on Hetzner once the VPS works.
