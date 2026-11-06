@@ -503,6 +503,35 @@ class TestRoutines(Base):
         self.run_dispatch("routines")           # still open: skipped
         self.assertEqual(len(self.stub.issues), 1)
 
+    def test_a_routine_issue_in_review_does_not_block_tonights_run(self):
+        # The nightly build's old issue stays open while its PR is in QA; that must not skip the next night.
+        old = self.stub.add(["agent:saito", "status:review"], title="Morning report")
+        blocked = self.stub.add(["agent:saito", "status:blocked"], title="Morning report")
+        self.state(10)
+        self.run_dispatch("routines")
+        fresh = [n for n in self.stub.issues if n not in (old, blocked)]
+        self.assertEqual(len(fresh), 1)
+        self.assertEqual(self.stub.labels(fresh[0]), {"agent:saito", "status:todo"})
+
+    def test_a_routine_still_todo_or_working_blocks_a_duplicate(self):
+        for state in ("status:todo", "status:working"):
+            self.stub.issues.clear()
+            self.stub.add(["agent:saito", state], title="Morning report")
+            self.state(10)
+            self.run_dispatch("routines")
+            self.assertEqual(len(self.stub.issues), 1, state)
+
+    def test_a_routine_can_claim_a_priority(self):
+        roster = (self.t / "roster.toml")
+        text = roster.read_text() if roster.exists() else None
+        if text is None:
+            self.skipTest("fixture roster is not a file here")
+        roster.write_text(text.replace('title = "Morning report"', 'priority = "high"\ntitle = "Morning report"'))
+        self.state(10)
+        self.run_dispatch("routines")
+        self.assertEqual([self.stub.labels(i["number"]) for i in self.stub.issues.values()],
+                         [{"agent:saito", "status:todo", "priority:high"}])
+
     def test_first_run_does_not_backfill(self):
         self.run_dispatch("routines")
         self.assertEqual(self.stub.issues, {})
