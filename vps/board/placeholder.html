@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Section 9 — Board</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121821;
+    --line: #1e2836;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --working: #3fb950;
+    --review: #d29922;
+    --blocked: #f85149;
+    --done: #6e7681;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  header h1 { font-size: 1.1rem; margin: 0; letter-spacing: 0.08em; text-transform: uppercase; }
+  header .meta { color: var(--muted); font-size: 0.8rem; }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(220px, 1fr));
+    gap: 1rem;
+    padding: 1.5rem;
+    align-items: start;
+    min-height: calc(100vh - 60px);
+  }
+  .column {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 120px;
+  }
+  .column h2 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 0;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+  }
+  .card {
+    background: #0d131b;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--muted);
+    border-radius: 6px;
+    padding: 0.6rem 0.7rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .card.working { border-left-color: var(--working); }
+  .card.review { border-left-color: var(--review); }
+  .card.blocked { border-left-color: var(--blocked); }
+  .card.done { border-left-color: var(--done); opacity: 0.7; }
+  .card .title { font-size: 0.85rem; font-weight: 600; }
+  .card .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
+  .card .agent { color: var(--accent); font-size: 0.75rem; }
+  .card .time { color: var(--muted); font-size: 0.7rem; }
+  .card a { color: var(--accent); text-decoration: none; font-size: 0.75rem; }
+  .card a:hover { text-decoration: underline; }
+  .empty { color: var(--muted); font-size: 0.75rem; font-style: italic; }
+  .error { color: var(--blocked); padding: 1rem 1.5rem; }
+  @media (max-width: 900px) {
+    .board { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Section 9 — Board</h1>
+  <div class="meta" id="meta">loading…</div>
+</header>
+<main class="board" id="board"></main>
+<script>
+(function () {
+  const COLUMNS = [
+    ["todo", "Todo"],
+    ["working", "Working"],
+    ["review", "Review"],
+    ["blocked", "Blocked"],
+    ["done", "Done"],
+  ];
+  const board = document.getElementById("board");
+  const meta = document.getElementById("meta");
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  function render(data) {
+    const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const byStatus = {};
+    for (const [key] of COLUMNS) byStatus[key] = [];
+    for (const t of tasks) {
+      const s = byStatus[t.status] ? t.status : "todo";
+      byStatus[s].push(t);
+    }
+    for (const k of Object.keys(byStatus)) {
+      byStatus[k].sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+    }
+    board.innerHTML = COLUMNS.map(([key, label]) => {
+      const items = byStatus[key].map(t => {
+        const pr = t.pr ? `<a href="${esc(t.pr)}" target="_blank" rel="noopener">PR</a>` : "";
+        return `<div class="card ${esc(t.status)}">
+          <div class="title">${esc(t.title)}</div>
+          <div class="row">
+            <span class="agent">${esc(t.agent)}</span>
+            <span class="time">${esc(t.updated)}</span>
+            ${pr}
+          </div>
+        </div>`;
+      }).join("");
+      return `<section class="column">
+        <h2><span>${esc(label)}</span><span>${byStatus[key].length}</span></h2>
+        ${items || '<div class="empty">none</div>'}
+      </section>`;
+    }).join("");
+    const b = data.budget || {};
+    meta.textContent = `updated ${data.generatedAt || "?"} · budget ${b.usedPercent != null ? b.usedPercent + "%" : "?"} · model ${data.model || "?"}`;
+  }
+
+  function load() {
+    fetch("/board/status.json", { cache: "no-store" })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+      .then(render)
+      .catch(e => {
+        board.innerHTML = `<div class="error">cannot load status.json: ${esc(e.message)}</div>`;
+      });
+  }
+
+  load();
+  setInterval(load, 60000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,211 @@
+{
+  "generatedAt": "2026-11-02T09:30:00Z",
+  "sample": true,
+  "budget": {
+    "usedPercent": 37,
+    "month": "2026-11"
+  },
+  "model": "deepseek/deepseek-v4.1-flash",
+  "agents": [
+    {
+      "name": "Major",
+      "role": "Coordinator",
+      "state": "working",
+      "now": "Routing the tunnel task",
+      "model": "claude-sonnet-4.5",
+      "lastActiveAt": "2026-11-02T09:24:00Z"
+    },
+    {
+      "name": "Aramaki",
+      "role": "Chief",
+      "state": "idle",
+      "now": null,
+      "model": "claude-opus-4.1",
+      "lastActiveAt": "2026-11-02T07:10:00Z"
+    },
+    {
+      "name": "Batou",
+      "role": "Coder",
+      "state": "working",
+      "now": "Fixing the flaky touch handler",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "lastActiveAt": "2026-11-02T09:26:00Z"
+    },
+    {
+      "name": "Tachikoma",
+      "role": "Nightly builder",
+      "state": "working",
+      "now": "Building tonight's app",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "lastActiveAt": "2026-11-02T08:50:00Z"
+    },
+    {
+      "name": "Togusa",
+      "role": "QA",
+      "state": "blocked",
+      "now": "Waiting on two PRs to review",
+      "model": "gpt-5-codex",
+      "lastActiveAt": "2026-11-02T08:05:00Z"
+    },
+    {
+      "name": "Ishikawa",
+      "role": "Researcher",
+      "state": "idle",
+      "now": null,
+      "model": "claude-sonnet-4.5",
+      "lastActiveAt": "2026-11-01T14:00:00Z"
+    },
+    {
+      "name": "Saito",
+      "role": "Ops",
+      "state": "paused",
+      "now": null,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "lastActiveAt": "2026-11-01T06:30:00Z"
+    },
+    {
+      "name": "Jev",
+      "role": "Security",
+      "state": "sleeping",
+      "now": null,
+      "model": "claude-haiku-4.5",
+      "lastActiveAt": "2026-11-01T22:00:00Z"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 101,
+      "title": "Approve the palette for the ops page",
+      "agent": "saito",
+      "status": "review",
+      "waits": "petter",
+      "waitsText": "a yes or no on the palette",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/101",
+      "blocks": 4,
+      "updated": "2026-11-02T09:20:00Z"
+    },
+    {
+      "id": 102,
+      "title": "Pick the storage bucket",
+      "agent": "saito",
+      "status": "todo",
+      "waits": "petter",
+      "waitsText": "which bucket to use",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/102",
+      "blocks": 2,
+      "updated": "2026-11-02T08:40:00Z"
+    },
+    {
+      "id": 103,
+      "title": "Sign off the nightly schedule",
+      "agent": "tachikoma",
+      "status": "todo",
+      "waits": "petter",
+      "waitsText": "the nightly start time",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/103",
+      "blocks": 1,
+      "updated": "2026-11-02T07:55:00Z"
+    },
+    {
+      "id": 104,
+      "title": "Apply the dependency bump",
+      "agent": "saito",
+      "status": "review",
+      "waits": "major",
+      "waitsText": "the bump PR to merge",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/104",
+      "updated": "2026-11-02T09:05:00Z",
+      "pr": "https://github.com/petterfranzen/ghost-in-the-machine/pull/900"
+    },
+    {
+      "id": 105,
+      "title": "Merge the docs tidy-up",
+      "agent": "batou",
+      "status": "review",
+      "waits": "major",
+      "waitsText": "the docs PR to merge",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/105",
+      "updated": "2026-11-02T08:30:00Z"
+    },
+    {
+      "id": 106,
+      "title": "Route the tunnel task to QA",
+      "agent": "major",
+      "status": "working",
+      "waits": "major",
+      "waitsText": "routing to QA",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/106",
+      "updated": "2026-11-02T09:22:00Z"
+    },
+    {
+      "id": 107,
+      "title": "QA: 390 px pass on the crew page",
+      "agent": "togusa",
+      "status": "review",
+      "waits": "qa",
+      "waitsText": "the crew PR to be checked",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/107",
+      "updated": "2026-11-02T08:10:00Z"
+    },
+    {
+      "id": 108,
+      "title": "QA: keyboard navigation on the board",
+      "agent": "togusa",
+      "status": "review",
+      "waits": "qa",
+      "waitsText": "the board PR to be checked",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/108",
+      "updated": "2026-11-02T07:40:00Z"
+    },
+    {
+      "id": 109,
+      "title": "Fix the flaky touch handler",
+      "agent": "batou",
+      "status": "working",
+      "waits": "agent",
+      "waitsText": "a fix from Batou",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/109",
+      "updated": "2026-11-02T09:18:00Z"
+    },
+    {
+      "id": 110,
+      "title": "Tidy the README examples",
+      "agent": "batou",
+      "status": "todo",
+      "waits": "agent",
+      "waitsText": "the README pass",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/110",
+      "updated": "2026-11-02T06:50:00Z"
+    },
+    {
+      "id": 111,
+      "title": "Research the queue gateway",
+      "agent": "ishikawa",
+      "status": "working",
+      "waits": "agent",
+      "waitsText": "more research from Ishikawa",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/111",
+      "updated": "2026-11-02T06:20:00Z"
+    },
+    {
+      "id": 112,
+      "title": "Publish behind the tunnel rule",
+      "agent": "saito",
+      "status": "todo",
+      "waits": "task",
+      "waitsText": "the palette decision (#101)",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/112",
+      "updated": "2026-11-02T08:00:00Z"
+    },
+    {
+      "id": 113,
+      "title": "Switch the sync to the new queue",
+      "agent": "saito",
+      "status": "blocked",
+      "waits": "task",
+      "waitsText": "the dependency bump (#104)",
+      "url": "https://github.com/petterfranzen/section9-hq/issues/113",
+      "updated": "2026-11-02T07:15:00Z"
+    }
+  ]
+}

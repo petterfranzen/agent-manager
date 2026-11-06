@@ -1,6 +1,10 @@
 # Hermes config, mounted read-only at /opt/data/config.yaml. Keys come from
 # /etc/agent-manager/hermes.env, never from here. See docs/DESIGN.md "Models".
 
+# This default is the model for a request that names none. The dispatcher names
+# one on every run (vps/dispatch.py, from agents/roster.toml): it sends `model`
+# and `provider: openrouter`, so the gateway switches the executing model for
+# that turn only and never rewrites this file (section9-hq #101).
 model:
   provider: openrouter
   default: deepseek/deepseek-v4.1-flash
@@ -11,9 +15,30 @@ provider_routing:
   sort: price
   data_collection: "deny"
   ignore: ["x-ai"]          # Petter's choice: no xAI, ever.
+  # Per-model pins (#101). Hermes overlays these on the flat block above for the
+  # model the agent is currently on, so each trial model gets its own ZDR-only
+  # provider set and still cannot reach a non-ZDR or xAI provider. Slugs are from
+  # OpenRouter's ZDR endpoint list, 5 Nov; `only` is a hard gate -- if a run ever
+  # fails with "no provider available", check the slugs here first.
+  models:
+    "anthropic/claude-sonnet-5.5":
+      sort: price
+      data_collection: "deny"
+      ignore: ["x-ai"]
+      only: ["amazon-bedrock", "google-vertex"]
+    "moonshotai/kimi-k3.1-pro":
+      sort: price
+      data_collection: "deny"
+      ignore: ["x-ai"]
+      only: ["fireworks", "together", "deepinfra", "parasail", "nebius", "moonshotai"]
 
 # Tried in order when the primary fails (429/5xx/401/403/404), per turn.
+# DeepSeek first (#101): an agent on a $2/$10 model must fail to the cheapest
+# model, never to a dearer one. An entry equal to the primary is skipped, so a
+# DeepSeek agent still falls through to GLM exactly as before.
 fallback_providers:
+  - provider: openrouter
+    model: deepseek/deepseek-v4.1-flash
   - provider: openrouter
     model: z-ai/glm-5.3-flash
   - provider: openrouter
