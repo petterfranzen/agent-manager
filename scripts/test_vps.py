@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -901,8 +902,8 @@ class TestHq(Base):
         self.assertEqual(self.agent(doc, "Saito")["recent"][0]["text"], "On a private task")
         self.assertNotIn("url", self.agent(doc, "Saito")["recent"][0])
         raw = json.dumps(doc)
-        for leak in ("private errand", "secret-garden", "Morning ops", "$", "sk-or", "section9-hq"):
-            self.assertNotIn(leak, raw)
+        for leak in ("private errand", "secret-garden", "Morning ops", "$", "sk-or"):
+            self.assertNotIn(leak, raw)          # section9-hq appears only in a public task's url
 
     def test_tasks_carry_status_agent_and_a_public_pr_and_nothing_private(self):
         self.board()
@@ -911,17 +912,18 @@ class TestHq(Base):
         tasks = self.status()["tasks"]
         by_title = {t["title"]: t for t in tasks}
         for t in tasks:
-            self.assertEqual(set(t), {"id", "title", "agent", "status", "pr", "updated"})
+            self.assertEqual(set(t), {"id", "title", "agent", "status", "waits", "waitsText", "url", "pr", "updated"})
         self.assertEqual((by_title["Fix the crew page layout"]["status"], by_title["Fix the crew page layout"]["agent"]),
                          ("working", "batou"))
         self.assertEqual(by_title["Add dark mode"]["status"], "review")
         self.assertEqual(by_title["Add dark mode"]["pr"], "https://github.com/petterfranzen/ghost-in-the-machine/pull/12")
+        self.assertEqual(by_title["Add dark mode"]["url"], "https://github.com/petterfranzen/section9-hq/issues/4")
         self.assertEqual(by_title["Nightly build"]["status"], "done")
         private = [t for t in tasks if t["title"] == "On a private task"]
         self.assertEqual(len(private), 3)       # the label, the deny term, the private report
-        self.assertTrue(all(t["pr"] is None for t in private))
+        self.assertTrue(all(t["pr"] is None and t["url"] is None for t in private))
         raw = json.dumps(tasks)
-        for leak in ("private errand", "secret-garden", "Morning ops", "$", "section9-hq"):
+        for leak in ("private errand", "secret-garden", "Morning ops", "$"):
             self.assertNotIn(leak, raw)
 
     def test_without_a_deny_file_task_titles_are_not_published(self):
@@ -929,12 +931,59 @@ class TestHq(Base):
         self.assertEqual(self.run_hq("status")[0], 0)
         self.assertEqual({t["title"] for t in self.status()["tasks"]}, {"On a task", "On a private task"})
 
-    def test_status_also_writes_the_board_page_and_a_copy_of_status_json(self):
+    def test_status_writes_the_live_data_and_installs_the_vendored_page(self):
         self.board()
         self.assertEqual(self.run_hq("status")[0], 0)
         site = self.t / "site"
-        self.assertEqual((site / "board" / "status.json").read_text(), (site / "status.json").read_text())
+        live = (site / "status.json").read_text()
+        self.assertEqual((site / "board" / "board.json").read_text(), live)     # what the waits page polls
+        self.assertEqual((site / "board" / "status.json").read_text(), live)    # the placeholder's feed
         self.assertEqual((site / "board" / "index.html").read_bytes(), (ROOT / "vps" / "board" / "index.html").read_bytes())
+        self.assertEqual((site / "board" / "board-sample.json").read_bytes(),
+                         (ROOT / "vps" / "board" / "board-sample.json").read_bytes())
+
+    def test_the_waits_column_comes_from_the_waits_label_and_the_line_from_the_comment(self):
+        petter = self.stub.add(["agent:batou", "status:todo", "waits:petter"], "Decide the palette")
+        qa = self.stub.add(["agent:togusa", "status:review", "waits:qa"], "QA the crew page")
+        plain = self.stub.add(["agent:batou", "status:working"], "Tidy the README")          # no label -> agent
+        unknown = self.stub.add(["agent:batou", "status:working", "waits:someday"], "Guess")  # unknown -> agent
+        self.stub.gh_comments = [
+            {"issue_url": f"https://api.github.com/repos/x/y/issues/{petter}", "body": "Waits on the earlier ask"},
+            {"issue_url": f"https://api.github.com/repos/x/y/issues/{petter}", "body": "Waits on a yes or no on the palette\nsecond line"},
+            {"issue_url": f"https://api.github.com/repos/x/y/issues/{qa}", "body": "first\n  Waits on the crew PR to be checked"},
+            {"issue_url": f"https://api.github.com/repos/x/y/issues/{plain}", "body": "Waits on the palette decision (#101)"},
+        ]
+        (self.t / "secrets" / "crew-deny.txt").write_text("secret-garden\n")
+        self.assertEqual(self.run_hq("status")[0], 0)
+        by = {t["id"]: t for t in self.status()["tasks"]}
+        self.assertEqual((by[petter]["waits"], by[petter]["waitsText"]),
+                         ("petter", "Waits on a yes or no on the palette"))     # the latest comment wins
+        self.assertEqual((by[qa]["waits"], by[qa]["waitsText"]), ("qa", "Waits on the crew PR to be checked"))
+        self.assertEqual((by[plain]["waits"], by[plain]["waitsText"]),
+                         ("agent", "Waits on the palette decision (#101)"))
+        self.assertEqual((by[unknown]["waits"], by[unknown]["waitsText"]), ("agent", ""))
+
+    def test_a_private_task_gets_no_url_and_no_waits_line(self):
+        n = self.stub.add(["agent:batou", "status:working", "private"], "Look at private errand")
+        self.stub.gh_comments = [{"issue_url": f"https://api.github.com/repos/x/y/issues/{n}",
+                                  "body": "Waits on the private errand details"}]
+        (self.t / "secrets" / "crew-deny.txt").write_text("secret-garden\n")
+        self.assertEqual(self.run_hq("status")[0], 0)
+        (t,) = self.status()["tasks"]
+        self.assertEqual((t["title"], t["url"], t["waitsText"]), ("On a private task", None, ""))
+
+    def test_the_page_falls_back_to_the_placeholder_when_the_real_one_is_missing(self):
+        root = self.t / "root"
+        (root / "vps" / "board").mkdir(parents=True)
+        (root / "vps" / "board" / "placeholder.html").write_text("PLACEHOLDER")
+        self.assertEqual(hq.board_assets(root), (b"PLACEHOLDER", None))
+        (root / "vps" / "board" / "index.html").write_text("REAL")
+        (root / "vps" / "board" / "board-sample.json").write_text("{}")
+        self.assertEqual(hq.board_assets(root), (b"REAL", b"{}"))
+        (root / "vps" / "board" / "index.html").unlink()
+        (root / "vps" / "board" / "placeholder.html").unlink()
+        with self.assertRaises(hq.Failure):
+            hq.board_assets(root)
 
     def test_without_a_deny_file_only_states_and_on_a_task(self):
         self.board()
@@ -1355,6 +1404,34 @@ class TestCapacity(Base):
 
 
 class TestDashboard(unittest.TestCase):
+    def test_the_vendored_board_is_the_real_waits_page(self):
+        # ghost-in-the-machine hq/board/index.html at commit 5643f3b (PR #18), vendored under
+        # vps/board/. Its own build.sh checks these; the same checks here stop the copy drifting.
+        page = (ROOT / "vps" / "board" / "index.html").read_text(encoding="utf-8")
+        sample = json.loads((ROOT / "vps" / "board" / "board-sample.json").read_text(encoding="utf-8"))
+        m = re.search(r'<script type="application/json" id="board-sample">(.*?)</script>', page, re.S)
+        self.assertIsNotNone(m, "index.html has no inline #board-sample block")
+        self.assertEqual(json.loads(m.group(1)), sample)          # the offline copy has not drifted
+        self.assertEqual(sample.get("sample"), True)
+        self.assertEqual(set(sample) - {"sample"}, {"generatedAt", "budget", "model", "agents", "tasks"})
+        for needle in ("fetch('./board.json'", "POLL_MS = 60000", "START_LIMIT = 3", "prefers-reduced-motion",
+                       "max-width:700px", "prefers-color-scheme", 'class="column waits-', 'class="pr"',
+                       'id="lanes"', 'id="start-here"', 'id="chips"', 'id="columns"', 'id="filter-line"'):
+            self.assertIn(needle, page, needle)
+
+    def test_the_vendored_files_match_the_hashes_recorded_beside_them(self):
+        import hashlib
+        readme = (ROOT / "vps" / "board" / "README.md").read_text(encoding="utf-8")
+        for name in ("index.html", "board-sample.json"):
+            want = re.search(r"`%s`\s+sha256 `([0-9a-f]{64})`" % re.escape(name), readme)
+            self.assertIsNotNone(want, name)
+            have = hashlib.sha256((ROOT / "vps" / "board" / name).read_bytes()).hexdigest()
+            self.assertEqual(have, want.group(1), f"{name} changed without its README hash")
+
+    def test_the_placeholder_page_is_kept_and_reads_status_json(self):
+        page = (ROOT / "vps" / "board" / "placeholder.html").read_text(encoding="utf-8")
+        self.assertIn("/board/status.json", page)                 # the fallback's own feed
+
     def test_compose_enables_the_dashboard_on_loopback_with_themes_read_only(self):
         text = (ROOT / "vps" / "compose.yaml").read_text()
         for line in ('HERMES_DASHBOARD: "1"', 'HERMES_DASHBOARD_HOST: "127.0.0.1"', 'HERMES_DASHBOARD_PORT: "9119"',

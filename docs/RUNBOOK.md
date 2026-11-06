@@ -186,13 +186,22 @@ Private tasks show as "On a private task": any issue labelled `private`, and any
 a term in `/etc/section9/crew-deny.txt` (one per line, root-only). Without that file only agent
 states and "On a task" are published. Create the file before you expect titles on the page.
 
-The board: `https://hq.sectionnine.dev/board` is a static page (`vps/board/index.html`) that fetches
-`/board/status.json`. `section9-hq-status` writes both under `board/` in the same folder, from
-the same `tasks` array as `status.json` (fields: `id`, `title`, `agent`, `status`, `pr`, `updated`;
-titles follow the rules above). Petter's one-time step in Cloudflare: Zero Trust -> Networks -> Tunnels ->
+The board: `https://hq.sectionnine.dev/board` is the waits page from ghost-in-the-machine
+(`hq/board/index.html`, PR #18), vendored byte-for-byte into `vps/board/index.html` next to its
+`board-sample.json` (see `vps/board/README.md` for the source sha and the file hashes). A fix goes
+through a ghost-in-the-machine PR, a copy here over that pinned commit sha, then `sync.sh --accept`
+-- `vps/` is a guarded path, so `section9-sync` will not apply the commit until Petter has read it.
+`section9-hq-status` then writes, under `board/` in the same folder, the live `board.json` the page
+polls: the same `tasks` array as `status.json` (fields `id`, `title`, `agent`, `status`, `waits`,
+`waitsText`, `url`, `pr`, `updated`) with the budget and model blocks. The `waits` column comes from
+the issue's `waits:*` label (else `agent`), its line from the latest comment starting "Waits on ...",
+and an issue labelled `private` gets no title, no link and no waits line (rules above). It keeps
+`board/status.json` for the old placeholder page (`vps/board/placeholder.html`, served only when
+`vps/board/index.html` is missing) and `board-sample.json` as the page's own fallback.
+Petter's one-time step in Cloudflare: Zero Trust -> Networks -> Tunnels ->
 the VPS tunnel -> Public hostnames -> add `hq.sectionnine.dev`, path `^/board` (a regex, anchored so that Hermes paths like /api/dashboard do not match) -> `HTTP` `localhost:8090`,
 **above** the catch-all `hq.sectionnine.dev` -> `localhost:9119`; and check that the Access application
-covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/status.json | head`.
+covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/board.json | head`.
 
 `section9-spend.timer` (hourly) keeps the open `Spend` issue in `section9-hq` current: month, cap,
 left and today from OpenRouter, with an "As of" time. Pin it in the GitHub UI if the automatic pin

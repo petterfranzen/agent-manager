@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """HQ page files for hq.sectionnine.dev, written into the directory the hq container serves.
 
-  hq-status.py status   write status.json (every 2 min): what each agent is doing,
-                        from the issues in section9-hq, plus the month's OpenRouter usage
+  hq-status.py status   write status.json and board/board.json (every 2 min): what each agent is
+                        doing, from the issues in section9-hq, plus the month's OpenRouter usage.
+                        One run also installs the waits board from vps/board/ as board/index.html
   hq-status.py crew     fetch main's crew/ folder from ghost-in-the-machine (every 10 min),
                         and its hq/*.yaml dashboard themes into --themes-dir
 
@@ -38,6 +39,10 @@ KEYS = re.compile(r"(sk-or-|github_pat_|ghp_)[A-Za-z0-9_-]*")
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 DENY_BASE = r"petter|franz[eé]n"     # the owner's name never shows, whatever the deny file says
 PRIVATE, ON_TASK = "On a private task", "On a task"
+WAITS = ("petter", "major", "qa", "agent", "task")    # board.json `waits` column, in page order
+WAITS_ON = re.compile(r"^[ \t]*waits\s+on\b[^\n]*", re.IGNORECASE | re.MULTILINE)
+# Each card's number links to its issue; only a non-private task gets one.
+ISSUE = f"https://github.com/{BOARD}/issues/"
 RECENT, TEXT_MAX = 5, 90
 ZULU = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 MAX_FILE, MAX_TOTAL = 5 << 20, 50 << 20
@@ -127,6 +132,12 @@ def build(now, agents, issues, comments, key, model, deny):
         if m:
             links[c["issue_url"].rsplit("/", 1)[-1]] = m.group(0)
 
+    waits_text = {}
+    for c in comments:           # oldest first: the latest "Waits on ..." line wins
+        m = WAITS_ON.search(c.get("body") or "")
+        if m:
+            waits_text[c["issue_url"].rsplit("/", 1)[-1]] = short(m.group(0).strip())
+
     out = []
     for r in agents:
         mine = [i for i in issues if f"agent:{r['name'].lower()}" in labels(i) and "pull_request" not in i]
@@ -179,11 +190,20 @@ def build(now, agents, issues, comments, key, model, deny):
             u = links.get(str(i["number"])) or (u.group(0) if u else None)
             if u and u.startswith(PUBLIC_URLS):
                 pr = u
+        private = title == PRIVATE
+        waits = "agent"
+        for l in labels(i):          # the waits:* label picks the page column
+            if l.startswith("waits:") and l[6:] in WAITS:
+                waits = l[6:]
+                break
         tasks.append({
             "id": i["number"],
             "title": title,
             "agent": agent,
             "status": status,
+            "waits": waits,
+            "waitsText": "" if private else waits_text.get(str(i["number"]), ""),
+            "url": None if private else f"{ISSUE}{i['number']}",
             "pr": pr,
             "updated": iso(i["updated_at"]),
         })
@@ -216,11 +236,14 @@ def validate(doc, deny):
         need(isinstance(t.get("title"), str), "task title")
         need(isinstance(t.get("agent"), str), "task agent")
         need(t.get("status") in ("todo", "working", "review", "blocked", "done"), "task status")
+        need(t.get("waits") in WAITS, "task waits")
+        need(isinstance(t.get("waitsText"), str), "task waitsText")
+        need(t.get("url") is None or (isinstance(t["url"], str) and t["url"].startswith(ISSUE)), "task url")
         need(t.get("pr") is None or (isinstance(t["pr"], str) and t["pr"].startswith(PUBLIC_URLS)), "task pr")
         need(isinstance(t.get("updated"), str) and ZULU.match(t["updated"]), "task updated")
     words = [a["name"] for a in doc["agents"]] + [a["now"] or "" for a in doc["agents"]] \
         + [r["text"] for a in doc["agents"] for r in a["recent"]] \
-        + [t["title"] for t in doc["tasks"]]
+        + [t["title"] for t in doc["tasks"]] + [t["waitsText"] for t in doc["tasks"]]
     pattern = re.compile(DENY_BASE + ("|" + deny.pattern if deny else ""), re.IGNORECASE)
     need(not any(pattern.search(w) for w in words), "a private term would be published")
     need(not re.search(r"\$\s?\d|cents|usd", json.dumps(doc), re.IGNORECASE), "a money amount would be published")
@@ -241,6 +264,27 @@ def load_deny(secrets_dir):
     except OSError:
         return None
     return re.compile("|".join(re.escape(t) for t in terms), re.IGNORECASE) if terms else None
+
+
+def board_assets(repo_root):
+    """The page to serve, from the vendored vps/board/. A change there is a guarded path: it
+    needs Petter's `sync.sh --accept`. When the real page is missing, the old placeholder is
+    kept as the fallback, so /board still renders. Returns (page bytes, sample bytes or None)."""
+    board = Path(repo_root) / "vps" / "board"
+    page = None
+    for name in ("index.html", "placeholder.html"):
+        try:
+            page = (board / name).read_bytes()
+            break
+        except OSError:
+            continue
+    if page is None:
+        raise Failure("no board page: vps/board/index.html and placeholder.html are both missing")
+    try:
+        sample = (board / "board-sample.json").read_bytes()
+    except OSError:
+        sample = None
+    return page, sample
 
 
 def do_status(a):
@@ -265,12 +309,13 @@ def do_status(a):
     doc = build(now, agents, issues, comments, key, model, load_deny(a.secrets_dir))
     data = (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode()
     write_atomic(Path(a.site_dir) / "status.json", data)
-    try:
-        board_html = (Path(a.repo_root) / "vps" / "board" / "index.html").read_bytes()
-    except OSError as e:
-        raise Failure(f"cannot read the board page: {e}") from None
-    write_atomic(Path(a.site_dir) / "board" / "index.html", board_html)
-    write_atomic(Path(a.site_dir) / "board" / "status.json", data)
+    page, sample = board_assets(a.repo_root)
+    board_dir = Path(a.site_dir) / "board"
+    write_atomic(board_dir / "board.json", data)          # what the waits page polls
+    write_atomic(board_dir / "status.json", data)         # kept: the placeholder page reads this
+    if sample is not None:
+        write_atomic(board_dir / "board-sample.json", sample)     # the page's own fallback data
+    write_atomic(board_dir / "index.html", page)
     print(f"hq status: {len(doc['agents'])} agents, {sum(x['state'] == 'working' for x in doc['agents'])} working, {len(doc['tasks'])} tasks")
 
 
