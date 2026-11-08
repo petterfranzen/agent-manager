@@ -786,12 +786,46 @@ def last_fire(cron, tz, since, now):
     return None
 
 
+def private_routines(path, log):
+    """Root-only extras kept out of the public repo: [[routines]] agent/title/description/cron/timezone.
+
+    A missing file is normal. A file that cannot be read or parsed, or an entry without its fields,
+    is logged and skipped so the public routines still run. Only the position of the error is
+    logged (tomllib's message has line and column, no text), never the file's contents.
+    """
+    if not path.exists():
+        return []
+    try:
+        entries = tomllib.loads(path.read_text(encoding="utf-8")).get("routines", [])
+        if not isinstance(entries, list):
+            raise ValueError("routines is not an array of tables")
+    except (OSError, ValueError) as e:      # TOMLDecodeError and UnicodeDecodeError are ValueErrors
+        detail = e.strerror if isinstance(e, OSError) else (str(e) if isinstance(e, tomllib.TOMLDecodeError) else type(e).__name__)
+        log(f"routines: error: private routines not loaded ({type(e).__name__}: {detail}); public routines continue")
+        return []
+    items = []
+    for n, r in enumerate(entries, 1):
+        bad = [k for k in ("agent", "title", "cron") if not isinstance(r, dict) or not isinstance(r.get(k), str)]
+        if not bad and not isinstance(r.get("timezone", "UTC"), str):
+            bad = ["timezone"]
+        if not bad:
+            try:
+                ZoneInfo(r.get("timezone", "UTC"))
+                if len(r["cron"].split()) != 5:
+                    raise ValueError
+            except (ValueError, KeyError, OSError):      # ZoneInfoNotFoundError is a KeyError
+                bad = ["cron or timezone"]
+        if bad:
+            log(f"routines: error: private routine {n} skipped (check: {', '.join(bad)})")
+            continue
+        items.append((r["agent"], {**r, "active": True}))
+    return items
+
+
 def routines(a, board, log):
     agents, data = load_roster(a.roster)
     items = [(x["name"], x["routine"]) for x in agents if x.get("routine", {}).get("active")]
-    priv = Path(a.private_routines)
-    if priv.exists():       # root-only extras kept out of the public repo: [[routines]] agent/title/description/cron/timezone
-        items += [(r["agent"], {**r, "active": True}) for r in tomllib.loads(priv.read_text()).get("routines", [])]
+    items += private_routines(Path(a.private_routines), log)
     now = dt.datetime.now(dt.timezone.utc)
     state_path = Path(a.state_dir) / "routines.json"
     try:
@@ -1358,6 +1392,17 @@ def credits(a, board, log):
     log(f"cpu: opened #{issue['number']}")
 
 
+def health_lines(path):
+    """The timer health block sync.sh gathered (root-owned file, plain text); empty without one."""
+    if not path:
+        return []
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return []
+    return ["**Timers** (as the VPS saw them, no SSH needed):", ""] + [redact(l) for l in text.splitlines()[:30]] + [""]
+
+
 def note(a, board, log):
     """Keep one open issue titled "Sync" current: what the VPS did with itself. Rewrites the body."""
     if a.state not in ("ok", "blocked"):
@@ -1365,7 +1410,7 @@ def note(a, board, log):
     now = dt.datetime.now(dt.timezone.utc)
     body = "\n".join([
         f"**VPS sync: {a.state}.** As of {now:%Y-%m-%d %H:%M} UTC.", "",
-        a.message, "",
+        a.message, ""] + health_lines(a.health_file) + [
         "Rewritten by `vps/sync.sh` on the VPS; don't edit. Leave this issue open."])
     labels = ["status:blocked"] if a.state == "blocked" else []
     open_ = board.call("GET", "/issues?state=open&sort=created&direction=asc&per_page=100") or []
@@ -1400,6 +1445,7 @@ def main(argv=None):
                    help="dispatch lane; 1 is the optional second lane (#79)")
     p.add_argument("--state", default="", help="note: ok or blocked")
     p.add_argument("--message", default="", help="note: what the VPS did")
+    p.add_argument("--health-file", default="", help="note: timer health lines to append")
     p.add_argument("--github", default="https://api.github.com")
     p.add_argument("--openrouter", default="https://openrouter.ai/api/v1")
     p.add_argument("--hermes", default="http://127.0.0.1:8642")
