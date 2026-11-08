@@ -74,16 +74,48 @@ for changes to `vps/compose.yaml`, `sandbox/` or `hermes/`; the systemd units fo
 to `vps/systemd/`. It logs to the journal: `journalctl -u section9-sync -n 20`. It refuses
 a checkout with local changes and stops retrying a commit after 3 failed applies.
 
-The paths in agent-manager that become root execution or a guardrail on the VPS
-(`.github/workflows/`, `vps/`, `sandbox/`, `hermes/`) are pinned by sha256 in the root-only
-`/etc/section9/pins.toml`, which `install.sh` writes once. The sync applies a commit that
-changes one of them only after you have read the change and run
+**Auto-apply (8 Nov).** An ordinary merge to `main` needs no command on the VPS. The sync applies
+the tip of `origin/main` when all of these hold:
+
+1. it is a descendant of the commit last applied (fast-forward only; a force-pushed `main` is
+   refused and reported, never applied);
+2. every required check run in `ci.yml` (the `REQUIRED_CHECKS` list in `vps/sync.sh`) is completed
+   with conclusion `success` on that exact SHA, read from the public GitHub API;
+3. it has been on `main` for the soak, 30 minutes by the commit's time (the squash-merge time), so a
+   bad merge that is reverted or fixed inside that window never lands: only the tip ever applies;
+4. it changes none of the **protected set**, or each protected file it changes is pinned (below).
+
+The protected set is short and explicit (`PROTECTED` at the top of `vps/sync.sh`): `vps/sync.sh`,
+`vps/install.sh`, `vps/install-units.sh`, `vps/systemd/section9-sync.*` (the units that run the sync),
+`.github/workflows/` (CI is the green light the sync trusts) and any path with `sudoers` in its name.
+These can widen what a merge does as root or weaken the gate, so they are pinned by sha256 in the
+root-only `/etc/section9/pins.toml`. A commit that changes one waits until you have read the change and run
 ```bash
-sudo /opt/agent-manager/vps/sync.sh --accept   # fetches and re-pins origin/main
+sudo /opt/agent-manager/vps/sync.sh --accept   # fetches and pins the protected files of origin/main
 ```
 It stops instead, and says so on one open issue titled **Sync** in `section9-hq` (created the
 first time it has something to say); a dirty checkout and a failed apply are reported on the
-same issue. Nothing else needs a pin, and `--accept` is the only command to know.
+same issue. Anything not in the set (compose, sandbox, hermes, the other units, dispatch.py,
+docs) applies by itself. The defaults cannot be shortened by a file. The optional root-only
+`/etc/section9/sync.toml` can add to them and change the soak (an unreadable file stops the sync
+and says so on the issue):
+```toml
+# /etc/section9/sync.toml -- optional
+soak_minutes = 30                # 0 to 1440
+protect = ["vps/hq-status.py"]   # extra repo-relative prefixes that need --accept
+```
+Hermes mounts `hermes/config.yaml` from the checkout, so an auto-applied config change still needs
+`docker compose -f /opt/agent-manager/vps/compose.yaml restart hermes` (see "Applying it" below).
+
+**Timer health without SSH.** Every tick the sync keeps the **Sync** issue current (it rewrites it
+when something changed, and at least hourly). Besides what the VPS did with itself it lists, for
+`section9-routines.timer` and `section9-dispatch.timer`: `systemctl is-active`, the last trigger
+time and how long ago, the last service result, and the last error-looking line of the service
+journal. A timer that is not active or has not fired for over 30 minutes is marked `STALLED`.
+A malformed `/etc/section9/routines.private.toml` no longer stops the routines: `dispatch.py routines`
+logs `private routines not loaded (...)` with the parse position only (never the file's text),
+skips a private routine that lacks `agent`, `title` or `cron`, and goes on with the public ones.
+The Sync issue shows that line.
 The dispatcher's own limits come from the same directory, root-only, by hand:
 ```toml
 # /etc/section9/limits.toml -- optional; without it the roster decides (as before)
@@ -201,8 +233,7 @@ states and "On a task" are published. Create the file before you expect titles o
 The board: `https://hq.sectionnine.dev/board` is the waits page from ghost-in-the-machine
 (`hq/board/index.html`, PR #18), vendored byte-for-byte into `vps/board/index.html` next to its
 `board-sample.json` (see `vps/board/README.md` for the source sha and the file hashes). A fix goes
-through a ghost-in-the-machine PR, a copy here over that pinned commit sha, then `sync.sh --accept`
--- `vps/` is a guarded path, so `section9-sync` will not apply the commit until Petter has read it.
+through a ghost-in-the-machine PR, a copy here over that pinned commit sha, then merge. `vps/board/` is not in the protected set, so `section9-sync` applies it after CI and the soak.
 `section9-hq-status` then writes, under `board/` in the same folder, the live `board.json` the page
 polls: the same `tasks` array as `status.json` (fields `id`, `title`, `agent`, `status`, `waits`,
 `waitsText`, `url`, `pr`, `updated`) with the budget and model blocks. The `waits` column comes from

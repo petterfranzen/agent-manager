@@ -267,8 +267,8 @@ def load_deny(secrets_dir):
 
 
 def board_assets(repo_root):
-    """The page to serve, from the vendored vps/board/. A change there is a guarded path: it
-    needs Petter's `sync.sh --accept`. When the real page is missing, the old placeholder is
+    """The page to serve, from the vendored vps/board/. A change there applies through the
+    sync like any other (CI green, soak). When the real page is missing, the old placeholder is
     kept as the fallback, so /board still renders. Returns (page bytes, sample bytes or None)."""
     board = Path(repo_root) / "vps" / "board"
     page = None

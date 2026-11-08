@@ -13,12 +13,9 @@ ghost-in-the-machine:
 page is static HTML and is only served. `placeholder.html` is the previous 5 KB page, kept as the
 fallback for when `index.html` is missing.
 
-A vendored file is a guarded path: `.github/workflows/`, `vps/`, `sandbox/` and `hermes/` are
-pinned by sha256 in the root-only `/etc/section9/pins.toml`, so `section9-sync` applies a commit
-that changes this folder only after Petter has read it and run
-`sudo /opt/agent-manager/vps/sync.sh --accept`.
+A change to this folder applies by itself once CI is green and it has soaked 30 minutes
+(`vps/board/` is not in the sync's protected set; see docs/RUNBOOK.md).
 
 To update the page: merge the change in ghost-in-the-machine, copy `hq/board/index.html` and
-`hq/board/board-sample.json` here from the new commit, update the sha/sha256 above, and accept the
-commit. `scripts/test_vps.py` re-runs the page's own data-contract checks (from
+`hq/board/board-sample.json` here from the new commit, update the sha/sha256 above, and merge. `scripts/test_vps.py` re-runs the page's own data-contract checks (from
 ghost-in-the-machine's `hq/board/build.sh`) so a careless edit fails CI.
