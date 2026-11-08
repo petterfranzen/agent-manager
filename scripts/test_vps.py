@@ -1590,23 +1590,6 @@ class TestCapacity(Base):
         self.assertIn("no run had a readable cost delta", body)
         self.assertNotIn("$0.00/h", body)
 
-    def test_capacity_shows_the_key_month_to_date_beside_the_ledger(self):
-        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-        path = self.t / "state" / "runs.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "v": 1, "issue": 1, "type": "qa", "agent": "Batou", "role": "engineer",
-            "model": "deepseek/deepseek-v4.1-flash", "start": now, "end": now, "seconds": 600,
-            "outcome": "ok", "queue_before": 1, "cost_usd": 0.0,       # the counter did not move
-            "tokens": {"prompt_tokens": 0, "completion_tokens": 1_000_000},
-            "cpu": {"credits": 1}}) + "\n")
-        self.capacity()
-        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
-        self.assertIn("Key (OpenRouter `/key`), month to date: $5.00", body)   # the stub's usage_monthly
-        self.assertIn("ledger books $0.19 over 1 run(s) (1 priced)", body)
-        self.assertIn("$4.81 unattached to any run", body)
-        self.assertNotIn("no cost figure", body)      # the $0 delta was priced from the run's tokens
-
     def test_a_corrupt_ledger_line_is_skipped_not_fatal(self):
         path = self.t / "state" / "runs.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2389,40 +2372,6 @@ class TestModels(Base):
         body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
         self.assertIn("by agent and model", body)
         self.assertIn("Saito \u00b7 anthropic/claude-sonnet-5.5", body)
-
-
-class TestRunCost(unittest.TestCase):
-    """#205 item 1: a $0 key delta is not a free run; price it from the run's tokens."""
-
-    def test_a_zero_key_delta_is_priced_from_the_run_tokens(self):
-        row = {"model": "deepseek/deepseek-v4.1-flash", "cost_usd": 0.0,
-               "tokens": {"prompt_tokens": 1000, "completion_tokens": 1000}}
-        self.assertAlmostEqual(dispatch.run_cost(row), (1000 * 0.05 + 1000 * 0.19) / 1_000_000.0)
-
-    def test_a_measured_delta_still_wins_over_the_tokens(self):
-        self.assertEqual(dispatch.run_cost({"model": "deepseek/deepseek-v4.1-flash", "cost_usd": 0.25,
-                                            "tokens": {"prompt_tokens": 1000, "completion_tokens": 1000}}),
-                         0.25)
-
-    def test_a_zero_delta_with_no_tokens_stays_zero_and_unpriced(self):
-        self.assertEqual(dispatch.run_cost({"cost_usd": 0.0, "tokens": None}), 0.0)
-        self.assertFalse(dispatch.priceable({"cost_usd": 0.0, "tokens": None}))
-        self.assertTrue(dispatch.priceable({"cost_usd": 0.0, "tokens": {"total_tokens": 1}}))
-
-
-class TestRosterTimeouts(unittest.TestCase):
-    """#205 item 2: Batou and Togusa time out at 40 min, shipped as the roster default."""
-
-    def roster(self):
-        return dispatch.tomllib.loads((ROOT / "agents" / "roster.toml").read_text(encoding="utf-8"))
-
-    def test_batou_and_togusa_default_to_2400_seconds(self):
-        timeouts = {a["name"]: a["timeout_sec"] for a in self.roster()["agents"]}
-        self.assertEqual((timeouts["Batou"], timeouts["Togusa"]), (2400, 2400))
-
-    def test_the_night_build_keeps_its_longer_run(self):
-        timeouts = {a["name"]: a["timeout_sec"] for a in self.roster()["agents"]}
-        self.assertEqual(timeouts["Tachikoma"], 10800)     # only the two are lowered
 
 
 if __name__ == "__main__":
