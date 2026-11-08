@@ -94,7 +94,7 @@ name = "Saito"
 role = "devops"
 title = "Senior thinker and ops (read-only)"
 brief = "agents/ops.md"
-model = "anthropic/claude-sonnet-5.5"  # Petter, 5 Nov: on trial for 3 days (#101)
+# model: the default, deepseek/deepseek-v4.1-flash (Petter, 8 Nov: Sonnet trial ended, #205)
 avatar = "agents/avatars/saito.png"
 budget_monthly_cents = 300
 timeout_sec = 3600
