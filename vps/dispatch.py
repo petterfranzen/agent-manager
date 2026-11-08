@@ -383,44 +383,21 @@ def spend_caps(path):
     return caps
 
 
-def price_from_tokens(row):
-    """$ for one ledger row from its token counts at the model's rate, or None when it has none."""
+def run_cost(row):
+    """One ledger row's cost: the measured OpenRouter key delta, else an estimate from its tokens.
+
+    The measured delta is exact but null when the counter did not move; the token estimate keeps a
+    per-agent guard from drifting open over a string of cheap turns.
+    """
+    if isinstance(row.get("cost_usd"), (int, float)):
+        return float(row["cost_usd"])
     tokens = row.get("tokens") if isinstance(row.get("tokens"), dict) else {}
-    if not tokens:
-        return None
     pin, pout = PRICES.get(row.get("model") or "", DEAREST_PRICE)
     try:
         return (float(tokens.get("prompt_tokens") or 0) * pin
                 + float(tokens.get("completion_tokens") or 0) * pout) / 1_000_000.0
     except (TypeError, ValueError):
-        return None
-
-
-def priceable(row):
-    """True when the row carries a cost we can book: a non-zero key delta, or tokens to price.
-
-    A numeric $0 delta is not a free run. OpenRouter's counter is coarse, so a short run can start
-    and end inside one counter step and book $0 while it still spent; such a row is priced from its
-    tokens instead (run_cost) and so counts here.
-    """
-    delta = row.get("cost_usd")
-    if isinstance(delta, (int, float)) and delta != 0:
-        return True
-    return price_from_tokens(row) is not None
-
-
-def run_cost(row):
-    """One ledger row's cost: the measured OpenRouter key delta, else an estimate from its tokens.
-
-    The measured delta is exact but null -- or 0, when the counter did not move across the run -- so
-    a zero delta falls back to the token estimate. That keeps a per-agent guard and the Capacity
-    roll-up from drifting open over a string of cheap turns the counter booked as free.
-    """
-    delta = row.get("cost_usd")
-    if isinstance(delta, (int, float)) and delta != 0:
-        return float(delta)
-    estimate = price_from_tokens(row)
-    return estimate if estimate is not None else 0.0
+        return 0.0
 
 
 def month_spend(rows, agent, now):
@@ -943,8 +920,8 @@ def summarise(rows):
     for r in rows:
         seconds = float(r.get("seconds") or 0.0)
         out["seconds"] += seconds
-        out["cost"] += run_cost(r)
-        if priceable(r):
+        if isinstance(r.get("cost_usd"), (int, float)):
+            out["cost"] += float(r["cost_usd"])
             out["priced"] += 1
         cpu = r.get("cpu") or {}
         out["credits"] += float(cpu.get("credits") or 0.0)
@@ -1029,16 +1006,6 @@ def capacity(a, board, orkey, log):
         lines += [""]
     else:
         lines += ["**Pace:** OpenRouter's cap or month-to-date usage could not be read; no pace line this run.", ""]
-    ledger_mtd = money(ms["cost"]) if ms["priced"] else "\u2014"
-    if isinstance(spend, (int, float)):
-        gap = float(spend) - ms["cost"]
-        key_line = (f"- Key (OpenRouter `/key`), month to date: {money(spend)}. The ledger books "
-                    f"{ledger_mtd} over {ms['runs']} run(s) ({ms['priced']} priced), "
-                    f"{money(abs(gap))} "
-                    + ("unattached to any run." if gap >= 0 else "more than the runs booked."))
-    else:
-        key_line = (f"- Key (OpenRouter `/key`), month to date: could not be read. The ledger books "
-                    f"{ledger_mtd} over {ms['runs']} run(s) ({ms['priced']} priced).")
     lines += ["**Last 7 days**",
               f"- Runs: {ws['runs']}; busy: {ws['hours']:.2f} h; spend: {money(ws['cost']) if ws['priced'] else '—'}"
               f"{' (from ' + str(ws['priced']) + (' priced run)' if ws['priced'] == 1 else ' priced runs)') if ws['priced'] else ' (no run had a readable cost delta)'}.",
@@ -1050,7 +1017,6 @@ def capacity(a, board, orkey, log):
               f"- Lanes: {lane_line(week)}.", "",
               "**Month to date**",
               f"- Runs: {ms['runs']}; busy: {ms['hours']:.2f} h; spend: {money(ms['cost']) if ms['priced'] else '—'}.",
-              key_line,
               f"- Timeouts: {ms['timeouts']} ({ms['timeout_seconds'] / 3600.0:.2f} h wasted); "
               f"queue idle (upper bound): {queue_idle_hours(mtd):.2f} h.",
               f"- CPU credits: {ms['credits']:.0f} against a {SAFE_CREDITS_DAY * max(p['elapsed'], 1):.0f} "
@@ -1070,11 +1036,10 @@ def capacity(a, board, orkey, log):
     lines += ["**Last 7 days by agent**"] + table(sorted(by_agent.items()), "Agent") + [""]
     lines += ["**Last 7 days by agent and model**"] + table(sorted(by_agent_model.items()), "Agent \u00b7 model") + [""]
     lines += ["**Last 7 days by task type**"] + table(sorted(by_type.items()), "Type") + [""]
-    stale = [r for r in rows if not priceable(r)]
+    stale = [r for r in rows if not isinstance(r.get("cost_usd"), (int, float))]
     if stale:
-        lines += [f"- {len(stale)} run(s) have no cost figure: the key delta was absent and the run "
-                  "carried no tokens to price it from. Nothing was guessed; collect the next run's "
-                  "`usage_before`/`usage_after` and its `tokens`.", ""]
+        lines += [f"- {len(stale)} run(s) have no cost figure: OpenRouter's usage counter did not move or "
+                  "could not be read. Nothing was guessed; collect the next run's `usage_before`/`usage_after`.", ""]
     if not rows:
         lines += [f"No ledger data yet. The first run appends to `{Path(a.state_dir) / LEDGER_NAME}`.", ""]
     lines += ["Rewritten by `vps/dispatch.py capacity`; don't edit. Leave this issue open and pinned."]

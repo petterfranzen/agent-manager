@@ -58,9 +58,7 @@ title = "Coder"
 brief = "agents/coder.md"
 avatar = "agents/avatars/batou.png"
 budget_monthly_cents = 400
-# 40 min, down from 1 h: 16 runs in the week to 7 Nov hit the old ceiling and burned 16 h
-# with no output, 11 of them his. A task that genuinely needs longer should say so.
-timeout_sec = 2400
+timeout_sec = 3600
 
 [[agents]]
 name = "Ishikawa"
@@ -78,8 +76,7 @@ title = "QA and UI/UX reviewer"
 brief = "agents/backup-coordinator.md"
 avatar = "agents/avatars/togusa.png"
 budget_monthly_cents = 300
-# 40 min for QA: 5 of the same 16 timed-out runs were his, mostly stuck on CI, not thinking.
-timeout_sec = 2400
+timeout_sec = 3600
 
 # GitHub can't wake Paperclip (it sits behind Cloudflare Access), so Togusa
 # sweeps for ready agent PRs twice a day: after the nightly build, before the
