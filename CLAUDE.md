@@ -44,8 +44,8 @@ sessions: a normal key only sees itself, and a management key can mint keys.
   him a summary after each flight-tracker deploy).
 - No agent PR merges without a `QA: pass` comment (posted after the PR's last push)
   from Togusa or from another agent that did not write the PR (Petter, 3 Nov: any
-  teammate can fill in), unless Petter waives it for that PR. If a PR can't wait for his
-  next sweep, assign him a Paperclip task for it.
+  teammate can fill in), unless Petter waives it for that PR. If a PR can't wait for
+  Togusa's next sweep, give Togusa a `priority:high` QA task on the board.
 - Server agents never merge. If one tries, stop it and tell Petter.
 - Squash-merge agent PRs with an explicit `commit_message` (PR title, a short
   body, no `Co-authored-by` lines): GitHub otherwise adds one per PR commit
