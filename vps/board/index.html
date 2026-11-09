@@ -36,7 +36,6 @@
   --ag-togusa:#b39ddb;
   --ag-ishikawa:#f2a1c0;
   --ag-saito:#9db3a7;
-  --ag-jev:#ff8a5c;
   --state-working:var(--phos);
   --state-idle:#7fd4ff;
   --state-blocked:var(--amber);
@@ -72,7 +71,6 @@ html[data-theme="light"]{
   --ag-togusa:#5b3b8a;
   --ag-ishikawa:#8a2f52;
   --ag-saito:#4b6157;
-  --ag-jev:#b23a12;
   --state-working:var(--phos);
   --state-idle:#155e75;
   --state-blocked:var(--amber);
@@ -198,7 +196,6 @@ h2{font-family:var(--font-display);font-size:1.05rem;margin:0;text-transform:upp
 .mark[data-agent="togusa"]{background:var(--ag-togusa)}
 .mark[data-agent="ishikawa"]{background:var(--ag-ishikawa)}
 .mark[data-agent="saito"]{background:var(--ag-saito)}
-.mark[data-agent="jev"]{background:var(--ag-jev)}
 .columns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;align-items:start}
 .column{
   background:linear-gradient(180deg,rgba(14,26,21,.72),rgba(11,20,16,.9));
@@ -371,14 +368,6 @@ a.issue:hover{text-decoration:underline}
       "now": null,
       "model": "deepseek/deepseek-v4.1-flash",
       "lastActiveAt": "2026-11-01T06:30:00Z"
-    },
-    {
-      "name": "Jev",
-      "role": "Security",
-      "state": "sleeping",
-      "now": null,
-      "model": "claude-haiku-4.5",
-      "lastActiveAt": "2026-11-01T22:00:00Z"
     }
   ],
   "tasks": [
@@ -530,8 +519,7 @@ a.issue:hover{text-decoration:underline}
     { id: 'tachikoma', name: 'Tachikoma', role: 'Nightly builder', avatar: AVATAR_BASE + 'tachikoma.png' },
     { id: 'togusa',    name: 'Togusa',    role: 'QA',              avatar: AVATAR_BASE + 'togusa.png' },
     { id: 'ishikawa',  name: 'Ishikawa',  role: 'Researcher',      avatar: AVATAR_BASE + 'ishikawa.png' },
-    { id: 'saito',     name: 'Saito',     role: 'Ops',             avatar: AVATAR_BASE + 'saito.png' },
-    { id: 'jev',       name: 'Jev',       role: 'Security',        avatar: AVATAR_BASE + 'jev.png' }
+    { id: 'saito',     name: 'Saito',     role: 'Ops',             avatar: AVATAR_BASE + 'saito.png' }
   ];
   var WAITS = [
     { key: 'petter', label: 'Needs Petter',                sub: 'a decision, approval or answer' },

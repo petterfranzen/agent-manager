@@ -5,8 +5,8 @@ ghost-in-the-machine:
 
 - source: https://github.com/petterfranzen/ghost-in-the-machine, `hq/board/`
 - commit: 5643f3b47fb5abbd7614fdf3a7385b6cf1f98e1a (PR #18, "Build: waits board, one column per who a task waits on")
-- `index.html`        sha256 `7936cc36e1c392b3374c265290511c5d4d8411361da71cf8c04545af02e689c3`
-- `board-sample.json` sha256 `548512197419e578d040dec6d1be370703d96334fe0fad0c3fc9731b6c889be8`
+- `index.html`        sha256 `b0682c5ea406c71b78c42a467a1840d925612a0b138d7b0562d9546303152c8e`
+- `board-sample.json` sha256 `3595bd11af76c03953e05e1ea79150a3134908ef49cb0220e036a7ebb0343fe3`
 
 `vps/hq-status.py status` copies both into the folder the hq container serves (`board/`) and writes
 `board/board.json` beside them (the file the page polls). Nothing here is executed on the VPS: the

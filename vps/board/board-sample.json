@@ -62,14 +62,6 @@
       "now": null,
       "model": "deepseek/deepseek-v4.1-flash",
       "lastActiveAt": "2026-11-01T06:30:00Z"
-    },
-    {
-      "name": "Jev",
-      "role": "Security",
-      "state": "sleeping",
-      "now": null,
-      "model": "claude-haiku-4.5",
-      "lastActiveAt": "2026-11-01T22:00:00Z"
     }
   ],
   "tasks": [
