@@ -36,11 +36,11 @@ name = "Tachikoma"
 role = "engineer"
 title = "Nightly builder"
 brief = "agents/nightly-builder.md"
-model = "moonshotai/kimi-k3.1-pro"     # Petter, 5 Nov: on trial for 3 days (#101)
+model = "moonshotai/kimi-k3.1-pro"     # Petter, 5 Nov trial (#101); kept 10 Nov, review 17 Nov
 avatar = "agents/avatars/tachikoma.png"
-# What's left of the $19 after the others. Real nights cost cents (about $1.50
-# for the whole team in October's first busy week), so $4 is ample.
-budget_monthly_cents = 400
+# Petter, 10 Nov: more budget for richer portfolio apps, on Kimi K3.1 Pro.
+# Reviewed 17 Nov against the DeepSeek nights; back to DeepSeek if not richer.
+budget_monthly_cents = 1000
 timeout_sec = 10800
 
 [agents.routine]
