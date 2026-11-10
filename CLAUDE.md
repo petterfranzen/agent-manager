@@ -46,6 +46,10 @@ sessions: a normal key only sees itself, and a management key can mint keys.
   from Togusa or from another agent that did not write the PR (Petter, 3 Nov: any
   teammate can fill in), unless Petter waives it for that PR. If a PR can't wait for
   Togusa's next sweep, give Togusa a `priority:high` QA task on the board.
+- Low-risk tier (Petter, 10 Nov): a PR that only adds a new `nights/` folder in
+  `ghost-in-the-machine`, or only changes docs, merges on green CI and a valid
+  `QA: pass` without your code review. Still check that every path is in the tier
+  and that the diff has no secrets or personal data.
 - Server agents never merge. If one tries, stop it and tell Petter.
 - Squash-merge agent PRs with an explicit `commit_message` (PR title, a short
   body, no `Co-authored-by` lines): GitHub otherwise adds one per PR commit
