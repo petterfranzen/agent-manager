@@ -36,7 +36,23 @@ more elaborate apps to keep users engaged for longer").
   a combination, a change over a few minutes) rewards staying. Still no scores,
   timers or tutorials.
 - **Depth over breadth.** One world, built out with care: animation, small
-  details, sound that's worth turning on.
+  details, and sound that's worth turning on.
+- **Sound people can hear** (Petter, 10 Nov: "it's too quiet now; it seems
+  broken when nothing happens when you turn sound on"):
+  - It starts muted (browsers block audio until a tap), behind a clear, labelled
+    sound button: at least 44 px, visible on phone and desktop.
+  - **Turning sound on must answer at once.** The ambient bed fades in within
+    half a second, plus a short confirming chime, so nobody wonders if it worked.
+  - **An ambient bed** of two or three layers that runs while sound is on (wind,
+    water, hum, a slow pad) and changes with what's happening in the scene.
+  - **Every interaction has its own sound**, at a clearly audible level: master
+    gain around 0.5–0.7, not 0.05. Calm, never harsh, and no clipping when many
+    play at once (a compressor or limiter on the master bus).
+  - Synthesise with Web Audio (oscillators, noise, filters, envelopes); no
+    downloaded samples. Resume the `AudioContext` on the tap that unmutes, and
+    again when the tab comes back.
+  - Remember the sound choice in `localStorage`, wrapped in try/catch.
+  - Playtest with sound on, and say in the PR what each sound is.
 - **A "How it was built" section** in the README: the interesting technical
   choice, what the language made easy or hard, in a few short paragraphs.
 - Works one-handed on a phone and well on a desktop, with no page scroll.
