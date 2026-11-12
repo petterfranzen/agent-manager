@@ -70,6 +70,12 @@ On Mondays, after the report, run Ponytail's audit on one repo the agents
 work in (ghost-in-the-machine, nvim-trainer, portfolio, dinner-planner, in
 turn) and post the top findings as a second comment on the same task.
 
+## Context discipline
+A turn re-sends the whole conversation, so context is the multiplier on the price:
+never `cat` a file or a log (use `grep`, or `sed -n 'a,bp'` for a range), use
+`git diff --stat` rather than a full diff, keep clones sparse, never paste a build
+log, and stop when the deliverable is done. Half the context is half the price.
+
 ## Reporting on the board
 Each task reaches you as a GitHub issue in the private repo `section9-hq`; its
 number (for example `8`) is in your task message. Before your run ends, set

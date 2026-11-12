@@ -1538,10 +1538,36 @@ class TestPacing(Base):
         path.write_text(body)
         return str(path)
 
-    def test_off_by_default_and_a_low_priority_task_still_runs(self):
+    def test_on_by_default_holds_a_low_priority_task_over_the_line(self):
+        # #205 item 4: pacing is a code default -- no limits file names it, and a low task is held.
+        low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
+        normal = self.stub.add(["agent:ishikawa", "status:todo"])
+        with mock.patch.object(dispatch, "month_pace",
+                               return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
+                                             "days": 30, "left_days": 29, "remaining_per_day": 1}), \
+                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+            code, out = self.run_dispatch()          # no limits file at all
+        self.assertEqual(code, 0)
+        self.assertIn("status:todo", self.stub.labels(low))
+        self.assertEqual(self.stub.labels(normal), {"agent:ishikawa", "status:review"})
+        self.assertIn("holding 1 low-priority", out)
+
+    def test_a_root_file_can_turn_pacing_off(self):
+        # The one opt-out: `[pacing] enabled = false` in the root-only file.
         n = self.stub.add(["agent:batou", "status:todo", "priority:low"])
-        self.run_dispatch()
+        code, out = self.run_dispatch(limits=self.limits("[pacing]\nenabled = false\n"))
+        self.assertEqual(code, 0)
         self.assertEqual(self.stub.labels(n), {"agent:batou", "status:review", "priority:low"})
+        self.assertNotIn("holding", out)
+
+    def test_pacing_is_a_no_op_when_no_low_priority_task_is_queued(self):
+        # It can only hold low-priority work, so with none queued it reads no figures and samples no CPU.
+        todo = [({"number": 1, "labels": [{"name": "status:todo"}]}, {"name": "Batou"}, False, None)]
+        with mock.patch.object(dispatch, "pacing_settings") as settings, \
+                mock.patch.object(dispatch, "key_usage") as usage:
+            self.assertIs(dispatch.hold_low_priority(todo, None, None, lambda *a: None), todo)
+        settings.assert_not_called()
+        usage.assert_not_called()
 
     def test_over_pace_holds_only_low_priority_work(self):
         self.stub.add(["agent:batou", "status:todo", "priority:low"])
@@ -1597,6 +1623,69 @@ class TestPacing(Base):
             self.run_dispatch(limits=self.limits(
                 "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
         self.assertEqual(self.stub.labels(low), {"agent:batou", "status:review", "priority:low"})
+
+
+class TestDayCap(Base):
+    """#205 item 6: a per-agent runs-per-day cap, a code default; it skips an agent, never blocks."""
+
+    def seed_today(self, agent, count):
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        now = dispatch.dt.datetime.now(dispatch.dt.timezone.utc).isoformat()
+        with path.open("a", encoding="utf-8") as f:
+            for _ in range(count):
+                f.write(json.dumps({"agent": agent, "start": now, "outcome": "ok"}) + "\n")
+
+    def test_an_agent_at_its_day_cap_is_skipped_and_another_runs(self):
+        self.seed_today("Batou", 2)                        # the code default is 2 a day
+        batou = self.stub.add(["agent:batou", "status:todo"], "Batou's task")
+        ishi = self.stub.add(["agent:ishikawa", "status:todo"], "Ishikawa's task")
+        code, _ = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.stub.hermes_calls), 1)
+        self.assertIn("Ishikawa's task", self.stub.hermes_calls[0][0]["messages"][1]["content"])
+        self.assertEqual(self.stub.labels(ishi), {"agent:ishikawa", "status:review"})
+        self.assertEqual(self.stub.labels(batou), {"agent:batou", "status:todo"})   # waits, not blocked
+
+    def test_the_only_todo_for_a_capped_agent_waits_and_is_logged(self):
+        self.seed_today("Batou", 2)
+        n = self.stub.add(["agent:batou", "status:todo"], "Batou's task")
+        code, out = self.run_dispatch()
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:todo"})       # not blocked
+        self.assertIn("day cap", out)
+
+    def test_a_zero_cap_never_skips_an_agent(self):
+        # The nightly builder's roster entry says runs_per_day = 0: no day cap, however many runs.
+        self.assertTrue(dispatch.day_ok(type("A", (), {"state_dir": str(self.t / "state"), "ledger": ""})(),
+                                        {"name": "Tachikoma", "runs_per_day": 0}))
+
+    def test_under_the_day_cap_the_agent_still_runs(self):
+        self.seed_today("Batou", 1)                        # one of two used: a run is left
+        n = self.stub.add(["agent:batou", "status:todo"], "Batou's task")
+        code, _ = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:review"})
+
+    def test_a_pooled_task_avoids_agents_at_their_day_cap(self):
+        for name in ("Batou", "Ishikawa", "Saito"):
+            self.seed_today(name, 2)                       # the default cap: all three are done today
+        n = self.stub.add(["agent:any", "status:todo"], "Anyone's task")
+        code, _ = self.run_dispatch()
+        self.assertEqual(code, 0)
+        self.assertIn("You are **Togusa**", self.stub.hermes_calls[0][0]["messages"][0]["content"])
+        self.assertEqual(self.stub.labels(n), {"agent:togusa", "status:review"})
+
+    def test_the_roster_cap_overrides_the_code_default(self):
+        (self.t / "roster.toml").write_text(ROSTER.format(timeout=self.timeout).replace(
+            'name = "Batou"\nbrief = "agents/coder.md"\ntimeout_sec = 60',
+            'name = "Batou"\nbrief = "agents/coder.md"\ntimeout_sec = 60\nruns_per_day = 1'))
+        self.seed_today("Batou", 1)                        # one run today, and the roster caps him at 1
+        n = self.stub.add(["agent:batou", "status:todo"], "Batou's task")
+        code, out = self.run_dispatch()
+        self.assertEqual((code, self.stub.hermes_calls), (0, []))
+        self.assertEqual(self.stub.labels(n), {"agent:batou", "status:todo"})
+        self.assertIn("day cap", out)
 
 
 class TestCapacity(Base):
@@ -2026,9 +2115,12 @@ class TestPriority(Base):
         self.assertEqual(self.stub.labels(bug), {"agent:batou", "priority:high", "status:todo"})
 
     def test_a_low_task_over_48h_overtakes_a_high_task(self):
+        # Pacing off (#205 item 4 turns it on by default), so this measures the aging rule alone.
+        limits = self.t / "limits.toml"
+        limits.write_text("[pacing]\nenabled = false\n")
         low = self.stub.add(["agent:batou", "status:todo", "priority:low"], "Low, waiting 49 h", age_min=49 * 60)
         high = self.stub.add(["agent:batou", "status:todo", "priority:high"], "High, fresh")
-        self.run_dispatch()
+        self.run_dispatch(limits=str(limits))
         self.assertIn("Low, waiting 49 h", self.stub.hermes_calls[0][0]["messages"][1]["content"])
         self.assertEqual(self.stub.labels(low), {"agent:batou", "priority:low", "status:review"})
         self.assertEqual(self.stub.labels(high), {"agent:batou", "priority:high", "status:todo"})
@@ -2479,18 +2571,25 @@ class TestRunCost(unittest.TestCase):
 
 
 class TestRosterTimeouts(unittest.TestCase):
-    """#205 item 2: Batou and Togusa time out at 40 min, shipped as the roster default."""
+    """#205 items 2 and 6: the per-agent timeout and daily run cap, shipped in the roster."""
 
     def roster(self):
         return dispatch.tomllib.loads((ROOT / "agents" / "roster.toml").read_text(encoding="utf-8"))
 
     def test_batou_and_togusa_default_to_2400_seconds(self):
+        # #205 item 2: 16 timed-out runs in the week, Batou's 11 h and Togusa's 5 h, mostly stuck.
         timeouts = {a["name"]: a["timeout_sec"] for a in self.roster()["agents"]}
         self.assertEqual((timeouts["Batou"], timeouts["Togusa"]), (2400, 2400))
 
     def test_the_night_build_keeps_its_longer_run(self):
+        # #218: the nightly build is never gated or shortened.
         timeouts = {a["name"]: a["timeout_sec"] for a in self.roster()["agents"]}
-        self.assertEqual(timeouts["Tachikoma"], 10800)     # only the two are lowered
+        self.assertEqual(timeouts["Tachikoma"], 10800)
+
+    def test_every_agent_carries_its_daily_run_cap(self):
+        # Tachikoma 0 = no cap: the nightly build is never gated (#218).
+        caps = {a["name"]: a.get("runs_per_day") for a in self.roster()["agents"]}
+        self.assertEqual(caps, {"Tachikoma": 0, "Batou": 6, "Ishikawa": 2, "Togusa": 8, "Saito": 2})
 
 
 class HealthRun(unittest.TestCase):

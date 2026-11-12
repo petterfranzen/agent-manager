@@ -57,6 +57,8 @@ PICK_LOCK = "dispatch.pick.lock"  # one lane chooses at a time; held only while 
 LANE_LOCK = "dispatch.lane{}.lock"  # one per lane, held for the whole run (#79)
 DEFAULT_QUIET_HOURS = 3.0        # safe readings this long before the second lane comes back
 SAFE_STEAL_PCT = 10.0            # above this Hostinger's limit is on (the [pacing] default)
+PACING_DEFAULTS = {"enabled": True, "slack_days": 0.0}   # #205 item 4: pacing is on unless the file turns it off
+DEFAULT_RUNS_PER_DAY = 2         # #205 item 6: an agent's daily run cap when the roster names none
 PRIORITY_AGING_HOURS = 12.0      # a task waiting this long moves up one priority level (#100)
 LOW_PRIORITY_AGING_HOURS = 48.0  # a priority:low task waiting this long runs ahead of high work (#100)
 # The repos a task may name in its title or body when it carries no `repo:<name>` label.
@@ -520,6 +522,36 @@ def budget_ok(a, agent, log, now=None):
     return True, ""
 
 
+def runs_on(rows, agent, now):
+    """How many ledger runs this agent started today (UTC). The day cap's source, #205 item 6."""
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return sum(1 for r in rows if (r.get("agent") or "") == agent
+               and parse_when(r.get("start")) and parse_when(r["start"]) >= start)
+
+
+def day_cap(agent):
+    """The agent's runs-per-day ceiling: the roster's `runs_per_day`, else DEFAULT_RUNS_PER_DAY.
+    A missing, unreadable or non-positive value means no day cap."""
+    try:
+        return int(agent.get("runs_per_day", DEFAULT_RUNS_PER_DAY))
+    except (TypeError, ValueError):
+        return DEFAULT_RUNS_PER_DAY
+
+
+def day_ok(a, agent, now=None):
+    """False when the agent already ran its day cap today (#205 item 6); the pick skips it.
+
+    Counts the run ledger for the current UTC day, the same source the per-agent budget guard
+    reads. It only skips -- it never blocks an issue -- so a task held by the cap runs tomorrow.
+    """
+    cap = day_cap(agent)
+    if cap <= 0:
+        return True
+    now = now or dt.datetime.now(dt.timezone.utc)
+    rows = read_ledger(Path(getattr(a, "ledger", "") or (Path(a.state_dir) / LEDGER_NAME)))
+    return runs_on(rows, agent["name"], now) < cap
+
+
 def chat_body(model, system, user):
     """The request body. With no override (the resolved model is the default) it is exactly the old
     one: model "hermes-agent", no provider key. Only an allow-listed non-default model adds its id
@@ -615,12 +647,14 @@ def recover_stale(board, agents, caps, log, now=None):
 
 
 def hold_low_priority(todo, a, orkey, log, now=None):
-    """The pacing rule, when the root-only limits file turns it on.
+    """The pacing rule, on by default (#205 item 4); the root-only file only tunes it.
 
     Under the line: every task is admitted. Over the line, or with the CPU limit on: only
-    `priority:low` issues wait; ordinary work still runs. No switch or no readable figures
-    means no change (the existing spend check and $1 reserve still fail closed first).
+    `priority:low` issues wait; ordinary work still runs. `[pacing] enabled = false` turns it
+    off. Unreadable figures fail closed: the low-priority work is held, never run blind.
     """
+    if not any(has_priority(t[0], "low") for t in todo):
+        return todo                      # pacing holds only low-priority work; nothing to hold here
     setting = pacing_settings(a.limits)
     if not setting.get("enabled"):
         return todo
@@ -704,6 +738,7 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
     Returns (issue, agent, pooled, timeout, queue_before, held) or None."""
     recover_stale(board, agents, caps, log)
     seen, todo, unassignable, offered, over, budget_of = None, [], [], 0, [], {}
+    day_of, capped = {}, set()          # #205 item 6: who is already over today's run cap
     # Symmetric exclusion: with lanes = 2 even lane 0 keeps off the agent and repo the other lane is in.
     # With one lane nothing is read and nothing changes. Lane 0 stands down for an unknown repo only
     # while the other lane is running something.
@@ -717,6 +752,13 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
                 unassignable.append((issue, why))
             continue
         offered += 1
+        for who in pool:                    # #205 item 6: an agent that ran its day cap is not chosen today
+            if who["name"] not in day_of:
+                day_of[who["name"]] = day_ok(a, who)
+        capped.update(w["name"] for w in pool if not day_of[w["name"]])
+        pool = [who for who in pool if day_of[who["name"]]]
+        if not pool:
+            continue
         if seen is None and len(pool) > 1:
             seen = activity(board, agents)      # one extra read, only when a task has a pool to choose from
         agent = min(pool, key=lambda who: (seen or {}).get(who["name"], ""))
@@ -735,6 +777,8 @@ def choose_and_claim(a, board, agents, caps, orkey, log, lane=0):
             continue
         todo.append((issue, agent, pooled, key))
     if not todo:
+        if capped:            # the only work left is agents that ran their day cap; wait, do not block
+            log("day cap: " + ", ".join(sorted(capped)) + " at their runs-per-day cap today")
         if over:              # the only work left is an agent over its monthly budget: say so, once
             over.sort(key=lambda t: priority_rank(t[0]))
             issue, agent, why = over[0]
@@ -1294,13 +1338,21 @@ def month_pace(now, cap, spend, reserve=RESERVE):
 
 
 def pacing_settings(path):
-    """The root-only [pacing] table. Absent file or key: pacing is off (no behaviour change)."""
+    """The [pacing] table, on by default (#205 item 4); the root-only file only tunes it.
+
+    Absent file, absent table, or a non-table value: PACING_DEFAULTS (enabled, slack_days 0), so
+    pacing holds only `priority:low` work when the month is ahead of the line -- no root edit is
+    needed to turn it on. A root-only `[pacing] enabled = false` is the one way to opt out.
+    """
+    settings = dict(PACING_DEFAULTS)
     try:
         data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
+        return settings
     value = data.get("pacing", {})
-    return value if isinstance(value, dict) else {}
+    if isinstance(value, dict):
+        settings.update(value)
+    return settings
 
 
 def over_pace(now, cap, spend, reserve=RESERVE, slack_days=1.0):
@@ -1310,7 +1362,8 @@ def over_pace(now, cap, spend, reserve=RESERVE, slack_days=1.0):
 
 
 def lanes_setting(path):
-    """The root-only `lanes = 2` switch. Absent, unreadable, or anything but 2: one lane (no change)."""
+    """The `lanes = 2` switch. Absent, unreadable, or anything but 2: one lane -- the code default
+    (#205 item 6 keeps one lane); only a root-only `lanes = 2` in /etc/section9/limits.toml opts in."""
     try:
         value = tomllib.loads(Path(path).read_text(encoding="utf-8")).get("lanes", 1)
     except (OSError, ValueError):

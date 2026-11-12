@@ -106,14 +106,15 @@ same clock as the Spend issue.
 ## The pacing rule
 
 The dispatcher keeps the existing fail-closed spend check and the $1 reserve. Pacing
-is an extra, **off by default**, in the root-only `/etc/section9/limits.toml`:
+is **on by default** in `vps/dispatch.py` (#205 item 4) -- no root edit is needed
+to turn it on; the root-only `/etc/section9/limits.toml` only tunes it:
 
 ```toml
 lanes = 1             # 1: one lane. 2: a second dispatcher lane may run beside it (#79)
 
 [pacing]
-enabled = true        # false or absent: no behaviour change
-slack_days = 1.0      # how far ahead of the line is still "on pace"
+enabled = true        # the code default; `false` is the one way to opt out
+slack_days = 0.0      # how far ahead of the line is still "on pace" (code default 0)
 steal_pct = 10.0      # above this, Hostinger's limit is on; the second lane stands down too
 sample_seconds = 1.0  # CPU sample before an admitted run
 quiet_hours = 3.0     # safe readings before the second lane comes back
