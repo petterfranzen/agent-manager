@@ -12,6 +12,10 @@
 #
 # The agents' budgets add up to the company's $19 (Petter, 30 Oct), under the
 # OpenRouter key's $20 cap.
+#
+# `runs_per_day` caps how many runs an agent starts in a UTC day (#205 item 6):
+# once it is at the cap the dispatcher skips it and leaves its tasks for
+# tomorrow -- no `limits.toml` edit is needed. Omit it for the code default (2).
 
 [company]
 name = "Section 9"
@@ -42,6 +46,7 @@ avatar = "agents/avatars/tachikoma.png"
 # Reviewed 17 Nov against the DeepSeek nights; back to DeepSeek if not richer.
 budget_monthly_cents = 1000
 timeout_sec = 10800
+runs_per_day = 0                         # #218: the nightly build is never gated by the day cap (0 = no cap)
 
 [agents.routine]
 title = "Nightly build"
@@ -61,6 +66,7 @@ budget_monthly_cents = 400
 # 40 min, down from 1 h: 16 runs in the week to 7 Nov hit the old ceiling and burned 16 h
 # with no output, 11 of them his. A task that genuinely needs longer should say so.
 timeout_sec = 2400
+runs_per_day = 6                         # #205 item 6: the busiest agent, ~73% of busy hours with Togusa
 
 [[agents]]
 name = "Ishikawa"
@@ -70,6 +76,7 @@ brief = "agents/researcher.md"
 avatar = "agents/avatars/ishikawa.png"
 budget_monthly_cents = 500
 timeout_sec = 3600
+runs_per_day = 2                         # #205 item 6
 
 [[agents]]
 name = "Togusa"
@@ -80,6 +87,7 @@ avatar = "agents/avatars/togusa.png"
 budget_monthly_cents = 300
 # 40 min for QA: 5 of the same 16 timed-out runs were his, mostly stuck on CI, not thinking.
 timeout_sec = 2400
+runs_per_day = 4                         # #205 item 6: two QA sweeps a day, plus assigned PRs
 
 # GitHub can't wake Paperclip (it sits behind Cloudflare Access), so Togusa
 # sweeps for ready agent PRs twice a day: after the nightly build, before the
@@ -101,6 +109,7 @@ brief = "agents/ops.md"
 avatar = "agents/avatars/saito.png"
 budget_monthly_cents = 300
 timeout_sec = 3600
+runs_per_day = 2                         # #205 item 6
 
 [agents.routine]
 title = "Morning ops report"

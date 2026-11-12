@@ -35,6 +35,16 @@ script uploads them through Paperclip's API (runbook step 7).
 The budgets add up to the company's $19, under the OpenRouter key's $20 cap.
 Paperclip stops an agent at its budget, and the key stops everything at $20.
 
+Each agent also has a daily run cap -- `runs_per_day` in `roster.toml`, code
+default 2 (#205 item 6). Once an agent has run its cap in a UTC day the
+dispatcher skips it and leaves its tasks for tomorrow; the cap and the per-agent
+`timeout_sec` are what keep a day's spend inside the budget.
+
+Pacing, too, is a code default now (#205 item 4): `vps/dispatch.py` holds only
+`priority:low` work when the month is ahead of the line, so the nightly build
+and bugs still run. A root-only `[pacing] enabled = false` in
+`/etc/section9/limits.toml` is the only way to opt out.
+
 Everyone but Tachikoma works whenever a task arrives. Agent PRs merge only
 after Togusa's `QA: pass` (docs/DESIGN.md, "Review and QA").
 
