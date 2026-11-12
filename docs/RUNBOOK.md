@@ -5,8 +5,11 @@
 ## Section 9 on the VPS: Monday 2 Nov (do these in order)
 
 Paperclip is gone. On the VPS, Hermes and the sandbox run from `vps/compose.yaml`;
-`dispatch.py` (systemd timers, every 2 min) feeds them GitHub issues from the
+`dispatch.py` (systemd timers, every 30 s) feeds them GitHub issues from the
 private repo `section9-hq`. Plan and reasons: [migration-vps.md](migration-vps.md).
+A run that hits its per-agent timeout (`task #172`) is left `status:blocked` with the
+partial output it had written as a comment, and the dispatcher never logs a token;
+set the task back to `status:todo` to run it again.
 You need: root SSH to the VPS (`ssh vps` below) and to the Hetzner VM (`ssh hetzner`),
 and the `gh` CLI on your computer. Nothing here is typed into chat.
 
@@ -176,7 +179,7 @@ lanes = 2               # 1 (default): one lane. 2: a second lane may run beside
 [pacing]
 quiet_hours = 3.0       # after an unsafe reading, this long before the second lane comes back
 ```
-`section9-dispatch-lane1.service`/`.timer` run `dispatch.py --lane 1` on the same 2-minute cadence
+`section9-dispatch-lane1.service`/`.timer` run `dispatch.py --lane 1` on the same 30-second cadence
 as lane 0 and stop at once between runs, so with `lanes = 1` they cost nothing. Lane 1 takes the
 oldest task it may run *beside* lane 0: a different agent, and a repo no open `status:working`
 issue is in. The repo is the issue's `repo:<name>` label, else a repo name in its title or body
@@ -188,7 +191,7 @@ run lock (`/var/lib/section9/dispatch.laneN.lock`). **Deploying a change to `dis
 wait for any run started by the old code to finish first — the run-lock name changed from
 `dispatch.lock` to `dispatch.lane0.lock`, so the new code would not see an old run's lock. The timers
 cannot double-run on their own: each lane's unit is a `oneshot` and cannot start again while its run
-is active. While `lanes` is 1 the lane-1 timer fires every 2 minutes but logs nothing (it exits at
+is active. While `lanes` is 1 the lane-1 timer fires every 30 s but logs nothing (it exits at
 once); `dispatch.py status` prints the lane count.
 
 Lane 1 stands itself down, and says so in the journal (`lanes: lane 1 stands down: ...`), when
