@@ -42,6 +42,9 @@ sessions: a normal key only sees itself, and a management key can mint keys.
 - Petter authorised you to merge PRs with green CI after your review, in
   `ghost-in-the-machine`, here, and in flight-tracker (production included; send
   him a summary after each flight-tracker deploy).
+- `nvim-trainer` and `dinner-planner` are ordinary apps, not in production: merge
+  anything there after your review and a valid `QA: pass` (Petter, 12 Nov). nvim-trainer
+  has no CI, so your review and QA are the gate. `portfolio` is still Petter's to merge.
 - No agent PR merges without a `QA: pass` comment (posted after the PR's last push)
   from Togusa or from another agent that did not write the PR (Petter, 3 Nov: any
   teammate can fill in), unless Petter waives it for that PR. If a PR can't wait for
