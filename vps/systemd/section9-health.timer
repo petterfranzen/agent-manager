@@ -1,0 +1,11 @@
+[Unit]
+Description=Section 9 health run, nightly
+
+[Timer]
+# 05:00 Stockholm: after the nightly build's 01:00 start and its 3 h ceiling.
+OnCalendar=*-*-* 05:00:00 Europe/Stockholm
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
