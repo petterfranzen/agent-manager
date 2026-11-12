@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 patch rule: check cloudflared for an aged release, every 6 h
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=6h
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+// Managed by agent-manager (vps/apt/52section9-cloudflared, installed by
+// vps/install-units.sh to /etc/apt/apt.conf.d/). cloudflared comes from
+// Cloudflare's own apt repo, and the house patch rule (docs/DECISIONS.md,
+// Principles) installs a release only once it is 24 h old. vps/cloudflared-patch.sh
+// owns cloudflared upgrades; unattended-upgrades must not install it.
+// For a major CVE (CVSS 7+ or CISA KEV) lift the delay with
+// `sudo vps/cloudflared-patch.sh --now`, inside the 72 h bound.
+Unattended-Upgrade::Package-Blacklist {
+    "cloudflared";
+};

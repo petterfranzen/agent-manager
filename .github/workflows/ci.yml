@@ -118,7 +118,7 @@ jobs:
           shellcheck vps/*.sh
           if ! command -v systemd-analyze >/dev/null; then echo "no systemd-analyze; skipping"; exit 0; fi
           sudo mkdir -p /opt/agent-manager/vps
-          sudo install -m 0755 vps/dispatch.py vps/hq-status.py vps/sync.sh /opt/agent-manager/vps/
+          sudo install -m 0755 vps/dispatch.py vps/hq-status.py vps/sync.sh vps/cloudflared-patch.sh /opt/agent-manager/vps/
           systemd-analyze verify vps/systemd/section9-*.service vps/systemd/section9-*.timer
 
   deploy:

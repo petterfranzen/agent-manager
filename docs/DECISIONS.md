@@ -19,6 +19,7 @@ public).
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-11-12 | `cloudflared` is held to Petter's patch rule (24 h). It comes from Cloudflare's own apt repo, so `unattended-upgrades` is told to leave it alone (`vps/apt/52section9-cloudflared`) and `vps/cloudflared-patch.sh`, run by `section9-cloudflared.timer` every 6 h, is the only upgrader: it records the first sighting of a candidate version and installs it after 24 h. A major CVE fix (CVSS 7+ or CISA KEV) is lifted with `sudo vps/cloudflared-patch.sh --now`, inside the 72 h bound. The script, units and apt drop-in auto-apply after the soak; the three protected files it touches (`vps/sync.sh`, `vps/install-units.sh`, `.github/workflows/ci.yml`) need one root `sync.sh --accept` (section9-hq #148). | The patch rule (Principles); cloudflared was patched with no delay; the rule lives in the repo. |
 | 2026-11-08 | Sync applied with auto-apply (8d2f8a9, 21:16 CET). Lesson: while the VPS still ran the old `sync.sh`, merging a `vps/` change after Petter's `--accept` blocked the sync (#85 changed `dispatch.py` after the 8c508cc pin); a revert (#86) let it apply. From now on only the protected set needs `--accept`, so this can't recur for ordinary files. | Journal: '64947bb is green but not pinned: … vps/dispatch.py changed'. |
 | 2026-11-08 | Pacing is a code default: `vps/dispatch.py` holds only `priority:low` work when the month is ahead of the line, so no root edit turns it on (`[pacing] enabled = false` opts out). Every agent brief carries a context-discipline line (`agents/*.md`). Each agent has a UTC daily run cap (`runs_per_day` in `agents/roster.toml`, code default 2; the nightly build is exempt: `runs_per_day = 0`, its 3 h night unchanged). The second lane stays a root-only `lanes = 2` opt-in. | Petter, 8 Nov: "as few manual VPS steps as possible" -- Saito's spend plan (section9-hq #205) items 4-6, written as repo changes so the sync carries them. |
 | 2026-11-08 | The Capacity issue shows the key's month-to-date beside the ledger's, and a run whose /key delta is 0 is priced from its tokens; Batou and Togusa runs time out at 40 min instead of 60. | Saito's spend plan (section9-hq #205): the ledger reconciled only $9.47 of $28.04, and 16 of 116 runs timed out with no output. |
@@ -125,5 +126,4 @@ public).
 ## Open
 - Apply the roster on the VM and switch Saito to the Hermes gateway.
 - flight-tracker freshness: separate sweep backoff, OpenSky rate-limit headers, honest `lastSweepAt`, OpenSky OAuth.
-- 24 h delay for cloudflared in unattended-upgrades (patch rule).
 - Generic error bodies in flight-tracker, so the framework can't be fingerprinted.

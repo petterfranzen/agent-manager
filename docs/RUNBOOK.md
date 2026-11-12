@@ -323,6 +323,32 @@ Delete `/var/backups/agent-manager-secrets/` on Hetzner once the VPS works.
 
 ---
 
+## Patching cloudflared (the 24 h rule)
+
+Ubuntu's `unattended-upgrades` patches the OS nightly, and the house rule
+(`docs/DECISIONS.md`, Principles) is that a release is installed once it is 24 h
+old. `cloudflared` comes from Cloudflare's own apt repo, so it is held to that rule
+itself:
+
+- `vps/apt/52section9-cloudflared` tells `unattended-upgrades` to leave `cloudflared`
+  alone; `vps/install-units.sh` installs it to `/etc/apt/apt.conf.d/`.
+- `vps/cloudflared-patch.sh`, run by `section9-cloudflared.timer` every 6 h, is the only
+  thing that upgrades it: it records when it first sees a candidate version and installs
+  it once that release has been available for 24 h.
+
+Look at what it is doing, and lift the delay for a major CVE (CVSS 7+ or CISA KEV),
+which the rule installs inside 72 h:
+
+```bash
+sudo /opt/agent-manager/vps/cloudflared-patch.sh --status    # installed, candidate, age
+sudo /opt/agent-manager/vps/cloudflared-patch.sh --dry-run   # what it would do
+sudo /opt/agent-manager/vps/cloudflared-patch.sh --now       # install the candidate now
+```
+
+`--now` is the CVE fast path: use it after a Cloudflare security advisory, not for
+routine releases. Both files are under `vps/`, so a change to them needs one root
+`sync.sh --accept` on the VPS (step 6).
+
 ## Older: the Hetzner stack (steps 1-10 below are history)
 
 ## What the Hetzner VM runs now (from 31 Oct 2026)
