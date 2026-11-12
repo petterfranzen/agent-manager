@@ -190,6 +190,9 @@ def serve(stub):
             body = json.loads(self.rfile.read(n)) if n else None
             u = urlsplit(self.path)
             stub.link = None
+            if u.path == "/hermes/v1/chat/completions" and body and body.get("stream"):
+                self.sse_chat(body, u)
+                return
             code, out = stub.handle(self.command, u.path, parse_qs(u.query), body, self.headers.get("Authorization"), self.headers)
             raw = json.dumps(out).encode()
             self.send_response(code)
@@ -199,6 +202,52 @@ def serve(stub):
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
+
+        def sse_chat(self, body, u):
+            """Serve a streaming chat completion: an early partial chunk when the stub is slow,
+            then the whole reply as chat.completion.chunk frames (so the dispatcher can keep the
+            text it saw before its timeout)."""
+            auth, headers = self.headers.get("Authorization"), self.headers
+            slow = stub.hermes in ("slow", "slow-report")
+
+            def frame(payload):
+                return ("data: " + json.dumps(payload) + "\n\n").encode()
+
+            if slow:      # the run has produced something, then stalls past the dispatcher's timeout
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(frame({"model": "hermes-agent",
+                                        "choices": [{"delta": {"content": "partial line 1\n"}}]}))
+                self.wfile.flush()
+            code, out = stub.handle(self.command, u.path, parse_qs(u.query), body, auth, headers)
+            if code != 200:
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                raw = json.dumps(out).encode()
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            if not slow:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+            content = (((out.get("choices") or [{}])[0].get("message") or {}).get("content")) or ""
+            try:
+                if content:
+                    self.wfile.write(frame({"model": out.get("model", "hermes-agent"),
+                                            "choices": [{"delta": {"content": content}}]}))
+                if out.get("runtime"):
+                    self.wfile.write(frame({"choices": [{"delta": {}}], "runtime": out["runtime"]}))
+                self.wfile.write(frame({"choices": [{"delta": {}, "finish_reason": "stop"}],
+                                        "usage": out.get("usage", {})}))
+                self.wfile.write(b"data: [DONE]\n\n")
+            except BrokenPipeError:      # the dispatcher already gave up on the run
+                pass
+
         do_GET = do_POST = do_PATCH = any
 
         def log_message(self, *a):
@@ -537,12 +586,16 @@ class TestCredits(Base):
 class TestTimeout(Base):
     timeout = 1
 
-    def test_timeout_blocks(self):
+    def test_timeout_keeps_the_partial_output(self):
         self.stub.hermes = "slow"
         n = self.stub.add(["agent:batou", "status:todo"])
         self.run_dispatch()
         self.assertEqual(self.stub.labels(n), {"agent:batou", "status:blocked"})
-        self.assertIn("timed out after 1 s", self.stub.comments[0][1])
+        comment = self.stub.comments[0][1]
+        self.assertIn("timed out at 1 s", comment)
+        self.assertIn("partial line 1", comment)          # what the run wrote before its time ran out
+        self.assertIn("Set `status:todo` to try again", comment)
+
 
 
 class TestRoutines(Base):
@@ -1049,7 +1102,7 @@ class TestGuardrails(Base):
         n = self.stub.add(["agent:batou", "status:todo"])
         self.run_dispatch("run", limits=limits)
         self.assertEqual(self.stub.labels(n), {"agent:batou", "status:blocked"})
-        self.assertIn("timed out after 1 s", self.stub.comments[0][1])
+        self.assertIn("timed out at 1 s", self.stub.comments[0][1])
 
     def test_the_ceiling_is_the_root_only_value_and_the_roster_can_only_lower_it(self):
         self.assertEqual(dispatch.ceiling({"name": "Batou", "timeout_sec": 3600}, {"Batou": 60}), 60)
@@ -2302,22 +2355,23 @@ class TestModels(Base):
         self.run_dispatch()                     # no limits file at all
         self.assertEqual(self.body_of()["model"], "hermes-agent")
 
-    def test_the_default_request_is_exactly_the_old_shape(self):
+    def test_the_default_request_is_the_model_the_messages_and_the_stream_flag(self):
         self.stub.add(["agent:batou", "status:todo"])
         self.run_dispatch()                     # no [models] table, roster names no model
         body = self.body_of()
-        self.assertEqual(set(body), {"model", "messages"})
+        self.assertEqual(set(body), {"model", "messages", "stream"})
         self.assertEqual(body["model"], "hermes-agent")
+        self.assertTrue(body["stream"])         # read as SSE, so a timeout keeps the partial answer
         self.assertNotIn("provider", body)
         self.assertEqual([m["role"] for m in body["messages"]], ["system", "user"])
 
-    def test_a_default_resolved_model_also_sends_the_old_shape(self):
+    def test_a_default_resolved_model_also_streams(self):
         (self.t / "roster.toml").write_text(ROSTER_MODEL)
         limits = self.limits('[models]\nallow = ["anthropic/claude-sonnet-5.5"]\nSaito = "deepseek/deepseek-v4.1-flash"\n')
         self.stub.add(["agent:saito", "status:todo"])
         self.run_dispatch(limits=limits)
         body = self.body_of()
-        self.assertEqual((set(body), body["model"]), ({"model", "messages"}, "hermes-agent"))
+        self.assertEqual((set(body), body["model"]), ({"model", "messages", "stream"}, "hermes-agent"))
 
     def test_the_saito_override_request_body_is_exact(self):
         (self.t / "roster.toml").write_text(ROSTER_MODEL)
@@ -2325,7 +2379,7 @@ class TestModels(Base):
         self.stub.add(["agent:saito", "status:todo"])
         self.run_dispatch(limits=limits)
         body = self.body_of()
-        self.assertEqual(set(body), {"model", "provider", "messages"})
+        self.assertEqual(set(body), {"model", "provider", "messages", "stream"})
         self.assertEqual((body["model"], body["provider"]), ("anthropic/claude-sonnet-5.5", "openrouter"))
 
     def test_an_xai_model_is_refused_even_if_the_allow_list_names_it(self):
