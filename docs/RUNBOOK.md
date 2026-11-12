@@ -259,6 +259,19 @@ world-readable. Those modes apply when the writer creates the file; it also best
 existing file, so a `runs.jsonl` left `0644` by an older build (or by hand) is corrected on the
 next run.
 
+`section9-sca.timer` (weekly, Monday 05:30 UTC) runs `vps/sca-watch.py`: it reads the version pins in the
+repo (`sandbox/Dockerfile` ARGs and the `vps/compose.yaml` image tags) and this host's own docker, runc,
+containerd and openssh-server versions, asks OSV (`api.osv.dev`) for advisories, keeps CVSS 7.0 or higher
+or anything on the CISA KEV list, and rewrites the open **Supply-chain** issue in section9-hq (created on
+first use; pin it in the GitHub UI if the automatic pin failed, as for Spend). Fixes and their dates come
+from OSV; it prints no tokens. A run with nothing to report still writes a dated **Clear** line, so a quiet
+issue means the timer has stopped, not that the stack is clean. Check it with
+`python3 -I /opt/agent-manager/vps/sca-watch.py` and `systemctl list-timers 'section9-sca*'`.
+**Optional monthly image layer.** The digest-pinned base and service images cannot be checked by version, so
+for them install a scanner and run the scan by hand (or add `--images` to the unit): `sudo snap install trivy`
+(or trivy's own apt repo) gives `python3 -I /opt/agent-manager/vps/sca-watch.py --images`, which scans the
+running containers' images. Nothing is installed by the repo; without a scanner the issue says so.
+
 Each run reads OpenRouter `/key` twice, before it starts and after it ends, and each read waits up
 to 10 s, so a slow OpenRouter can delay a run's start by that much. The dispatcher picks
 `priority:high` first, then unlabelled, then `priority:low`, oldest first within each group; with no

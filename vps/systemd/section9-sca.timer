@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 supply-chain scan, weekly on Monday
+
+[Timer]
+OnCalendar=Mon 05:30 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
