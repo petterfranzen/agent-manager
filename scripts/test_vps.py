@@ -1,4 +1,5 @@
-"""Tests for vps/dispatch.py and sandbox/s9-task against stub GitHub, Hermes and OpenRouter.
+"""Tests for vps/dispatch.py, sandbox/s9-task and scripts/health-run.sh against stub GitHub,
+Hermes and OpenRouter.
 
 Run: python3 -m unittest scripts/test_vps.py
 """
@@ -2589,6 +2590,94 @@ class TestRosterTimeouts(unittest.TestCase):
         # Tachikoma 0 = no cap: the nightly build is never gated (#218).
         caps = {a["name"]: a.get("runs_per_day") for a in self.roster()["agents"]}
         self.assertEqual(caps, {"Tachikoma": 0, "Batou": 6, "Ishikawa": 2, "Togusa": 8, "Saito": 2})
+
+
+class HealthRun(unittest.TestCase):
+    """scripts/health-run.sh: the table it renders, its redaction, and what it posts.
+
+    That script is bash and runs on the VPS inside the sandbox image, so it is
+    driven here as a subprocess: a directory of empty checkouts, a stub `gh` first
+    on PATH, and `--cmd` overrides. No clone, no network, no real issue.
+    """
+
+    SCRIPT = ROOT / "scripts" / "health-run.sh"
+    REPOS = ("ghost-in-the-machine", "nvim-trainer", "portfolio", "dinner-planner", "flight-tracker")
+    TOKEN = "github_pat_" + "t" * 22
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.repos = root / "repos"
+        for r in self.REPOS:
+            (self.repos / r).mkdir(parents=True)
+        self.bin = root / "bin"
+        self.bin.mkdir()
+        self.gh_log, self.gh_body = root / "gh.log", root / "gh-body"
+        (self.bin / "gh").write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$*\" >> \"$GH_LOG\"\n"
+            "for a in \"$@\"; do case \"$a\" in body=@*) cp \"${a#body=@}\" \"$GH_BODY\";; esac; done\n"
+            "case \"$*\" in\n"
+            "  *graphql*) echo '{\"data\":{\"pinIssue\":{\"issue\":{\"number\":7}}}}' ;;\n"
+            "  *'-f title='*) echo '{\"number\":7,\"node_id\":\"N1\"}' ;;\n"
+            "esac\n"
+            "exit 0\n")
+        (self.bin / "gh").chmod(0o755)
+        self.env = dict(os.environ, GH_TOKEN=self.TOKEN, GH_LOG=str(self.gh_log),
+                        GH_BODY=str(self.gh_body), PATH=f"{self.bin}:{os.environ['PATH']}")
+
+    def run_health(self, *args):
+        return subprocess.run([str(self.SCRIPT), "--repos-dir", str(self.repos), *args],
+                              capture_output=True, text=True, env=self.env, timeout=120)
+
+    def cmds(self, overrides=None):
+        """--cmd for every repo: `true`, or the override given for that repo."""
+        overrides = overrides or {}
+        args = []
+        for r in self.REPOS:
+            args += ["--cmd", f"{r}={overrides.get(r, 'true')}"]
+        return args
+
+    def test_dry_run_lists_every_repo_and_posts_nothing(self):
+        out = self.run_health("--dry-run", *self.cmds())
+        self.assertEqual(out.returncode, 0, out.stderr)
+        for r in self.REPOS:
+            self.assertIn(f"| {r} | PASS |", out.stdout)
+        self.assertIn("**As of ", out.stdout)
+        self.assertFalse(self.gh_log.exists(), "a dry run must not call gh")
+
+    def test_a_failure_shows_fail_with_the_tail_and_no_token(self):
+        boom = "echo keep-0; for i in $(seq 1 30); do echo keep-$i; done; " \
+               "echo sk-or-v1-abcdefghijklmnopqrstuvwxyz; exit 1"
+        out = self.run_health("--dry-run", *self.cmds({"nvim-trainer": boom}))
+        self.assertEqual(out.returncode, 1)                     # a FAIL is a non-zero exit
+        self.assertIn("| nvim-trainer | FAIL |", out.stdout)
+        self.assertIn("<details><summary>nvim-trainer", out.stdout)
+        self.assertIn("keep-30", out.stdout)                    # the tail is there
+        self.assertNotIn("keep-5", out.stdout)                  # and it is only the tail
+        self.assertNotIn("sk-or-v1-abcdefghijklmnopqrstuvwxyz", out.stdout)
+        self.assertIn("[redacted]", out.stdout)
+        self.assertNotIn("ghost-in-the-machine | FAIL", out.stdout)
+
+    def test_a_run_creates_and_pins_the_issue_with_the_table(self):
+        out = self.run_health(*self.cmds())
+        self.assertEqual(out.returncode, 0, out.stderr)
+        calls = self.gh_log.read_text()
+        self.assertIn("issues?state=open", calls)                # looked for it first
+        self.assertIn("-f title=Health run", calls)              # created it
+        self.assertIn("graphql", calls)                          # and asked to pin it
+        body = self.gh_body.read_text()
+        self.assertIn("**As of ", body)
+        for r in self.REPOS:
+            self.assertIn(f"| {r} | PASS |", body)
+
+    def test_no_repo_is_silently_dropped(self):
+        """Every repo in the run has a row; the table is what the board sees."""
+        out = self.run_health("--dry-run", "--only", "portfolio", *self.cmds())
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("| portfolio | PASS |", out.stdout)
+        self.assertNotIn("| nvim-trainer |", out.stdout)
 
 
 if __name__ == "__main__":
