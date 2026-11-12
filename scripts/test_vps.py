@@ -2588,7 +2588,7 @@ class TestRosterTimeouts(unittest.TestCase):
     def test_every_agent_carries_its_daily_run_cap(self):
         # Tachikoma 0 = no cap: the nightly build is never gated (#218).
         caps = {a["name"]: a.get("runs_per_day") for a in self.roster()["agents"]}
-        self.assertEqual(caps, {"Tachikoma": 0, "Batou": 6, "Ishikawa": 2, "Togusa": 4, "Saito": 2})
+        self.assertEqual(caps, {"Tachikoma": 0, "Batou": 6, "Ishikawa": 2, "Togusa": 8, "Saito": 2})
 
 
 if __name__ == "__main__":

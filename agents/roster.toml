@@ -87,7 +87,7 @@ avatar = "agents/avatars/togusa.png"
 budget_monthly_cents = 300
 # 40 min for QA: 5 of the same 16 timed-out runs were his, mostly stuck on CI, not thinking.
 timeout_sec = 2400
-runs_per_day = 4                         # #205 item 6: two QA sweeps a day, plus assigned PRs
+runs_per_day = 8                         # #205 item 6, raised 12 Nov: QA is the bottleneck under the pull model
 
 # GitHub can't wake Paperclip (it sits behind Cloudflare Access), so Togusa
 # sweeps for ready agent PRs twice a day: after the nightly build, before the
