@@ -275,6 +275,34 @@ for them install a scanner and run the scan by hand (or add `--images` to the un
 (or trivy's own apt repo) gives `python3 -I /opt/agent-manager/vps/sca-watch.py --images`, which scans the
 running containers' images. Nothing is installed by the repo; without a scanner the issue says so.
 
+**Health run.** `section9-health.timer` (nightly, 05:00 Stockholm, after the nightly
+build's 3 h ceiling) runs `scripts/health-run.sh` inside the sandbox image: it clones the
+five repos (ghost-in-the-machine, nvim-trainer, portfolio, dinner-planner, flight-tracker),
+runs each one's build and the fast suite where one exists, and rewrites one table in the open
+issue **Health run** in `section9-hq` -- created and pinned on the first run -- with an
+"As of" time and a wall time per repo. A repo whose build fails reads `FAIL` and carries the
+last 20 lines of its log in a collapsed block; token-shaped strings are stripped before
+anything is published, and nothing else of the log leaves the box. The table also says which
+suites stay in the repos' own CI: nvim-trainer's `playtest` and portfolio's smoke test need a
+dev/preview server, dinner-planner's jest suite arrives with its CI task, and flight-tracker's
+Maven backend build and Playwright suite stay in its own CI. What each repo runs is one case
+in `steps_for()` in `scripts/health-run.sh`; keep it cheap -- this is a cross-repo signal, not
+a second CI. Run it by hand, and watch it:
+
+```bash
+sudo systemctl start section9-health
+journalctl -u section9-health -n 60
+systemctl status section9-health.timer          # if "As of" goes stale, this has stopped
+```
+
+A dry run -- clones and builds, prints the table, posts nothing -- needs only `git`, `node`
+and `python3`:
+```bash
+/opt/agent-manager/scripts/health-run.sh --dry-run
+```
+It runs as the `agent` user inside the sandbox image (uid 10001), so it can write nothing
+outside its own container and its temp directory; the container is removed with `--rm`.
+
 Each run reads OpenRouter `/key` twice, before it starts and after it ends, and each read waits up
 to 10 s, so a slow OpenRouter can delay a run's start by that much. The dispatcher picks
 `priority:high` first, then unlabelled, then `priority:low`, oldest first within each group; with no

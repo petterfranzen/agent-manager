@@ -1,0 +1,22 @@
+[Unit]
+Description=Section 9 health run: build and test the five repos, rewrite the Health run issue
+Documentation=https://github.com/petterfranzen/agent-manager/blob/main/docs/RUNBOOK.md
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Inside the sandbox image, so it uses the agents' own toolchain and the agents'
+# own token (GH_TOKEN, /etc/section9/sandbox.env) and no other secret. The five
+# repos are public, so the clones need no token at all. --entrypoint sidesteps
+# the image's sshd; --rm throws the container, its clones and its node_modules
+# away again. The service's own cpus/mem_limit/pids_limit bound the run.
+ExecStart=/usr/bin/docker compose -f /opt/agent-manager/vps/compose.yaml run --rm --no-deps -T \
+  --user agent -e HOME=/home/agent -w /home/agent/work \
+  -v /opt/agent-manager/scripts/health-run.sh:/usr/local/bin/health-run.sh:ro \
+  --entrypoint /usr/local/bin/health-run.sh sandbox
+TimeoutStartSec=45min
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
