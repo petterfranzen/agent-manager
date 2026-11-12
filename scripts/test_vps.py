@@ -35,6 +35,7 @@ def load(name, filename):
 
 dispatch = load("dispatch", "dispatch.py")
 hq = load("hq_status", "hq-status.py")
+sca = load("sca_watch", "sca-watch.py")
 
 GH = "github_pat_" + "g" * 20
 ORKEY = "sk-or-" + "k" * 20
@@ -57,6 +58,9 @@ class Stub:
         self.crew_sha, self.checks = "tree1", []
         self.hq_sha, self.hq = "hq1", {"ghost.yaml": "name: ghost\nlabel: Batou's\n", "notes.md": "x", "sub/deep.yaml": "name: no\n"}
         self.crew = {"index.html": "<h1>crew</h1>", "status.json": "SAMPLE", "css/app.css": "a{}"}
+        self.osv_batch, self.osv_vulns, self.osv_calls = {"results": []}, {}, []
+        self.kev = {"catalogVersion": "test", "vulnerabilities": []}
+        self.osv_auth = "unset"
 
     def add(self, labels, title="Do a thing", state="open", age_min=None):
         n = self.next
@@ -149,6 +153,15 @@ class Stub:
                 return 200, self.key
             return 200, {"data": {"usage": self.monthly, "limit": 20, "limit_remaining": self.remaining,
                                   "usage_monthly": self.monthly, "usage_daily": self.daily}}
+        if path == "/osv/v1/querybatch":
+            self.osv_auth = auth
+            self.osv_calls.append(body)
+            return 200, self.osv_batch
+        if path.startswith("/osv/v1/vulns/"):
+            vid = path.rsplit("/", 1)[1]
+            return (200, self.osv_vulns[vid]) if vid in self.osv_vulns else (404, {"message": "no such advisory"})
+        if path == "/kev/kev.json":
+            return 200, self.kev
         if path == "/hermes/v1/models":
             return 200, {"data": []}
         if path == "/hermes/v1/chat/completions":
@@ -2481,3 +2494,124 @@ class TestRosterTimeouts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSca(Base):
+    HIGH = {"id": "GHSA-high", "aliases": ["CVE-2026-1111"],
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
+            "affected": [{"ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "27.4.0"}]}]}],
+            "published": "2026-10-01T09:00:00Z"}
+    KEV = {"id": "GO-kev", "aliases": ["CVE-2026-2222"], "severity": None,
+           "affected": [{"ranges": [{"events": [{"introduced": "0"}, {"fixed": "1.2.0"}]}]}],
+           "published": "2026-09-01T00:00:00Z"}
+    MOD = {"id": "GHSA-mod", "aliases": ["CVE-2026-3333"],
+           "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:N"}],
+           "affected": [{"ranges": [{"events": [{"introduced": "0"}, {"fixed": "1.65.0"}]}]}],
+           "published": "2026-08-01T00:00:00Z"}
+
+    # The host pins host_pins() would find, in the order the code appends them (docker, runc,
+    # containerd, openssh); index 4 is docker, 5 runc, 2 playwright, in the queryset the stub sees.
+    HOSTQ = [("docker", "Go", "github.com/docker/docker", "27.3.1", "docker version"),
+             ("runc", "Go", "github.com/opencontainers/runc", "1.1.12", "runc --version"),
+             ("containerd", "Go", "github.com/containerd/containerd", "1.7.24", "containerd --version"),
+             ("openssh-server", "Ubuntu", "openssh", "1:9.6p1-3ubuntu13", "dpkg -s openssh-server")]
+
+    def repo(self):
+        root = self.t / "repo"
+        (root / "sandbox").mkdir(parents=True, exist_ok=True)
+        (root / "vps").mkdir(exist_ok=True)
+        (root / "sandbox" / "Dockerfile").write_text(
+            "FROM ubuntu:26.04@sha256:abc\nARG GITLEAKS_VERSION=8.30.1\nARG MISE_VERSION=2026.10.19\n"
+            "ARG NODE_VERSION=24.22.2\nARG PLAYWRIGHT_VERSION=1.64.1\nARG PONYTAIL_TAG=v5.3.3\n")
+        (root / "vps" / "compose.yaml").write_text(
+            "services:\n  hermes:\n    image: nousresearch/hermes-agent:v0.22.5@sha256:9c55\n"
+            "  hq:\n    image: caddy:2.11.7-alpine@sha256:e70b\n")
+        return root
+
+    def responses(self, *at):
+        """A querybatch reply for the 8 queries, with an advisory at each index given."""
+        results = [{} for _ in range(8)]
+        for i, vid in at:
+            results[i] = {"vulns": [{"id": vid, "modified": "2026-10-01T00:00:00Z"}]}
+        return {"results": results}
+
+    def run_sca(self):
+        argv = ["--secrets-dir", str(self.t / "secrets"), "--state-dir", str(self.t / "state"),
+                "--repo-root", str(self.repo()), "--github", self.url + "/gh",
+                "--osv", self.url + "/osv/v1", "--kev", self.url + "/kev/kev.json"]
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sca, "host_pins", return_value=(list(self.HOSTQ), ["docker version: test"])), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = sca.main(argv)
+        for text in (out.getvalue(), err.getvalue()):
+            self.assertNotIn(GH, text)
+        return code, out.getvalue()
+
+    def test_reads_the_repo_pins_and_notes_the_rest(self):
+        queries, notes = sca.repo_pins(self.repo())
+        self.assertEqual([q[0] for q in queries], ["gitleaks", "mise", "playwright", "caddy"])
+        self.assertIn(("caddy", "Go", "github.com/caddyserver/caddy", "2.11.7", "vps/compose.yaml"), queries)
+        self.assertIn(("playwright", "npm", "playwright", "1.64.1", "sandbox/Dockerfile"), queries)
+        self.assertTrue(any("ubuntu:26.04" in n for n in notes))
+        self.assertTrue(any("Node runtime 24.22.2" in n for n in notes))
+        self.assertTrue(any("Ponytail" in n for n in notes))
+        self.assertTrue(any("hermes-agent" in n for n in notes))
+
+    def test_reads_the_host_versions(self):
+        def fake(cmd):
+            return {"docker": "Client:\n Version: 27.3.1\nServer:\n Engine:\n  Version: 28.0.1\n",
+                    "runc": "runc version 1.1.12\ncommit: v1.1.12-0-g1d9c0e3\n",
+                    "containerd": "containerd github.com/containerd/containerd v1.7.24 a88e0e0\n",
+                    "dpkg": "Package: openssh-server\nSource: openssh\nVersion: 1:9.6p1-3ubuntu13\n"}[cmd[0]]
+        with mock.patch.object(sca, "run", side_effect=fake):
+            queries, _ = sca.host_pins()
+        self.assertIn(("docker", "Go", "github.com/docker/docker", "28.0.1", "docker version"), queries)   # the server
+        self.assertIn(("runc", "Go", "github.com/opencontainers/runc", "1.1.12", "runc --version"), queries)
+        self.assertIn(("openssh-server", "Ubuntu", "openssh", "1:9.6p1-3ubuntu13", "dpkg -s openssh-server"), queries)
+
+    def test_cvss_v3_base_scores(self):
+        self.assertEqual(sca.cvss_base("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"), 9.8)
+        self.assertEqual(sca.cvss_base("CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"), 8.1)
+        self.assertLess(sca.cvss_base("CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:N"), 7.0)
+        self.assertIsNone(sca.cvss_base("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"))
+
+    def test_keeps_high_and_kev_drops_the_rest_and_writes_one_pinned_issue(self):
+        self.stub.osv_batch = self.responses((4, "GHSA-high"), (5, "GO-kev"), (2, "GHSA-mod"))
+        self.stub.osv_vulns = {"GHSA-high": self.HIGH, "GO-kev": self.KEV, "GHSA-mod": self.MOD}
+        self.stub.kev = {"catalogVersion": "test", "vulnerabilities": [{"cveID": "CVE-2026-2222"}]}
+        code, out = self.run_sca()
+        self.assertEqual(code, 0, out)
+        (n, issue), = self.stub.issues.items()
+        self.assertEqual((issue["title"], self.stub.labels(n), self.stub.pinned), ("Supply-chain", set(), f"node-{n}"))
+        self.assertIn("| docker | 27.3.1 | [GHSA-high]", issue["body"])
+        self.assertIn("9.8", issue["body"])
+        self.assertIn("27.4.0", issue["body"])           # the fix
+        self.assertIn("2026-10-01", issue["body"])       # and its date
+        self.assertIn("[GO-kev]", issue["body"])
+        self.assertIn("(KEV)", issue["body"])
+        self.assertNotIn("GHSA-mod", issue["body"])      # CVSS below 7.0 and not KEV
+        self.assertIn("1 advisory/advisories below CVSS 7.0", issue["body"])
+        self.assertIn("Pins checked:", issue["body"])
+        self.assertIn("ubuntu:26.04", issue["body"])     # the digest pin, noted not queried
+
+    def test_a_clear_run_updates_the_same_issue_in_place(self):
+        self.stub.osv_batch = self.responses()
+        self.run_sca()
+        (n, issue), = self.stub.issues.items()
+        self.assertIn("**Clear, ", issue["body"])
+        self.stub.osv_batch = self.responses((4, "GHSA-high"))
+        self.stub.osv_vulns = {"GHSA-high": self.HIGH}
+        code, out = self.run_sca()
+        self.assertEqual(code, 0, out)
+        (n2, issue), = self.stub.issues.items()          # still one issue, not two
+        self.assertEqual(n2, n)
+        self.assertNotIn("Clear,", issue["body"])
+        self.assertIn("| docker | 27.3.1 | [GHSA-high]", issue["body"])
+
+    def test_a_run_with_no_findings_still_writes_a_dated_clear_line(self):
+        self.stub.osv_batch = self.responses()
+        code, out = self.run_sca()
+        self.assertEqual(code, 0, out)
+        (_, issue), = self.stub.issues.items()
+        self.assertIn("**Clear, ", issue["body"])
+        self.assertEqual(self.stub.todo_count(), 0)
