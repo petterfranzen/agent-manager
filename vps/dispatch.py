@@ -84,7 +84,11 @@ PER_PAGE, MAX_PAGES = 100, 20     # board reads follow Link: rel="next" up to th
 
 
 class Failure(Exception):
-    pass
+    """A request that failed. `partial` carries the text a streamed reply had already sent."""
+
+    def __init__(self, message, partial=""):
+        super().__init__(message)
+        self.partial = partial
 
 
 secrets = []
@@ -143,6 +147,75 @@ def request(method, url, token, body=None, timeout=30, headers=None):
 
 def http(method, url, token, body=None, timeout=30, headers=None):
     return request(method, url, token, body, timeout, headers)[0]
+
+
+def chat_stream(url, token, body, timeout, headers=None):
+    """POST a chat completion and read the answer as it arrives. Returns (reply, partial).
+
+    `stream: true` turns the reply into Server-Sent Events. Text is kept as it arrives,
+    so a run cut off at its timeout still leaves the answer it produced so far; a
+    `Failure` from a timeout carries that text in `.partial`. A gateway that answers
+    with plain JSON (no streaming) is read as the ordinary reply. The reply is the
+    same shape as the non-streaming one, so the caller does not change.
+    """
+    req = urllib.request.Request(url, data=json.dumps(dict(body, stream=True)).encode(), method="POST")
+    req.add_header("Authorization", "Bearer " + token)
+    req.add_header("Accept", "text/event-stream")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "section9-dispatch")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    text, usage, model, finish, runtime = [], None, None, None, None
+    start = time.monotonic()
+    deadline = start + timeout
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            if "text/event-stream" not in ctype:
+                raw = resp.read()
+                return (json.loads(raw) if raw.strip() else None), ""
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line or line.startswith(":") or line.startswith("event:"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                chunk = line[5:].strip()
+                if chunk == "[DONE]":
+                    break
+                try:
+                    event = json.loads(chunk)
+                except ValueError:
+                    continue
+                choice = (event.get("choices") or [{}])[0] or {}
+                delta = choice.get("delta") or {}
+                if isinstance(delta.get("content"), str):
+                    text.append(delta["content"])
+                if isinstance(event.get("model"), str):
+                    model = event["model"]
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                if isinstance(event.get("runtime"), dict):
+                    runtime = event["runtime"]    # the served pair. Absent from the finish chunk, the
+                                                  # reply keeps a `model`, and served_model() books the
+                                                  # ledger to that (else what we asked for): no #101 gap.
+                if choice.get("finish_reason"):
+                    finish = choice["finish_reason"]
+                if time.monotonic() >= deadline:
+                    raise Failure(f"POST {redact(url)} -> timed out at {time.monotonic() - start:.0f} s",
+                                  "".join(text))
+    except urllib.error.HTTPError as e:
+        raise Failure(f"POST {redact(url)} -> {e.code}: {redact(e.read().decode('utf-8', 'replace'))[:300]}",
+                      "".join(text)) from None
+    except TimeoutError:
+        raise Failure(f"POST {redact(url)} -> timed out at {time.monotonic() - start:.0f} s",
+                      "".join(text)) from None
+    except (urllib.error.URLError, OSError) as e:
+        raise Failure(f"POST {redact(url)} -> no response: {redact(str(getattr(e, 'reason', e)))}",
+                      "".join(text)) from None
+    reply = {"choices": [{"message": {"content": "".join(text)}, "finish_reason": finish or "stop"}],
+             "model": model, "usage": usage, "runtime": runtime}
+    return reply, "".join(text)
 
 
 def next_link(headers):
@@ -732,20 +805,24 @@ def run_one(a, board, hermes_key, orkey, log, lane=0):
         pass
     out, problem, reply = "", "", None
     try:
-        reply = http("POST", a.hermes.rstrip("/") + "/v1/chat/completions", hermes_key, timeout=timeout,
-                     headers={"X-Hermes-Session-Id": f"issue-{n}"},
-                     body=chat_body(model, system, user))
+        reply, _ = chat_stream(a.hermes.rstrip("/") + "/v1/chat/completions", hermes_key,
+                               chat_body(model, system, user), timeout,
+                               headers={"X-Hermes-Session-Id": f"issue-{n}"})
         out = (((reply or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     except Failure as e:
         problem = str(e)
+        out = e.partial or ""       # whatever the run had written when its time ran out
     ended = dt.datetime.now(dt.timezone.utc)
     # Re-read: the agent reports with s9-task, which changes the labels.
     now = board.call("GET", f"/issues/{n}")
     labels = {l["name"] for l in now["labels"]}
     if problem or "status:working" in labels:
-        outcome = ("timeout" if "timed out" in problem.lower() else "blocked") if problem else "no-output"
+        timed_out = "timed out" in problem.lower()
+        outcome = ("timeout" if timed_out else "blocked") if problem else "no-output"
         board.set_status(now, "blocked")
-        board.comment(n, f"Blocked by the dispatcher: {problem or 'the run ended without a final status'}.\n\nLast lines of output:\n```\n{tail(out)}\n```")
+        board.comment(n, f"Blocked by the dispatcher: {problem or 'the run ended without a final status'}.\n\n"
+                         f"Partial output so far:\n```\n{tail(out)}\n```\n"
+                         f"Set `status:todo` to try again.")
         log(f"#{n} blocked: {problem or 'no final status'}")
     else:
         outcome = "blocked" if "status:blocked" in labels else "ok"

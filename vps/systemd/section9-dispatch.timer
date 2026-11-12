@@ -1,9 +1,9 @@
 [Unit]
-Description=Section 9 dispatcher, 2 minutes after the last run ended
+Description=Section 9 dispatcher, 30 seconds after the last run ended
 
 [Timer]
 OnBootSec=1min
-OnUnitInactiveSec=2min
+OnUnitInactiveSec=30s
 
 [Install]
 WantedBy=timers.target
