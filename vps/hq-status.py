@@ -7,10 +7,13 @@
   hq-status.py crew     fetch main's crew/ folder from ghost-in-the-machine (every 10 min),
                         and its hq/*.yaml dashboard themes into --themes-dir
 
-The page is behind Cloudflare Access, but its text is still allowlisted by default:
-an issue labelled `private`, or whose title matches a term in <secrets-dir>/crew-deny.txt
-(one per line), shows as "On a private task". Without that file nothing is known to be
-safe, so only agent states and "On a task" are published. No money amounts, only a
+Two copies of the document. board/board.json is what the waits board polls; the board is
+served only behind the Cloudflare Access app that admits Petter alone, so it carries the real
+task titles, issue and PR links and "Waits on" notes (Petter, 12 Nov: a board of "On a task"
+cards tells him nothing). The site-root status.json is kept for a later public crew page and
+stays allowlisted: an issue labelled `private`, or whose title matches a term in
+<secrets-dir>/crew-deny.txt (one per line), shows as "On a private task", and without that file
+only agent states and "On a task" are published. Neither copy carries a money amount, only a
 percentage. status.json keeps the format of crew/status.json in ghost-in-the-machine,
 plus a `model` field. Standard library only. Secrets (never printed):
   GH_TOKEN             in <secrets-dir>/sandbox.env
@@ -33,6 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BOARD = "petterfranzen/section9-hq"
 CREW_REPO = "petterfranzen/ghost-in-the-machine"
+OWNER_URLS = ("https://github.com/petterfranzen/", "https://petterfranzen.github.io/")   # board only
 PUBLIC_URLS = (f"https://github.com/{CREW_REPO}/pull/", "https://petterfranzen.github.io/ghost-in-the-machine/")
 URL = re.compile(r"https://(?:github\.com/petterfranzen/ghost-in-the-machine/pull/\d+|petterfranzen\.github\.io/ghost-in-the-machine/[\w./-]*)")
 KEYS = re.compile(r"(sk-or-|github_pat_|ghp_)[A-Za-z0-9_-]*")
@@ -113,13 +117,23 @@ def model_of(config_text):
     return m.group(1) if m else None
 
 
-def build(now, agents, issues, comments, key, model, deny):
-    """The status document. `deny` is a compiled regex, or None when there is no deny file."""
+def build(now, agents, issues, comments, key, model, deny, reveal=False):
+    """The status document. `deny` is a compiled regex, or None when there is no deny file.
+
+    `reveal` builds the board's own copy (board/board.json): the board is served only behind the
+    Cloudflare Access app that admits Petter alone (RUNBOOK), so it shows real titles, issue links,
+    PR links in any of Petter's repos and the "Waits on" notes. The site-root status.json, kept for a
+    later public crew page, is always built with reveal=False and stays redacted."""
     labels = lambda i: {l["name"] for l in i.get("labels", [])}
     base = re.compile(DENY_BASE, re.IGNORECASE)
+    if reveal:
+        deny = deny or re.compile(r"(?!)")    # a never-matching pattern: "a deny list exists, it is empty"
+    pr_ok = OWNER_URLS if reveal else PUBLIC_URLS
 
     def text(issue):
         title = issue.get("title") or ""
+        if reveal:
+            return short(title)
         if "private" in labels(issue) or base.search(title) or (deny and deny.search(title)):
             return PRIVATE
         if not deny:
@@ -152,7 +166,7 @@ def build(now, agents, issues, comments, key, model, deny):
                 item = {"at": iso(i.get("closed_at") or i["updated_at"]), "text": text(i)}
                 url = URL.search(i.get("body") or "")
                 url = links.get(str(i["number"])) or (url.group(0) if url else None)
-                if url and item["text"] != PRIVATE:
+                if url and item["text"] != PRIVATE and (reveal or url.startswith(PUBLIC_URLS)):
                     item["url"] = url
                 if recent and item["text"] == PRIVATE == recent[-1]["text"]:
                     continue
@@ -188,7 +202,7 @@ def build(now, agents, issues, comments, key, model, deny):
         if title != PRIVATE:
             u = URL.search(i.get("body") or "")
             u = links.get(str(i["number"])) or (u.group(0) if u else None)
-            if u and u.startswith(PUBLIC_URLS):
+            if u and u.startswith(pr_ok):
                 pr = u
         private = title == PRIVATE
         waits = "agent"
@@ -216,11 +230,11 @@ def build(now, agents, issues, comments, key, model, deny):
         "agents": out,
         "tasks": tasks,
     }
-    validate(doc, deny)
+    validate(doc, deny, reveal)
     return doc
 
 
-def validate(doc, deny):
+def validate(doc, deny, reveal=False):
     def need(ok, what):
         if not ok:
             raise Failure(f"status.json invalid: {what}")
@@ -230,7 +244,7 @@ def validate(doc, deny):
     for a in doc["agents"]:
         need(a["state"] in ("working", "idle") and (a["lastActiveAt"] is None or ZULU.match(a["lastActiveAt"])), "agent")
         for r in a["recent"]:
-            need(ZULU.match(r["at"]) and ("url" not in r or r["url"].startswith(PUBLIC_URLS)), "recent item")
+            need(ZULU.match(r["at"]) and ("url" not in r or r["url"].startswith(OWNER_URLS if reveal else PUBLIC_URLS)), "recent item")
     for t in doc["tasks"]:
         need(isinstance(t.get("id"), int), "task id")
         need(isinstance(t.get("title"), str), "task title")
@@ -239,13 +253,14 @@ def validate(doc, deny):
         need(t.get("waits") in WAITS, "task waits")
         need(isinstance(t.get("waitsText"), str), "task waitsText")
         need(t.get("url") is None or (isinstance(t["url"], str) and t["url"].startswith(ISSUE)), "task url")
-        need(t.get("pr") is None or (isinstance(t["pr"], str) and t["pr"].startswith(PUBLIC_URLS)), "task pr")
+        need(t.get("pr") is None or (isinstance(t["pr"], str) and t["pr"].startswith(OWNER_URLS if reveal else PUBLIC_URLS)), "task pr")
         need(isinstance(t.get("updated"), str) and ZULU.match(t["updated"]), "task updated")
     words = [a["name"] for a in doc["agents"]] + [a["now"] or "" for a in doc["agents"]] \
         + [r["text"] for a in doc["agents"] for r in a["recent"]] \
         + [t["title"] for t in doc["tasks"]] + [t["waitsText"] for t in doc["tasks"]]
-    pattern = re.compile(DENY_BASE + ("|" + deny.pattern if deny else ""), re.IGNORECASE)
-    need(not any(pattern.search(w) for w in words), "a private term would be published")
+    if not reveal:      # the board sits behind Access (Petter only); the root copy may go public
+        pattern = re.compile(DENY_BASE + ("|" + deny.pattern if deny else ""), re.IGNORECASE)
+        need(not any(pattern.search(w) for w in words), "a private term would be published")
     need(not re.search(r"\$\s?\d|cents|usd", json.dumps(doc), re.IGNORECASE), "a money amount would be published")
 
 
@@ -306,13 +321,16 @@ def do_status(a):
     since = iso(now - dt.timedelta(days=14))
     comments = http(f"{board}/issues/comments?since={since}&per_page=100", ghtoken) or []
     key = (http(a.openrouter.rstrip("/") + "/key", orkey) or {}).get("data") or {}
-    doc = build(now, agents, issues, comments, key, model, load_deny(a.secrets_dir))
+    deny = load_deny(a.secrets_dir)
+    doc = build(now, agents, issues, comments, key, model, deny)
     data = (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode()
-    write_atomic(Path(a.site_dir) / "status.json", data)
+    write_atomic(Path(a.site_dir) / "status.json", data)            # redacted: may be public one day
+    full = build(now, agents, issues, comments, key, model, deny, reveal=True)
+    board_data = (json.dumps(full, ensure_ascii=False, indent=2) + "\n").encode()
     page, sample = board_assets(a.repo_root)
     board_dir = Path(a.site_dir) / "board"
-    write_atomic(board_dir / "board.json", data)          # what the waits page polls
-    write_atomic(board_dir / "status.json", data)         # kept: the placeholder page reads this
+    write_atomic(board_dir / "board.json", board_data)    # what the waits page polls: behind Access, real titles
+    write_atomic(board_dir / "status.json", board_data)   # kept: the placeholder page reads this
     if sample is not None:
         write_atomic(board_dir / "board-sample.json", sample)     # the page's own fallback data
     write_atomic(board_dir / "index.html", page)

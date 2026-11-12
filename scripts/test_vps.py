@@ -1293,6 +1293,25 @@ class TestHq(Base):
         for leak in ("private errand", "secret-garden", "Morning ops", "$"):
             self.assertNotIn(leak, raw)
 
+    def test_the_board_behind_access_shows_real_titles_while_the_root_copy_stays_redacted(self):
+        self.board()
+        self.assertEqual(self.run_hq("status")[0], 0)          # no deny file at all
+        root = self.status()
+        self.assertEqual({t["title"] for t in root["tasks"]}, {"On a task", "On a private task"})
+        for name in ("board.json", "status.json"):
+            board = json.loads((self.t / "site" / "board" / name).read_text())
+            titles = {t["title"] for t in board["tasks"]}
+            self.assertIn("Fix the crew page layout", titles)
+            self.assertIn("Look at private errand", titles)         # Petter sees his own private tasks
+            self.assertNotIn("On a task", titles)
+            fix = next(t for t in board["tasks"] if t["title"] == "Fix the crew page layout")
+            self.assertTrue(fix["url"].startswith("https://github.com/petterfranzen/section9-hq/issues/"))
+            self.assertEqual(self.agent(board, "Batou")["now"], "Fix the crew page layout")
+            self.assertNotIn("$", json.dumps(board))                # still no money amounts
+        raw = json.dumps(root)
+        for leak in ("private errand", "crew page layout", "secret-garden"):
+            self.assertNotIn(leak, raw)
+
     def test_without_a_deny_file_task_titles_are_not_published(self):
         self.board()
         self.assertEqual(self.run_hq("status")[0], 0)
@@ -1302,9 +1321,9 @@ class TestHq(Base):
         self.board()
         self.assertEqual(self.run_hq("status")[0], 0)
         site = self.t / "site"
-        live = (site / "status.json").read_text()
-        self.assertEqual((site / "board" / "board.json").read_text(), live)     # what the waits page polls
-        self.assertEqual((site / "board" / "status.json").read_text(), live)    # the placeholder's feed
+        board = (site / "board" / "board.json").read_text()                    # what the waits page polls
+        self.assertEqual(set(json.loads(board)), set(json.loads((site / "status.json").read_text())))
+        self.assertEqual((site / "board" / "status.json").read_text(), board)   # the placeholder's feed
         self.assertEqual((site / "board" / "index.html").read_bytes(), (ROOT / "vps" / "board" / "index.html").read_bytes())
         self.assertEqual((site / "board" / "board-sample.json").read_bytes(),
                          (ROOT / "vps" / "board" / "board-sample.json").read_bytes())
