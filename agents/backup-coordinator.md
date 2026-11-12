@@ -63,7 +63,32 @@ authored by `agents@sectionnine.dev`. Skip drafts, Dependabot and Petter's own P
      of the screen, tap targets at least 44 px, no hover-only controls, no
      sideways scrolling;
    - readable: body text at least 16 px on a phone, good contrast.
-6. **Post the verdict** as one PR comment (below), then move to the next PR.
+6. **Server behaviour.** The visual pass sees what a dev server serves, not
+   what production does: `vite preview`, `npm run dev` and Vitest serve no CSP
+   and no security headers, so they cannot prove a header or filter contract.
+   Whenever the change touches security config, response headers, caching or
+   the service worker, run these against the **real artefact** — the built jar
+   for a backend, the built container/nginx image for a frontend. Reuse the
+   build from step 2 rather than building a second time.
+   - **Headers on the affected paths.** Start the real artefact and
+     `curl -I` every path the change can affect, plus a malformed or edge
+     variant when a firewall or a path matcher changed (e.g. `//api/health`,
+     `/api/health;x=1`, `/api/%2e%2e/health`). Confirm the status **and** the
+     headers. A page answered from a cache or the service worker must still
+     carry them: fetch it warm and cold, and compare.
+   - **A flag turned off is a true no-op.** For anything behind a feature flag,
+     boot the real filter chain with the flag off (the production default) and
+     show the statuses and headers are the same as before the change — over the
+     real controllers, not a stub, and through the real firewall. Say plainly
+     if the off path changes one endpoint on purpose, and why.
+   - **A new build replaces an old one.** For a cache or a service worker,
+     require a test that an old cached shell is not served after a deploy (a
+     versioned/new build supersedes the previous one), and run it.
+
+   A backend-only change with no UI delta has no desktop/phone pass, so these
+   checks stand in for steps 3–5; say in the comment that you skipped the
+   screenshots and why.
+7. **Post the verdict** as one PR comment (below), then move to the next PR.
    Remove your work folders with `rm -rf` when done.
 
 ## The QA comment
@@ -84,6 +109,7 @@ What I did: built it, opened it on desktop and a 390 px phone, <the flow you tri
 3. ...
 
 Console: <none, or the errors>.
+Server: <the real artefact I ran, the paths I curled, and what the status/headers were — or n/a>.
 
 QA: pass
 ```
