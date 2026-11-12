@@ -277,8 +277,8 @@ apply() {
     # Leftover Impeccable skill on the Hermes volume (see install.sh); idempotent.
     docker compose -f "$REPO_DIR/vps/compose.yaml" exec -T hermes rm -rf /opt/data/skills/impeccable || return 1
   fi
-  if grep -qE '^vps/(systemd/|install-units\.sh)' <<<"$changed"; then
-    log "re-installing systemd units"
+  if grep -qE '^vps/(apt/|systemd/|install-units\.sh)' <<<"$changed"; then
+    log "re-installing systemd units and the apt drop-in"
     "$REPO_DIR/vps/install-units.sh" || return 1
   fi
 }

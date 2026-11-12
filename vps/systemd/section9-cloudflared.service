@@ -1,0 +1,15 @@
+[Unit]
+Description=Section 9 patch rule: upgrade cloudflared only once its release is 24 h old
+Documentation=https://github.com/petterfranzen/agent-manager/blob/main/docs/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/agent-manager/vps/cloudflared-patch.sh
+TimeoutStartSec=5min
+Nice=10
+# apt and dpkg write across the filesystem, so unlike the read-only units this one
+# carries no ProtectSystem/ReadOnlyPaths hardening; the script itself is small and
+# pinned like every other guarded path.
+StateDirectory=section9

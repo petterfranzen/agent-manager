@@ -278,6 +278,5 @@ its status page.
 
 ## Open items
 
-- A 24 h delay on unattended-upgrades for cloudflared (patch rule).
 - OpenCode as the coder's runtime, after a week of data.
 - SSH from the CachyOS desktop (the laptop attempt failed).

@@ -739,6 +739,108 @@ class TestInstall(unittest.TestCase):
             self.assertIn(timer.name, units)
 
 
+class TestCloudflaredPatch(unittest.TestCase):
+    """vps/cloudflared-patch.sh: hold a cloudflared release for 24 h (patch rule)."""
+
+    DELAY = 24 * 3600
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.t = Path(self.tmp.name)
+        self.bin = self.t / "bin"
+        self.bin.mkdir()
+        self.state = self.t / "state"
+        self.apt_log = self.t / "apt.log"
+        self._stub("dpkg-query", 'printf "%s\\n" "${STUB_INSTALLED:-}"')
+        self._stub("apt-cache",
+                   'printf "cloudflared:\\n  Installed: %s\\n  Candidate: %s\\n" '
+                   '"${STUB_INSTALLED:-}" "${STUB_CANDIDATE:-}"')
+        self._stub("apt-get", f'printf "%s\\n" "$*" >>"{self.apt_log}"')
+        self.env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}",
+                    "S9_STATE_DIR": str(self.state)}
+
+    def _stub(self, name, body):
+        p = self.bin / name
+        p.write_text("#!/bin/sh\n" + body + "\n")
+        p.chmod(0o755)
+
+    def run_script(self, *args, installed="1.0", candidate="2.0"):
+        env = {**self.env, "STUB_INSTALLED": installed, "STUB_CANDIDATE": candidate}
+        return subprocess.run(["bash", str(ROOT / "vps" / "cloudflared-patch.sh"), *args],
+                              env=env, capture_output=True, text=True)
+
+    def stamp(self):
+        return self.state / "cloudflared-candidate"
+
+    def age_to(self, hours):
+        self.stamp().write_text(f"2.0 {int(time.time()) - hours * 3600}\n")
+
+    def test_a_new_release_is_recorded_and_held(self):
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("holding it for 24 h", p.stdout)
+        self.assertEqual(self.stamp().read_text().split()[0], "2.0")
+        self.assertFalse(self.apt_log.exists(), "nothing may be installed on first sight")
+
+    def test_a_release_seen_for_24h_is_installed(self):
+        self.run_script()
+        self.age_to(25)
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("upgraded to 2.0", p.stdout)
+        self.assertIn("--only-upgrade", self.apt_log.read_text())
+        self.assertFalse(self.stamp().exists())
+
+    def test_a_release_younger_than_24h_is_held(self):
+        self.run_script()
+        self.age_to(1)
+        p = self.run_script()
+        self.assertIn("holding 2.0", p.stdout)
+        self.assertFalse(self.apt_log.exists())
+
+    def test_now_lifts_the_delay(self):
+        self.run_script()                       # a fresh candidate, seen only now
+        p = self.run_script("--now")
+        self.assertIn("upgraded to 2.0", p.stdout)
+        self.assertIn("--only-upgrade", self.apt_log.read_text())
+
+    def test_dry_run_changes_nothing(self):
+        self.run_script()
+        self.age_to(25)
+        before = self.stamp().read_text()
+        p = self.run_script("--dry-run")
+        self.assertIn("would upgrade 1.0 -> 2.0", p.stdout)
+        self.assertFalse(self.apt_log.exists())
+        self.assertEqual(self.stamp().read_text(), before)
+
+    def test_up_to_date_is_a_no_op(self):
+        p = self.run_script(installed="2.0", candidate="2.0")
+        self.assertIn("up to date", p.stdout)
+        self.assertFalse(self.apt_log.exists())
+
+    def test_status_only_reports(self):
+        self.run_script()
+        self.age_to(3)
+        p = self.run_script("--status")
+        self.assertIn("candidate 2.0", p.stdout)
+        self.assertIn("seen 3 h ago", p.stdout)
+        self.assertFalse(self.apt_log.exists())
+        self.assertTrue(self.stamp().exists())
+
+    def test_without_a_candidate_it_fails_closed(self):
+        p = self.run_script(candidate="(none)")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("no candidate", p.stderr)
+
+    def test_the_timer_and_the_apt_drop_in_are_installed(self):
+        units = (ROOT / "vps" / "install-units.sh").read_text()
+        self.assertIn("section9-cloudflared.timer", units)
+        self.assertIn("apt/52section9-cloudflared", units)
+        drop = (ROOT / "vps" / "apt" / "52section9-cloudflared").read_text()
+        self.assertIn("Unattended-Upgrade::Package-Blacklist", drop)
+        self.assertIn('"cloudflared";', drop)
+
+
 class TestSync(unittest.TestCase):
     """vps/sync.sh against a local origin, a stub CI reply and fake docker."""
 
