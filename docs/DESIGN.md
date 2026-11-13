@@ -242,8 +242,8 @@ agent's writes (Ishikawa, SEC-19).
 
 At 01:00 Stockholm, a Paperclip routine creates a task for the nightly builder:
 
-1. Read `ghost-in-the-machine/LOG.md`, the history of past nights (language,
-   idea, verdict, Petter's feedback), and pick a language and app idea not done
+1. Run `python3 scripts/night-log.py` in `ghost-in-the-machine`, the history of past nights (language,
+   idea, verdict, Petter's feedback, one `night.json` per night), and pick a language and app idea not done
    before. Relaxing, enjoyable apps are the default theme.
 2. Sparse-clone: `git clone --filter=blob:none --sparse`, then
    `git sparse-checkout set <night-folder>`.
@@ -253,10 +253,10 @@ At 01:00 Stockholm, a Paperclip routine creates a task for the nightly builder:
 4. Open a PR with a summary and desktop and phone screenshots from `shoot`.
    Togusa's 05:40 QA sweep reviews it; after `QA: pass` the coordinator
    reviews it, merges if it's sound, and sends Petter the preview link.
-5. Append the night to `LOG.md` and stop. If it runs out of budget, it stops
+5. Write the night's `night.json` and stop. If it runs out of budget, it stops
    and says why.
 
-Petter's feedback goes into `LOG.md` and shapes the following nights.
+Petter's feedback goes into the night's `night.json` verdict (wishes into `LOG.md`) and shapes the following nights.
 
 ## Coordinator interface
 
