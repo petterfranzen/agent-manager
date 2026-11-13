@@ -13,8 +13,9 @@ task titles, issue and PR links and "Waits on" notes (Petter, 12 Nov: a board of
 cards tells him nothing). The site-root status.json is kept for a later public crew page and
 stays allowlisted: an issue labelled `private`, or whose title matches a term in
 <secrets-dir>/crew-deny.txt (one per line), shows as "On a private task", and without that file
-only agent states and "On a task" are published. Neither copy carries a money amount, only a
-percentage. status.json keeps the format of crew/status.json in ghost-in-the-machine,
+only agent states and "On a task" are published. Only the board copy carries money
+amounts (month, cap, today, per-agent cap and last week's spend); the root copy has a
+percentage only. status.json keeps the format of crew/status.json in ghost-in-the-machine,
 plus a `model` field. Standard library only. Secrets (never printed):
   GH_TOKEN             in <secrets-dir>/sandbox.env
   OPENROUTER_API_KEY   in <secrets-dir>/hermes.env
@@ -117,13 +118,49 @@ def model_of(config_text):
     return m.group(1) if m else None
 
 
-def build(now, agents, issues, comments, key, model, deny, reveal=False):
+def usd(value):
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def capacity(body):
+    """The "Last 7 days by agent" table in the body of section9-hq #80 ("Capacity"), rows
+    `| Name | runs | busy h | $ | $/h | timeouts | timeout h | credits |`. Returns
+    ({lower-case name: week}, the "As of ... UTC" time as ISO or None)."""
+    weeks, seen, in_table = {}, False, False
+    for line in (body or "").splitlines():
+        line = line.strip()
+        if not seen:
+            seen = "last 7 days by agent" in line.lower()
+            continue
+        if not line.startswith("|"):
+            if in_table or line.startswith("#"):
+                break
+            continue
+        in_table = True
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        nums = [re.sub(r"[$,\s]", "", c) for c in cells[1:6]]
+        try:
+            runs, busy, spend, _, timeouts = (float(n) for n in nums)
+        except ValueError:
+            continue            # the header and the --- row
+        weeks[re.sub(r"[*`]", "", cells[0]).strip().lower()] = {
+            "runs": int(runs), "busyH": round(busy, 1), "spendUsd": round(spend, 2), "timeouts": int(timeouts)}
+    m = re.search(r"As of\s+(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d)\s*UTC", body or "")
+    return weeks, (m.group(1) + "T" + m.group(2) + ":00Z" if m else None)
+
+
+def build(now, agents, issues, comments, key, model, deny, reveal=False, weeks=None, as_of=None):
     """The status document. `deny` is a compiled regex, or None when there is no deny file.
 
     `reveal` builds the board's own copy (board/board.json): the board is served only behind the
     Cloudflare Access app that admits Petter alone (RUNBOOK), so it shows real titles, issue links,
     PR links in any of Petter's repos and the "Waits on" notes. The site-root status.json, kept for a
-    later public crew page, is always built with reveal=False and stays redacted."""
+    later public crew page, is always built with reveal=False and stays redacted. Only the board
+    copy carries dollar amounts (budget, per-agent cap and last week's spend); `weeks` and `as_of`
+    come from capacity()."""
     labels = lambda i: {l["name"] for l in i.get("labels", [])}
     base = re.compile(DENY_BASE, re.IGNORECASE)
     if reveal:
@@ -171,7 +208,7 @@ def build(now, agents, issues, comments, key, model, deny, reveal=False):
                 if recent and item["text"] == PRIVATE == recent[-1]["text"]:
                     continue
                 recent.append(item)
-        out.append({
+        entry = {
             "name": r["name"],
             "role": r.get("title") or r.get("role") or "",
             "state": "working" if working else "idle",
@@ -179,7 +216,16 @@ def build(now, agents, issues, comments, key, model, deny, reveal=False):
             "lastActiveAt": iso(newest[0]["updated_at"]) if newest else None,
             "budgetPercent": 0,       # per-agent spend isn't tracked on the VPS
             "recent": recent[:RECENT],
-        })
+        }
+        if reveal:
+            rpd, cents = r.get("runs_per_day"), r.get("budget_monthly_cents")
+            entry.update({
+                "model": str(r["model"]).split("/", 1)[-1] if r.get("model") else "DeepSeek (default)",
+                "runsPerDay": rpd if isinstance(rpd, int) and rpd >= 0 else None,
+                "budgetMonthlyUsd": usd(cents / 100) if isinstance(cents, (int, float)) else None,
+                "week": (weeks or {}).get(r["name"].lower()),
+            })
+        out.append(entry)
     tasks = []
     for i in issues:
         if "pull_request" in i:
@@ -230,6 +276,10 @@ def build(now, agents, issues, comments, key, model, deny, reveal=False):
         "agents": out,
         "tasks": tasks,
     }
+    if reveal:
+        doc["budget"].update({"usedUsd": usd(used), "capUsd": usd(cap), "leftUsd": usd(key.get("limit_remaining")),
+                              "todayUsd": usd(key.get("usage_daily"))})
+        doc["capacityAsOf"] = as_of
     validate(doc, deny, reveal)
     return doc
 
@@ -239,10 +289,22 @@ def validate(doc, deny, reveal=False):
         if not ok:
             raise Failure(f"status.json invalid: {what}")
 
-    need(set(doc) == {"generatedAt", "budget", "model", "agents", "tasks"} and ZULU.match(doc["generatedAt"]), "top level")
+    top = {"generatedAt", "budget", "model", "agents", "tasks"} | ({"capacityAsOf"} if reveal else set())
+    need(set(doc) == top and ZULU.match(doc["generatedAt"]), "top level")
     need(isinstance(doc["budget"]["usedPercent"], int) and doc["budget"]["usedPercent"] >= 0, "budget")
+    money = ("usedUsd", "capUsd", "leftUsd", "todayUsd")
+    need(set(doc["budget"]) == {"usedPercent", "month"} | (set(money) if reveal else set()), "budget keys")
+    if reveal:
+        need(all(doc["budget"][k] is None or isinstance(doc["budget"][k], float) for k in money), "budget amounts")
+        need(doc["capacityAsOf"] is None or ZULU.match(doc["capacityAsOf"]), "capacityAsOf")
     for a in doc["agents"]:
         need(a["state"] in ("working", "idle") and (a["lastActiveAt"] is None or ZULU.match(a["lastActiveAt"])), "agent")
+        need(set(a) == {"name", "role", "state", "now", "lastActiveAt", "budgetPercent", "recent"}
+             | ({"model", "runsPerDay", "budgetMonthlyUsd", "week"} if reveal else set()), "agent keys")
+        if reveal:
+            need(isinstance(a["model"], str) and (a["runsPerDay"] is None or isinstance(a["runsPerDay"], int)), "agent model/runs")
+            need(a["budgetMonthlyUsd"] is None or isinstance(a["budgetMonthlyUsd"], float), "agent budget")
+            need(a["week"] is None or set(a["week"]) == {"runs", "busyH", "spendUsd", "timeouts"}, "agent week")
         for r in a["recent"]:
             need(ZULU.match(r["at"]) and ("url" not in r or r["url"].startswith(OWNER_URLS if reveal else PUBLIC_URLS)), "recent item")
     for t in doc["tasks"]:
@@ -261,7 +323,8 @@ def validate(doc, deny, reveal=False):
     if not reveal:      # the board sits behind Access (Petter only); the root copy may go public
         pattern = re.compile(DENY_BASE + ("|" + deny.pattern if deny else ""), re.IGNORECASE)
         need(not any(pattern.search(w) for w in words), "a private term would be published")
-    need(not re.search(r"\$\s?\d|cents|usd", json.dumps(doc), re.IGNORECASE), "a money amount would be published")
+    if not reveal:      # dollar amounts are for the board copy only
+        need(not re.search(r"\$\s?\d|cents|usd", json.dumps(doc), re.IGNORECASE), "a money amount would be published")
 
 
 def write_atomic(path, data):
@@ -321,11 +384,15 @@ def do_status(a):
     since = iso(now - dt.timedelta(days=14))
     comments = http(f"{board}/issues/comments?since={since}&per_page=100", ghtoken) or []
     key = (http(a.openrouter.rstrip("/") + "/key", orkey) or {}).get("data") or {}
+    try:
+        weeks, as_of = capacity((http(f"{board}/issues/80", ghtoken) or {}).get("body"))     # "Capacity"
+    except (Failure, AttributeError):
+        weeks, as_of = {}, None      # the board still builds, without the week figures
     deny = load_deny(a.secrets_dir)
     doc = build(now, agents, issues, comments, key, model, deny)
     data = (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode()
     write_atomic(Path(a.site_dir) / "status.json", data)            # redacted: may be public one day
-    full = build(now, agents, issues, comments, key, model, deny, reveal=True)
+    full = build(now, agents, issues, comments, key, model, deny, reveal=True, weeks=weeks, as_of=as_of)
     board_data = (json.dumps(full, ensure_ascii=False, indent=2) + "\n").encode()
     page, sample = board_assets(a.repo_root)
     board_dir = Path(a.site_dir) / "board"

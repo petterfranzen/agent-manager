@@ -3,7 +3,11 @@
   "sample": true,
   "budget": {
     "usedPercent": 37,
-    "month": "2026-11"
+    "month": "2026-11",
+    "usedUsd": 22.2,
+    "capUsd": 60.0,
+    "leftUsd": 37.8,
+    "todayUsd": 0.31
   },
   "model": "deepseek/deepseek-v4.1-flash",
   "agents": [
@@ -28,16 +32,32 @@
       "role": "Coder",
       "state": "working",
       "now": "Fixing the flaky touch handler",
-      "model": "deepseek/deepseek-v4.1-flash",
-      "lastActiveAt": "2026-11-02T09:26:00Z"
+      "model": "DeepSeek (default)",
+      "lastActiveAt": "2026-11-02T09:26:00Z",
+      "runsPerDay": 6,
+      "budgetMonthlyUsd": 4.0,
+      "week": {
+        "runs": 31,
+        "busyH": 12.5,
+        "spendUsd": 3.4,
+        "timeouts": 2
+      }
     },
     {
       "name": "Tachikoma",
       "role": "Nightly builder",
       "state": "working",
       "now": "Building tonight's app",
-      "model": "deepseek/deepseek-v4.1-flash",
-      "lastActiveAt": "2026-11-02T08:50:00Z"
+      "model": "DeepSeek (default)",
+      "lastActiveAt": "2026-11-02T08:50:00Z",
+      "runsPerDay": 0,
+      "budgetMonthlyUsd": 10.0,
+      "week": {
+        "runs": 7,
+        "busyH": 6.1,
+        "spendUsd": 1.85,
+        "timeouts": 0
+      }
     },
     {
       "name": "Togusa",
@@ -45,7 +65,15 @@
       "state": "blocked",
       "now": "Waiting on two PRs to review",
       "model": "gpt-5-codex",
-      "lastActiveAt": "2026-11-02T08:05:00Z"
+      "lastActiveAt": "2026-11-02T08:05:00Z",
+      "runsPerDay": 8,
+      "budgetMonthlyUsd": 3.0,
+      "week": {
+        "runs": 24,
+        "busyH": 5.2,
+        "spendUsd": 0.9,
+        "timeouts": 1
+      }
     },
     {
       "name": "Ishikawa",
@@ -53,15 +81,26 @@
       "state": "idle",
       "now": null,
       "model": "claude-sonnet-4.5",
-      "lastActiveAt": "2026-11-01T14:00:00Z"
+      "lastActiveAt": "2026-11-01T14:00:00Z",
+      "runsPerDay": 2,
+      "budgetMonthlyUsd": 5.0,
+      "week": {
+        "runs": 9,
+        "busyH": 3.3,
+        "spendUsd": 1.2,
+        "timeouts": 0
+      }
     },
     {
       "name": "Saito",
       "role": "Ops",
       "state": "paused",
       "now": null,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "lastActiveAt": "2026-11-01T06:30:00Z"
+      "model": "DeepSeek (default)",
+      "lastActiveAt": "2026-11-01T06:30:00Z",
+      "runsPerDay": 2,
+      "budgetMonthlyUsd": 3.0,
+      "week": null
     }
   ],
   "tasks": [
@@ -199,5 +238,6 @@
       "url": "https://github.com/petterfranzen/section9-hq/issues/113",
       "updated": "2026-11-02T07:15:00Z"
     }
-  ]
+  ],
+  "capacityAsOf": "2026-11-02T09:05:00Z"
 }

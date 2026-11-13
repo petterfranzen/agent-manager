@@ -1312,6 +1312,56 @@ class TestHq(Base):
         for leak in ("private errand", "crew page layout", "secret-garden"):
             self.assertNotIn(leak, raw)
 
+    CAPACITY = (
+        "# Capacity\n\nAs of 2026-11-13 09:05 UTC\n\n**Last 7 days by agent**\n\n"
+        "| Agent | runs | busy h | $ | $/h | timeouts | timeout h | credits |\n|---|---|---|---|---|---|---|---|\n"
+        "| Batou | 31 | 12.5 | $3.40 | $0.27 | 2 | 1.3 | ok |\n"
+        "| Togusa | 9 | 2.0 | $0.55 | $0.28 | 0 | 0.0 | ok |\n\n"
+        "**Last 7 days by agent and model**\n\n| Agent | Model | runs |\n|---|---|---|\n| Ishikawa | x | 99 |\n")
+
+    def run_board(self, capacity=True):
+        self.board()
+        if capacity:
+            self.stub.next = 80
+            self.stub.issues[self.stub.add(["status:done"], "Capacity")]["body"] = self.CAPACITY
+        self.stub.key = {"data": {"limit": 60, "limit_remaining": 23.756, "usage_monthly": 36.244, "usage_daily": 0.311}}
+        self.assertEqual(self.run_hq("status")[0], 0)
+        return json.loads((self.t / "site" / "board" / "board.json").read_text())
+
+    def test_the_board_copy_carries_the_budget_in_dollars_and_each_agents_week(self):
+        board = self.run_board()
+        self.assertEqual(board["budget"], {"usedPercent": 60, "month": board["budget"]["month"], "usedUsd": 36.24,
+                                           "capUsd": 60.0, "leftUsd": 23.76, "todayUsd": 0.31})
+        self.assertEqual(board["capacityAsOf"], "2026-11-13T09:05:00Z")
+        batou, tachi = self.agent(board, "Batou"), self.agent(board, "Tachikoma")
+        self.assertEqual(batou["week"], {"runs": 31, "busyH": 12.5, "spendUsd": 3.4, "timeouts": 2})
+        self.assertEqual((batou["runsPerDay"], batou["budgetMonthlyUsd"], batou["model"]), (6, 4.0, "DeepSeek (default)"))
+        self.assertEqual((tachi["runsPerDay"], tachi["budgetMonthlyUsd"]), (0, 10.0))     # 0 = no run cap
+        self.assertIsNone(tachi["week"])
+        self.assertIsNone(self.agent(board, "Ishikawa")["week"])        # the by-model table is ignored
+
+    def test_the_root_copy_gets_no_new_keys(self):
+        self.run_board()
+        root = self.status()
+        self.assertEqual(set(root), {"generatedAt", "budget", "model", "agents", "tasks"})
+        self.assertEqual(root["budget"], {"usedPercent": 60, "month": root["budget"]["month"]})
+        for a in root["agents"]:
+            self.assertEqual(set(a), {"name", "role", "state", "now", "lastActiveAt", "budgetPercent", "recent"})
+        self.assertNotRegex(json.dumps(root), r"(?i)usd|\$|cents")
+
+    def test_a_missing_capacity_issue_leaves_the_weeks_null_and_the_run_succeeds(self):
+        board = self.run_board(capacity=False)          # the stub answers 404 for #80
+        self.assertIsNone(board["capacityAsOf"])
+        self.assertTrue(all(a["week"] is None for a in board["agents"]))
+        self.assertEqual(board["budget"]["usedUsd"], 36.24)
+
+    def test_a_key_without_amounts_gives_null_dollars(self):
+        self.board()
+        self.stub.key = {"data": {"usage_monthly": 5}}
+        self.assertEqual(self.run_hq("status")[0], 0)
+        budget = json.loads((self.t / "site" / "board" / "board.json").read_text())["budget"]
+        self.assertEqual((budget["usedUsd"], budget["capUsd"], budget["leftUsd"], budget["todayUsd"]), (5.0, None, None, None))
+
     def test_without_a_deny_file_task_titles_are_not_published(self):
         self.board()
         self.assertEqual(self.run_hq("status")[0], 0)
@@ -1322,7 +1372,7 @@ class TestHq(Base):
         self.assertEqual(self.run_hq("status")[0], 0)
         site = self.t / "site"
         board = (site / "board" / "board.json").read_text()                    # what the waits page polls
-        self.assertEqual(set(json.loads(board)), set(json.loads((site / "status.json").read_text())))
+        self.assertEqual(set(json.loads(board)), set(json.loads((site / "status.json").read_text())) | {"capacityAsOf"})
         self.assertEqual((site / "board" / "status.json").read_text(), board)   # the placeholder's feed
         self.assertEqual((site / "board" / "index.html").read_bytes(), (ROOT / "vps" / "board" / "index.html").read_bytes())
         self.assertEqual((site / "board" / "board-sample.json").read_bytes(),
@@ -1905,7 +1955,7 @@ class TestDashboard(unittest.TestCase):
         self.assertIsNotNone(m, "index.html has no inline #board-sample block")
         self.assertEqual(json.loads(m.group(1)), sample)          # the offline copy has not drifted
         self.assertEqual(sample.get("sample"), True)
-        self.assertEqual(set(sample) - {"sample"}, {"generatedAt", "budget", "model", "agents", "tasks"})
+        self.assertEqual(set(sample) - {"sample"}, {"generatedAt", "budget", "model", "agents", "tasks", "capacityAsOf"})
         for needle in ("fetch('./board.json'", "POLL_MS = 60000", "START_LIMIT = 3", "prefers-reduced-motion",
                        "max-width:700px", "prefers-color-scheme", 'class="column waits-', 'class="pr"',
                        'id="lanes"', 'id="start-here"', 'id="chips"', 'id="columns"', 'id="filter-line"'):

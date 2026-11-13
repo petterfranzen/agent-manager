@@ -176,6 +176,12 @@ h2{font-family:var(--font-display);font-size:1.05rem;margin:0;text-transform:upp
 .lane-foot{display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:.7rem;min-width:0}
 .lane-foot .model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lane-foot .last{white-space:nowrap}
+.lane-sub{color:var(--muted);font-size:.7rem;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.budget{position:relative;z-index:1;margin:clamp(14px,2.4vw,28px) clamp(14px,2.4vw,28px) 0;padding:10px 12px;background:var(--panel);border:1px solid var(--line);font-size:.8rem;display:flex;flex-direction:column;gap:6px}
+.budget b{color:var(--phos);font-weight:400}
+.budget .asof{color:var(--muted);font-size:.7rem}
+.budget .bar{height:6px;background:var(--bg);border:1px solid var(--line)}
+.budget .bar i{display:block;height:100%;background:var(--phos)}
 .start-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
 .chip{
@@ -279,6 +285,7 @@ a.issue:hover{text-decoration:underline}
   </div>
   <div class="meta" id="meta">loading…</div>
 </header>
+<div class="budget" id="budget" hidden></div>
 <main class="wrap">
   <section id="agents" aria-labelledby="agents-head">
     <div class="section-head">
@@ -309,7 +316,11 @@ a.issue:hover{text-decoration:underline}
   "sample": true,
   "budget": {
     "usedPercent": 37,
-    "month": "2026-11"
+    "month": "2026-11",
+    "usedUsd": 22.2,
+    "capUsd": 60.0,
+    "leftUsd": 37.8,
+    "todayUsd": 0.31
   },
   "model": "deepseek/deepseek-v4.1-flash",
   "agents": [
@@ -334,16 +345,32 @@ a.issue:hover{text-decoration:underline}
       "role": "Coder",
       "state": "working",
       "now": "Fixing the flaky touch handler",
-      "model": "deepseek/deepseek-v4.1-flash",
-      "lastActiveAt": "2026-11-02T09:26:00Z"
+      "model": "DeepSeek (default)",
+      "lastActiveAt": "2026-11-02T09:26:00Z",
+      "runsPerDay": 6,
+      "budgetMonthlyUsd": 4.0,
+      "week": {
+        "runs": 31,
+        "busyH": 12.5,
+        "spendUsd": 3.4,
+        "timeouts": 2
+      }
     },
     {
       "name": "Tachikoma",
       "role": "Nightly builder",
       "state": "working",
       "now": "Building tonight's app",
-      "model": "deepseek/deepseek-v4.1-flash",
-      "lastActiveAt": "2026-11-02T08:50:00Z"
+      "model": "DeepSeek (default)",
+      "lastActiveAt": "2026-11-02T08:50:00Z",
+      "runsPerDay": 0,
+      "budgetMonthlyUsd": 10.0,
+      "week": {
+        "runs": 7,
+        "busyH": 6.1,
+        "spendUsd": 1.85,
+        "timeouts": 0
+      }
     },
     {
       "name": "Togusa",
@@ -351,7 +378,15 @@ a.issue:hover{text-decoration:underline}
       "state": "blocked",
       "now": "Waiting on two PRs to review",
       "model": "gpt-5-codex",
-      "lastActiveAt": "2026-11-02T08:05:00Z"
+      "lastActiveAt": "2026-11-02T08:05:00Z",
+      "runsPerDay": 8,
+      "budgetMonthlyUsd": 3.0,
+      "week": {
+        "runs": 24,
+        "busyH": 5.2,
+        "spendUsd": 0.9,
+        "timeouts": 1
+      }
     },
     {
       "name": "Ishikawa",
@@ -359,15 +394,26 @@ a.issue:hover{text-decoration:underline}
       "state": "idle",
       "now": null,
       "model": "claude-sonnet-4.5",
-      "lastActiveAt": "2026-11-01T14:00:00Z"
+      "lastActiveAt": "2026-11-01T14:00:00Z",
+      "runsPerDay": 2,
+      "budgetMonthlyUsd": 5.0,
+      "week": {
+        "runs": 9,
+        "busyH": 3.3,
+        "spendUsd": 1.2,
+        "timeouts": 0
+      }
     },
     {
       "name": "Saito",
       "role": "Ops",
       "state": "paused",
       "now": null,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "lastActiveAt": "2026-11-01T06:30:00Z"
+      "model": "DeepSeek (default)",
+      "lastActiveAt": "2026-11-01T06:30:00Z",
+      "runsPerDay": 2,
+      "budgetMonthlyUsd": 3.0,
+      "week": null
     }
   ],
   "tasks": [
@@ -505,7 +551,8 @@ a.issue:hover{text-decoration:underline}
       "url": "https://github.com/petterfranzen/section9-hq/issues/113",
       "updated": "2026-11-02T07:15:00Z"
     }
-  ]
+  ],
+  "capacityAsOf": "2026-11-02T09:05:00Z"
 }</script>
 <script>
 (function () {
@@ -538,6 +585,7 @@ a.issue:hover{text-decoration:underline}
   var chipsEl = document.getElementById('chips');
   var columnsEl = document.getElementById('columns');
   var metaEl = document.getElementById('meta');
+  var budgetEl = document.getElementById('budget');
   var filterLineEl = document.getElementById('filter-line');
   var liveEl = document.getElementById('live');
 
@@ -598,7 +646,10 @@ a.issue:hover{text-decoration:underline}
       var id = String(a.id || a.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
       var rec = {
         id: id, name: a.name || id, role: a.role || '', state: stateOf(a.state),
-        task: a.now || '', model: a.model || raw.model || '—', lastActiveAt: a.lastActiveAt || null
+        task: a.now || '', model: a.model || raw.model || '—', lastActiveAt: a.lastActiveAt || null,
+        runsPerDay: typeof a.runsPerDay === 'number' ? a.runsPerDay : null,
+        capUsd: typeof a.budgetMonthlyUsd === 'number' ? a.budgetMonthlyUsd : null,
+        week: a.week && typeof a.week === 'object' ? a.week : null
       };
       records[id] = rec;
       records[String(a.name || '').toLowerCase()] = rec;
@@ -625,7 +676,8 @@ a.issue:hover{text-decoration:underline}
       var rec = records[r.id];
       if (rec) {
         return { id: r.id, name: r.name, role: rec.role || r.role, avatar: r.avatar,
-                 state: rec.state, task: rec.task, model: rec.model, lastActiveAt: rec.lastActiveAt };
+                 state: rec.state, task: rec.task, model: rec.model, lastActiveAt: rec.lastActiveAt,
+                 runsPerDay: rec.runsPerDay, capUsd: rec.capUsd, week: rec.week };
       }
       var mine = tasks.filter(function (t) { return t.agent === r.id; });
       var working = mine.filter(function (t) { return t.status === 'working'; })[0];
@@ -638,6 +690,7 @@ a.issue:hover{text-decoration:underline}
     return {
       generatedAt: raw.generatedAt || null,
       budget: raw.budget || null,
+      capacityAsOf: raw.capacityAsOf || null,
       model: raw.model || '—',
       sample: raw.sample === true,
       agents: agents,
@@ -699,6 +752,42 @@ a.issue:hover{text-decoration:underline}
     metaEl.innerHTML = bits.join(' <span aria-hidden="true">·</span> ');
   }
 
+  function money(n) { return '$' + Number(n).toFixed(2); }
+  function isNum(n) { return typeof n === 'number' && isFinite(n); }
+
+  // Only the board copy carries dollar amounts; without them the strip stays hidden.
+  function renderBudget(d) {
+    var b = d.budget;
+    if (!b || !isNum(b.usedUsd) || !isNum(b.capUsd)) { budgetEl.hidden = true; return; }
+    var bits = [money(b.usedUsd) + ' of ' + money(b.capUsd) + ' this month'];
+    if (isNum(b.leftUsd)) bits.push(money(b.leftUsd) + ' left');
+    if (isNum(b.todayUsd)) bits.push('today ' + money(b.todayUsd));
+    var pct = Math.max(0, Math.min(100, isNum(b.usedPercent) ? b.usedPercent : (b.capUsd ? 100 * b.usedUsd / b.capUsd : 0)));
+    var t = Date.parse(d.capacityAsOf || d.generatedAt || '');
+    var when = '';
+    if (isFinite(t)) {
+      try {
+        when = new Date(t).toLocaleString('sv-SE', { timeZone: 'Europe/Stockholm', year: 'numeric', month: '2-digit',
+          day: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' CET';
+      } catch (e) { when = ''; }
+    }
+    budgetEl.innerHTML = '<span><b>' + esc(bits[0]) + '</b>' + esc(bits.slice(1).map(function (x) { return ' \u00b7 ' + x; }).join('')) + '</span>' +
+      '<span class="bar" role="img" aria-label="' + esc(Math.round(pct)) + '% of the monthly cap used"><i style="width:' + pct + '%"></i></span>' +
+      (when ? '<span class="asof">as of ' + esc(when) + '</span>' : '');
+    budgetEl.hidden = false;
+  }
+
+  function laneSub(a) {
+    var bits = [];
+    if (a.runsPerDay != null) bits.push(a.runsPerDay === 0 ? 'no run cap' : a.runsPerDay + ' runs/day');
+    if (isNum(a.capUsd)) bits.push('cap ' + money(a.capUsd).replace(/\.00$/, '') + '/mo');
+    var line1 = (bits.length || a.week) ? [a.model].concat(bits).join(' \u00b7 ') : '';
+    var w = a.week;
+    var line2 = (w && isNum(w.runs)) ? '7d: ' + w.runs + ' runs \u00b7 ' + w.busyH + ' h \u00b7 ' + money(w.spendUsd) + ' \u00b7 ' + w.timeouts + ' timeouts' : '';
+    return (line1 ? '<span class="lane-sub" title="' + esc(line1) + '">' + esc(line1) + '</span>' : '') +
+      (line2 ? '<span class="lane-sub" title="' + esc(line2) + '">' + esc(line2) + '</span>' : '');
+  }
+
   function renderLanes(d) {
     lanesEl.innerHTML = d.agents.map(function (a) {
       var task = a.task ? esc(a.task) : 'No current task';
@@ -708,6 +797,7 @@ a.issue:hover{text-decoration:underline}
           '<span class="lane-id"><span class="name">' + esc(a.name) + '</span><span class="role">' + esc(a.role) + '</span></span>' +
           '<span class="state state-' + esc(a.state) + '"><span class="dot" aria-hidden="true"></span>' + esc(a.state) + '</span>' +
         '</span>' +
+        laneSub(a) +
         '<span class="lane-task' + (a.task ? '' : ' empty') + '">' + task + '</span>' +
         '<span class="lane-foot"><span class="model" title="' + esc(a.model) + '">' + esc(a.model) + '</span>' +
         '<span class="last" title="' + esc(a.lastActiveAt ? abs(a.lastActiveAt) : 'No activity recorded') + '">' +
@@ -791,6 +881,7 @@ a.issue:hover{text-decoration:underline}
   function render() {
     if (!state.data) return;
     renderMeta(state.data);
+    renderBudget(state.data);
     renderLanes(state.data);
     renderStart(state.data);
     renderChips(state.data);
