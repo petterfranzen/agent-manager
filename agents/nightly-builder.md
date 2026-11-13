@@ -114,10 +114,16 @@ you move back to DeepSeek.
    - `README.md`: the idea, the language and why, how to build and run, every
      interaction, a "How it was built" section, and what you'd do next;
    - `build.sh`: produces a static site in `dist/` with a `dist/index.html`;
-   - `dist/`, **committed**: Pages publishes it as is, and CI rebuilds it to check;
+   - `dist/`, **committed**: Pages publishes it as is. Run `git status --ignored`
+     in the night folder before you commit: a tool can drop its own `.gitignore`
+     into `dist/` (Fable did on 13 Nov) and leave files built but never committed.
+     CI's *Committed night loads* job serves the committed `dist/` untouched and
+     fails on any 404 or console error;
    - `mise.toml` if you used mise, so CI installs the same toolchain;
    - tests or a smoke check, if the language makes that easy.
-5. **Self-check with a browser** before you call it done. Playtest it:
+5. **Self-check with a browser** before you call it done, against what you
+   committed, not your build folder: after the commit, `git stash -u` (or a fresh
+   clone of the branch), then serve `dist/`. Playtest it:
    `shoot dist/ desktop.png` and `shoot dist/ phone.png --mobile` (390 px
    phone) give screenshots plus console errors, failed requests and sideways
    scrolling. Look at both and fix what's wrong. For more than a screenshot,
