@@ -1,12 +1,14 @@
 # vps/board — the waits page served at hq.sectionnine.dev/board
 
-`index.html` and `board-sample.json` are a byte-for-byte copy of `hq/board/` in
-ghost-in-the-machine:
+`index.html` and `board-sample.json` are a copy of `hq/board/` in
+ghost-in-the-machine, plus one local change (budget strip and per-agent budget/week lines, fed by
+the board copy of `board.json` only; to be upstreamed there). The commit and hashes below are the
+base commit and the current local hashes:
 
 - source: https://github.com/petterfranzen/ghost-in-the-machine, `hq/board/`
 - commit: 5643f3b47fb5abbd7614fdf3a7385b6cf1f98e1a (PR #18, "Build: waits board, one column per who a task waits on")
-- `index.html`        sha256 `b0682c5ea406c71b78c42a467a1840d925612a0b138d7b0562d9546303152c8e`
-- `board-sample.json` sha256 `3595bd11af76c03953e05e1ea79150a3134908ef49cb0220e036a7ebb0343fe3`
+- `index.html`        sha256 `8293834c50ed0853ce182abc0be65ac5da6c4b3e4bb89c56a9f61c4eebea0f04`
+- `board-sample.json` sha256 `e0dde6c539f876e4bf2b2bfe75ed32c1e6bedd27c8ca4024c4d8ae7f3f00da75`
 
 `vps/hq-status.py status` copies both into the folder the hq container serves (`board/`) and writes
 `board/board.json` beside them (the file the page polls). Nothing here is executed on the VPS: the
