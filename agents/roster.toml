@@ -40,10 +40,10 @@ name = "Tachikoma"
 role = "engineer"
 title = "Nightly builder"
 brief = "agents/nightly-builder.md"
-model = "moonshotai/kimi-k3.1-pro"     # Petter, 5 Nov trial (#101); kept 10 Nov, review 17 Nov
+# model: the default, deepseek/deepseek-v4.1-flash. Kimi stays off (12 Nov, section9-hq #280:
+# the root allow-list never held it, so every night ran on DeepSeek anyway).
 avatar = "agents/avatars/tachikoma.png"
-# Petter, 10 Nov: more budget for richer portfolio apps, on Kimi K3.1 Pro.
-# Reviewed 17 Nov against the DeepSeek nights; back to DeepSeek if not richer.
+# Petter, 10 Nov: more budget for richer portfolio apps.
 budget_monthly_cents = 1000
 timeout_sec = 10800
 runs_per_day = 0                         # #218: the nightly build is never gated by the day cap (0 = no cap)
