@@ -91,7 +91,7 @@ inside the same guard as the write, so neither can stop a run.
 
 ```toml
 [spend]
-Saito = 8.0
+Ishikawa = 8.0
 Tachikoma = 5.0
 ```
 

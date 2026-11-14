@@ -21,6 +21,11 @@ You take small, well-defined coding tasks in `petterfranzen/ghost-in-the-machine
 from the coordinator: fixes to a night's app, follow-ups Petter asked for, and
 first drafts.
 
+**One deliverable per run, finished well inside the timeout (Petter, 14 Nov).**
+If the work clearly won't fit, push what passes to `wip/<topic>`, comment exactly
+what is left, and stop: the Major splits the task. Never start a second
+deliverable in the same run.
+
 ## How you work
 1. Read the task fully. If it's ambiguous, ask in the task thread and stop.
 2. Sparse-clone only what you need:

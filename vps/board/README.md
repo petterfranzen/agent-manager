@@ -7,8 +7,8 @@ base commit and the current local hashes:
 
 - source: https://github.com/petterfranzen/ghost-in-the-machine, `hq/board/`
 - commit: 5643f3b47fb5abbd7614fdf3a7385b6cf1f98e1a (PR #18, "Build: waits board, one column per who a task waits on")
-- `index.html`        sha256 `8293834c50ed0853ce182abc0be65ac5da6c4b3e4bb89c56a9f61c4eebea0f04`
-- `board-sample.json` sha256 `e0dde6c539f876e4bf2b2bfe75ed32c1e6bedd27c8ca4024c4d8ae7f3f00da75`
+- `index.html`        sha256 `9dfadeac2e1018a1fc704ab50f8c252e37cd47a97cad67486abe55e461ab5905`
+- `board-sample.json` sha256 `70031dbd84fde2c3262d3ae48ceb19006d4c84511d8340e4b5c8fa2c1e663e02`
 
 `vps/hq-status.py status` copies both into the folder the hq container serves (`board/`) and writes
 `board/board.json` beside them (the file the page polls). Nothing here is executed on the VPS: the

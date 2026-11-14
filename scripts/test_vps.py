@@ -272,7 +272,7 @@ timeout_sec = 60
 
 [[agents]]
 name = "Saito"
-brief = "agents/ops.md"
+brief = "agents/researcher.md"
 timeout_sec = 60
 [agents.routine]
 title = "Morning report"
@@ -303,7 +303,7 @@ timeout_sec = 60
 
 [[agents]]
 name = "Saito"
-brief = "agents/ops.md"
+brief = "agents/researcher.md"
 model = "anthropic/claude-sonnet-5.5"
 timeout_sec = 60
 """
@@ -1246,7 +1246,7 @@ class TestHq(Base):
                                   "body": "PR: https://github.com/petterfranzen/ghost-in-the-machine/pull/12 done"}]
         done = self.stub.add(["agent:tachikoma", "status:done"], "Nightly build")
         self.stub.issues[done]["state"] = "closed"
-        self.stub.add(["agent:saito", "status:done", "private"], "Morning ops report")
+        self.stub.add(["agent:ishikawa", "status:done", "private"], "Morning ops report")
 
     def test_status_keeps_the_crew_format_and_hides_private_tasks(self):
         self.board()
@@ -1256,7 +1256,7 @@ class TestHq(Base):
         self.assertEqual(set(doc), {"generatedAt", "budget", "model", "agents", "tasks"})
         self.assertEqual(doc["budget"], {"usedPercent": 25, "month": doc["budget"]["month"]})     # 5 of 20, no dollars
         self.assertEqual(doc["model"], "deepseek/deepseek-v4.1-flash")
-        self.assertEqual([a["name"] for a in doc["agents"]], ["Tachikoma", "Batou", "Ishikawa", "Togusa", "Saito"])
+        self.assertEqual([a["name"] for a in doc["agents"]], ["Tachikoma", "Batou", "Ishikawa", "Togusa"])
         for a in doc["agents"]:
             self.assertEqual(set(a), {"name", "role", "state", "now", "lastActiveAt", "budgetPercent", "recent"})
         batou = self.agent(doc, "Batou")
@@ -1266,8 +1266,8 @@ class TestHq(Base):
         self.assertEqual(self.agent(doc, "Ishikawa")["now"], "On a private task")       # labelled private
         self.assertEqual(self.agent(doc, "Togusa")["now"], "On a private task")         # deny term
         self.assertEqual(self.agent(doc, "Tachikoma")["state"], "idle")
-        self.assertEqual(self.agent(doc, "Saito")["recent"][0]["text"], "On a private task")
-        self.assertNotIn("url", self.agent(doc, "Saito")["recent"][0])
+        self.assertEqual(self.agent(doc, "Ishikawa")["recent"][0]["text"], "On a private task")
+        self.assertNotIn("url", self.agent(doc, "Ishikawa")["recent"][0])
         raw = json.dumps(doc)
         for leak in ("private errand", "secret-garden", "Morning ops", "$", "sk-or"):
             self.assertNotIn(leak, raw)          # section9-hq appears only in a public task's url
@@ -1694,7 +1694,7 @@ class TestLimitsExample(unittest.TestCase):
             p.write_text((Path(__file__).resolve().parent.parent / "docs" / "RUNBOOK.md").read_text(
                 encoding="utf-8").split("# /etc/section9/limits.toml", 1)[1].split("```", 1)[0].split("\n", 1)[1])
             self.assertEqual(dispatch.cash_multiplier(p), 1.266)
-            self.assertEqual(dispatch.spend_caps(p), {"Saito": 8.0, "Tachikoma": 5.0})
+            self.assertEqual(dispatch.spend_caps(p), {"Ishikawa": 8.0, "Tachikoma": 5.0})
             pins, allow = dispatch.models_of(p)
             self.assertIn("anthropic/claude-sonnet-5.5", allow)
             self.assertEqual(pins, {})
@@ -2072,12 +2072,6 @@ brief = "agents/backup-coordinator.md"
 role = "general"
 title = "QA and UI/UX reviewer"
 timeout_sec = 60
-
-[[agents]]
-name = "Saito"
-brief = "agents/ops.md"
-role = "devops"
-timeout_sec = 60
 """
 
     def setUp(self):
@@ -2095,22 +2089,20 @@ timeout_sec = 60
 
     def test_any_takes_the_least_recently_active_agent_not_the_author(self):
         self.worked(["agent:batou", "status:done"], "2026-11-03T12:00:00Z")
-        self.worked(["agent:ishikawa", "status:done"], "2026-11-03T11:00:00Z")
         self.worked(["agent:togusa", "status:done"], "2026-11-03T10:00:00Z")
-        self.worked(["agent:saito", "status:done"], "2026-11-03T09:00:00Z")
+        self.worked(["agent:ishikawa", "status:done"], "2026-11-03T09:00:00Z")
         n = self.stub.add(["agent:any", "status:todo", "author:batou"], "QA Batou's PR")
         code, _ = self.run_dispatch()
         self.assertEqual(code, 0)
         self.assertEqual(len(self.stub.hermes_calls), 1)
         system, user, session = self.system_and_user()
-        self.assertIn("You are **Saito**", system)            # oldest activity, and not the author
+        self.assertIn("You are **Ishikawa**", system)            # oldest activity, and not the author
         self.assertNotIn("You are **Batou**", system)
-        self.assertIn(f"s9-task --as Saito status {n}", user)
+        self.assertIn(f"s9-task --as Ishikawa status {n}", user)
         self.assertEqual(session, f"issue-{n}")
-        self.assertEqual(self.stub.labels(n), {"agent:saito", "author:batou", "status:review"})
+        self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "author:batou", "status:review"})
 
     def test_any_skips_an_author_who_would_otherwise_be_oldest(self):
-        self.worked(["agent:saito", "status:done"], "2026-11-03T12:00:00Z")
         self.worked(["agent:togusa", "status:done"], "2026-11-03T11:00:00Z")
         self.worked(["agent:ishikawa", "status:done"], "2026-11-03T10:00:00Z")
         self.worked(["agent:batou", "status:done"], "2026-11-03T08:00:00Z")   # oldest, but wrote it
@@ -2171,11 +2163,10 @@ timeout_sec = 60
         self.worked(["agent:batou", "status:done"], "2026-11-03T12:00:00Z")
         self.worked(["agent:ishikawa", "status:done"], "2026-11-03T11:00:00Z")
         self.worked(["agent:togusa", "status:done"], "2026-11-03T10:00:00Z")
-        self.worked(["agent:saito", "status:done"], "2026-11-03T09:00:00Z")
         n = self.stub.add(["agent:any", "status:todo"])
         self.run_dispatch()
         (row,) = [json.loads(l) for l in (self.t / "state" / "runs.jsonl").read_text().splitlines()]
-        self.assertEqual((row["issue"], row["agent"], row["outcome"]), (n, "Saito", "ok"))
+        self.assertEqual((row["issue"], row["agent"], row["outcome"]), (n, "Togusa", "ok"))
 
     def test_pacing_holds_a_low_priority_pooled_task_and_runs_the_next_one(self):
         low = self.stub.add(["agent:any", "status:todo", "priority:low"])
@@ -2760,7 +2751,7 @@ class TestRosterTimeouts(unittest.TestCase):
     def test_every_agent_carries_its_daily_run_cap(self):
         # Tachikoma 0 = no cap: the nightly build is never gated (#218).
         caps = {a["name"]: a.get("runs_per_day") for a in self.roster()["agents"]}
-        self.assertEqual(caps, {"Tachikoma": 0, "Batou": 6, "Ishikawa": 2, "Togusa": 8, "Saito": 2})
+        self.assertEqual(caps, {"Tachikoma": 0, "Batou": 6, "Ishikawa": 4, "Togusa": 8})
 
 
 class HealthRun(unittest.TestCase):

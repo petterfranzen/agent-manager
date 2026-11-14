@@ -1,6 +1,6 @@
 # section9: a Claude Code pane for the Section 9 crew
 
-A Claude Code mod that opens a **Section 9** pane beside the chat. It shows what each agent (Batou, Ishikawa, Saito, Togusa, Tachikoma) is doing and what the crew costs:
+A Claude Code mod that opens a **Section 9** pane beside the chat. It shows what each agent (Batou, Ishikawa, Togusa, Tachikoma) is doing and what the crew costs:
 
 - **Budget:** this month's OpenRouter spend, the cap, what's left and today's spend, from the hourly "Spend" issue on the task board, with its as-of time in CET. It turns red when that figure is more than 3 hours old.
 - **Each agent:** model, runs-per-day cap and monthly cap (from `agents/roster.toml` on main), the last 7 days' runs, hours, spend and timeouts (from the "Capacity" issue), and its open tasks, coloured by status (working, todo, review, blocked) with who each one waits on.
