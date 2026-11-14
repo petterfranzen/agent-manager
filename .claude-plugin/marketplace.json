@@ -1,0 +1,5 @@
+{
+  "name": "section9",
+  "owner": { "name": "Section 9" },
+  "plugins": [{ "name": "section9", "source": "./mods/section9" }]
+}
