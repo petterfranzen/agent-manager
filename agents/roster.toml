@@ -74,9 +74,17 @@ role = "researcher"
 title = "Researcher"
 brief = "agents/researcher.md"
 avatar = "agents/avatars/ishikawa.png"
-budget_monthly_cents = 500
+budget_monthly_cents = 800               # Petter 14 Nov: Saito merged in ($5 + $3)
 timeout_sec = 3600
-runs_per_day = 2                         # #205 item 6
+runs_per_day = 4                         # Petter 14 Nov: Saito merged in (2 + 2); was #205 item 6
+
+# Saito's morning ops report, moved here when he merged into Ishikawa (Petter, 14 Nov).
+[agents.routine]
+title = "Morning ops report"
+description = "Write the morning ops report, following your brief; on Mondays, also run the weekly audit."
+cron = "30 6 * * *"
+timezone = "Europe/Stockholm"
+active = false
 
 [[agents]]
 name = "Togusa"
@@ -97,23 +105,5 @@ runs_per_day = 8                         # #205 item 6, raised 12 Nov: QA is the
 title = "QA sweep"
 description = "Review every ready agent PR that has no QA verdict since its last push, following your brief. Also check whether the Major has been silent for 12 hours."
 cron = "40 5,16 * * *"
-timezone = "Europe/Stockholm"
-active = false
-
-[[agents]]
-name = "Saito"
-role = "devops"
-title = "Senior thinker and ops (read-only)"
-brief = "agents/ops.md"
-# model: the default, deepseek/deepseek-v4.1-flash (Petter, 8 Nov: Sonnet trial ended, #205)
-avatar = "agents/avatars/saito.png"
-budget_monthly_cents = 300
-timeout_sec = 3600
-runs_per_day = 2                         # #205 item 6
-
-[agents.routine]
-title = "Morning ops report"
-description = "Write the morning ops report, following your brief; on Mondays, also run the weekly audit."
-cron = "30 6 * * *"
 timezone = "Europe/Stockholm"
 active = false

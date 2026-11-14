@@ -6,7 +6,7 @@ import type { AgentRow, AgentTask, Snapshot, Spend } from '../types'
 const PANE = 'section9'
 const HQ = 'petterfranzen/section9-hq'
 const ROSTER = 'repos/petterfranzen/agent-manager/contents/agents/roster.toml'
-const ORDER = ['Batou', 'Ishikawa', 'Saito', 'Togusa', 'Tachikoma']
+const ORDER = ['Batou', 'Ishikawa', 'Togusa', 'Tachikoma']
 const STATUS_RANK: Record<string, number> = { working: 0, todo: 1, review: 2, blocked: 3 }
 const REFRESH_MS = 5 * 60 * 1000
 

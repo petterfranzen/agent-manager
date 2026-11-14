@@ -20,14 +20,6 @@
       "lastActiveAt": "2026-11-02T09:24:00Z"
     },
     {
-      "name": "Aramaki",
-      "role": "Chief",
-      "state": "idle",
-      "now": null,
-      "model": "claude-opus-4.1",
-      "lastActiveAt": "2026-11-02T07:10:00Z"
-    },
-    {
       "name": "Batou",
       "role": "Coder",
       "state": "working",
@@ -90,24 +82,13 @@
         "spendUsd": 1.2,
         "timeouts": 0
       }
-    },
-    {
-      "name": "Saito",
-      "role": "Ops",
-      "state": "paused",
-      "now": null,
-      "model": "DeepSeek (default)",
-      "lastActiveAt": "2026-11-01T06:30:00Z",
-      "runsPerDay": 2,
-      "budgetMonthlyUsd": 3.0,
-      "week": null
     }
   ],
   "tasks": [
     {
       "id": 101,
       "title": "Approve the palette for the ops page",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "review",
       "waits": "petter",
       "waitsText": "a yes or no on the palette",
@@ -118,7 +99,7 @@
     {
       "id": 102,
       "title": "Pick the storage bucket",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "todo",
       "waits": "petter",
       "waitsText": "which bucket to use",
@@ -140,7 +121,7 @@
     {
       "id": 104,
       "title": "Apply the dependency bump",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "review",
       "waits": "major",
       "waitsText": "the bump PR to merge",
@@ -221,7 +202,7 @@
     {
       "id": 112,
       "title": "Publish behind the tunnel rule",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "todo",
       "waits": "task",
       "waitsText": "the palette decision (#101)",
@@ -231,7 +212,7 @@
     {
       "id": 113,
       "title": "Switch the sync to the new queue",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "blocked",
       "waits": "task",
       "waitsText": "the dependency bump (#104)",

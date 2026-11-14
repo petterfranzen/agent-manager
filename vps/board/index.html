@@ -30,12 +30,10 @@
   --agent:#8bffbe;
   --task:#9db3a7;
   --ag-major:#5be7d8;
-  --ag-aramaki:#ffb454;
   --ag-batou:#8bffbe;
   --ag-tachikoma:#7fd4ff;
   --ag-togusa:#b39ddb;
   --ag-ishikawa:#f2a1c0;
-  --ag-saito:#9db3a7;
   --state-working:var(--phos);
   --state-idle:#7fd4ff;
   --state-blocked:var(--amber);
@@ -65,12 +63,10 @@ html[data-theme="light"]{
   --agent:#0f7a4a;
   --task:#4b6157;
   --ag-major:#0b5f66;
-  --ag-aramaki:#8a5200;
   --ag-batou:#0f7a4a;
   --ag-tachikoma:#155e75;
   --ag-togusa:#5b3b8a;
   --ag-ishikawa:#8a2f52;
-  --ag-saito:#4b6157;
   --state-working:var(--phos);
   --state-idle:#155e75;
   --state-blocked:var(--amber);
@@ -196,12 +192,10 @@ h2{font-family:var(--font-display);font-size:1.05rem;margin:0;text-transform:upp
 .chip[aria-pressed="true"] .chip-count{color:inherit}
 .mark{width:10px;height:10px;border-radius:2px;background:var(--dim);flex:none;display:inline-block}
 .mark[data-agent="major"]{background:var(--ag-major)}
-.mark[data-agent="aramaki"]{background:var(--ag-aramaki)}
 .mark[data-agent="batou"]{background:var(--ag-batou)}
 .mark[data-agent="tachikoma"]{background:var(--ag-tachikoma)}
 .mark[data-agent="togusa"]{background:var(--ag-togusa)}
 .mark[data-agent="ishikawa"]{background:var(--ag-ishikawa)}
-.mark[data-agent="saito"]{background:var(--ag-saito)}
 .columns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;align-items:start}
 .column{
   background:linear-gradient(180deg,rgba(14,26,21,.72),rgba(11,20,16,.9));
@@ -333,14 +327,6 @@ a.issue:hover{text-decoration:underline}
       "lastActiveAt": "2026-11-02T09:24:00Z"
     },
     {
-      "name": "Aramaki",
-      "role": "Chief",
-      "state": "idle",
-      "now": null,
-      "model": "claude-opus-4.1",
-      "lastActiveAt": "2026-11-02T07:10:00Z"
-    },
-    {
       "name": "Batou",
       "role": "Coder",
       "state": "working",
@@ -403,24 +389,13 @@ a.issue:hover{text-decoration:underline}
         "spendUsd": 1.2,
         "timeouts": 0
       }
-    },
-    {
-      "name": "Saito",
-      "role": "Ops",
-      "state": "paused",
-      "now": null,
-      "model": "DeepSeek (default)",
-      "lastActiveAt": "2026-11-01T06:30:00Z",
-      "runsPerDay": 2,
-      "budgetMonthlyUsd": 3.0,
-      "week": null
     }
   ],
   "tasks": [
     {
       "id": 101,
       "title": "Approve the palette for the ops page",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "review",
       "waits": "petter",
       "waitsText": "a yes or no on the palette",
@@ -431,7 +406,7 @@ a.issue:hover{text-decoration:underline}
     {
       "id": 102,
       "title": "Pick the storage bucket",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "todo",
       "waits": "petter",
       "waitsText": "which bucket to use",
@@ -453,7 +428,7 @@ a.issue:hover{text-decoration:underline}
     {
       "id": 104,
       "title": "Apply the dependency bump",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "review",
       "waits": "major",
       "waitsText": "the bump PR to merge",
@@ -534,7 +509,7 @@ a.issue:hover{text-decoration:underline}
     {
       "id": 112,
       "title": "Publish behind the tunnel rule",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "todo",
       "waits": "task",
       "waitsText": "the palette decision (#101)",
@@ -544,7 +519,7 @@ a.issue:hover{text-decoration:underline}
     {
       "id": 113,
       "title": "Switch the sync to the new queue",
-      "agent": "saito",
+      "agent": "ishikawa",
       "status": "blocked",
       "waits": "task",
       "waitsText": "the dependency bump (#104)",
@@ -561,12 +536,10 @@ a.issue:hover{text-decoration:underline}
   var AVATAR_BASE = 'https://raw.githubusercontent.com/petterfranzen/ghost-in-the-machine/main/crew/avatars/';
   var ROSTER = [
     { id: 'major',     name: 'Major',     role: 'Coordinator',     avatar: AVATAR_BASE + 'major.png' },
-    { id: 'aramaki',   name: 'Aramaki',   role: 'Chief',           avatar: AVATAR_BASE + 'aramaki.png' },
     { id: 'batou',     name: 'Batou',     role: 'Coder',           avatar: AVATAR_BASE + 'batou.png' },
     { id: 'tachikoma', name: 'Tachikoma', role: 'Nightly builder', avatar: AVATAR_BASE + 'tachikoma.png' },
     { id: 'togusa',    name: 'Togusa',    role: 'QA',              avatar: AVATAR_BASE + 'togusa.png' },
-    { id: 'ishikawa',  name: 'Ishikawa',  role: 'Researcher',      avatar: AVATAR_BASE + 'ishikawa.png' },
-    { id: 'saito',     name: 'Saito',     role: 'Ops',             avatar: AVATAR_BASE + 'saito.png' }
+    { id: 'ishikawa',  name: 'Ishikawa',  role: 'Researcher',      avatar: AVATAR_BASE + 'ishikawa.png' }
   ];
   var WAITS = [
     { key: 'petter', label: 'Needs Petter',                sub: 'a decision, approval or answer' },

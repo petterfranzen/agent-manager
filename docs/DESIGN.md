@@ -15,10 +15,10 @@ on OpenRouter do the bulk of the work:
 - **Tachikoma, nightly builder:** each night, picks a language and an idea it hasn't done
   before, builds a small app in `ghost-in-the-machine`, and leaves a preview
   link for the morning.
-- **Ishikawa, researcher:** research tasks and reports.
+- **Ishikawa, researcher and read-only ops:** research tasks and reports, plans
+  for hard tasks, Ponytail review and audit, and a read-only watch over the stack
+  (Saito's duties, merged in on 14 Nov).
 - **Batou, coder:** small fixes and first drafts in `ghost-in-the-machine`.
-- **Saito, senior thinker:** plans hard tasks and reviews and audits code with
-  Ponytail; also keeps a read-only watch over the stack.
 - **Togusa, QA and UI/UX reviewer:** builds every agent PR, uses it in a
   headless browser on desktop and phone, and gives the verdict the merge
   waits for. Also the backup coordinator when Claude is unavailable.
@@ -186,7 +186,7 @@ pins it by digest. To bump Paperclip, follow the comment at the top of the Docke
 ```mermaid
 flowchart LR
   A[Agent opens PR<br/>self-checks with shoot,<br/>attaches screenshots] -->|ready| T[Togusa: QA<br/>build, shoot desktop + phone,<br/>use it, Impeccable audit,<br/>house rules]
-  A -.->|hard or risky code| SA[Saito: Ponytail review]
+  A -.->|hard or risky code| SA[Ishikawa: Ponytail review]
   T -->|QA: changes needed| A
   T -->|QA: pass| M[The Major reviews<br/>CI green]
   SA -.-> M
@@ -202,14 +202,14 @@ flowchart LR
    phone. He posts one comment with screenshots, findings ranked blocker /
    should-fix / nit, and `QA: pass` or `QA: changes needed`.
 3. The Major merges only after `QA: pass` and green CI, unless Petter waives it.
-4. Saito reviews code with Ponytail when the Major asks (risky logic, larger
+4. Ishikawa reviews code with Ponytail when the Major asks (risky logic, larger
    changes) and audits one repo each Monday. His review is advice, not a gate.
 
 Screenshots live on per-PR `shots/...` branches and are linked from the PR,
 because GitHub's API can't attach images.
 
 **Skills.** Ponytail (v5.3.3) and Impeccable (4.8.0) are installed in the
-sandbox image under `/opt/skills`, read-only, and the briefs tell Saito,
+sandbox image under `/opt/skills`, read-only, and the briefs tell Ishikawa,
 Batou and Togusa when to read them. Neither is installed in Hermes itself: as
 Hermes plugins they would be gateway-wide, so every agent would pay
 Ponytail's per-turn rules and Impeccable's design hook would scan every
@@ -235,7 +235,7 @@ agent's writes (Ishikawa, SEC-19).
   Dependabot PRs, merged only once the release is 24 h old.
 - **Budgets:** the OpenRouter key stops at $20 a month. Paperclip budgets are set
   per agent (see `agents/README.md`), so one agent can't use up the month.
-- **Saito and Togusa change no one's code.** They plan, review and report;
+- **Ishikawa and Togusa change no one's code.** They plan, review and report;
   changes go through the authors, the coordinator and Petter.
 
 ## Nightly builder routine

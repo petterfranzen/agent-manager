@@ -12,9 +12,8 @@ Chief**, Claude (the coordinator) is **the Major** (avatar: `avatars/major.png`;
 |---|---|---|---|---|---|---|
 | <img src="avatars/tachikoma.png" width="48"> | **Tachikoma** | Nightly builder | [nightly-builder.md](nightly-builder.md) | The Major | $4 | Routine, 01:00 Stockholm (overnight only) |
 | <img src="avatars/batou.png" width="48"> | **Batou** | Coder | [coder.md](coder.md) | The Major | $4 | Assigned tasks |
-| <img src="avatars/ishikawa.png" width="48"> | **Ishikawa** | Researcher | [researcher.md](researcher.md) | The Major | $5 | Assigned tasks |
+| <img src="avatars/ishikawa.png" width="48"> | **Ishikawa** | Researcher and read-only ops (Saito merged in, 14 Nov) | [researcher.md](researcher.md) | The Major | $8 | Routine, 06:30 Stockholm (ops report); assigned research, plans and reviews |
 | <img src="avatars/togusa.png" width="48"> | **Togusa** | QA and UI/UX reviewer; backup coordinator | [backup-coordinator.md](backup-coordinator.md) | The Major | $3 | QA sweep 05:40 and 16:40 Stockholm; assigned PRs |
-| <img src="avatars/saito.png" width="48"> | **Saito** | Senior thinker and ops (read-only) | [ops.md](ops.md) | The Major | $3 | Routine, 06:30 Stockholm; assigned plans and reviews |
 
 **Copying Tachikoma:**
 - Hire another agent with the same brief and adapter settings, named

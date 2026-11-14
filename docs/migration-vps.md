@@ -101,7 +101,7 @@ Spend reports keep working as now:
 - **Secrets:** copy the existing ones from Hetzner's `/etc/agent-manager/` into `/etc/section9/*.env` (root-only). Never in chat, never in a repo.
 - **Bootstrap:** `git clone https://github.com/petterfranzen/agent-manager /opt/agent-manager && sudo /opt/agent-manager/vps/install.sh`
 
-**Phase 2, the Major (a PR to agent-manager, reviewed with Saito):**
+**Phase 2, the Major (a PR to agent-manager, reviewed with Ishikawa; Saito, merged into Ishikawa on 14 Nov, did this originally):**
 - `vps/compose.yaml`;
 - `vps/dispatch.py` and `sandbox/s9-task`;
 - systemd units, `vps/install.sh` and the status endpoint;
@@ -112,7 +112,7 @@ Spend reports keep working as now:
 
 **Phase 3, moving over one at a time (about a week):**
 1. **Ishikawa first.** Research is the lowest risk, and it covers the rental watch. Pause Ishikawa in Paperclip on the same day.
-2. **Togusa and Saito,** and their routines.
+2. **Togusa and the ops routine** (Saito's, now Ishikawa's).
 3. **Batou.**
 4. **Tachikoma last.** In Paperclip, the nightly routine is paused the same evening the VPS takes it, so there's never a double build.
 

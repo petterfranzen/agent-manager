@@ -16,7 +16,7 @@ and the `gh` CLI on your computer. Nothing here is typed into chat.
 **1. Create the private repo and its labels** (on your computer)
 ```bash
 gh repo create petterfranzen/section9-hq --private --description "Section 9 task board"
-for l in agent:batou agent:tachikoma agent:ishikawa agent:togusa agent:saito \
+for l in agent:batou agent:tachikoma agent:ishikawa agent:togusa \
          status:todo status:working status:review status:done status:blocked; do
   gh label create "$l" -R petterfranzen/section9-hq
 done
@@ -141,11 +141,11 @@ Tachikoma = 10800
 # agent runs the default.
 [models]
 allow = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5.5", "moonshotai/kimi-k3.1-pro"]
-# Saito = "deepseek/deepseek-v4.1-flash"     # roll Saito back to the default
+# Ishikawa = "deepseek/deepseek-v4.1-flash"     # roll Ishikawa back to the default
 
 # Per-agent monthly budget, USD, UTC month (#101). No entry: no guard.
 [spend]
-Saito = 8.0
+Ishikawa = 8.0
 Tachikoma = 5.0
 ```
 **Per-agent models (#101).** The dispatcher sends the agent's model (from
