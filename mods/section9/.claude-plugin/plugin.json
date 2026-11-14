@@ -1,0 +1,7 @@
+{
+  "name": "section9",
+  "version": "0.1.0",
+  "description": "A pane showing what each Section 9 agent is doing and the team's budget",
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}
