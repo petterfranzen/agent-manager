@@ -62,7 +62,7 @@ When an idea is too big for one night, make it a two-night project:
 - **Night one:** build a working core, open the PR as usual with
   `(part 1 of 2)` at the end of the title, mark it ready, and set your task to
   `review` with "part 1 of 2, continuing tomorrow".
-- **Night two:** if tonight's `LOG.md` or open PRs show your part 1 still open,
+- **Night two:** if `python3 scripts/night-log.py` (or a `night.json`) or open PRs show your part 1 still open,
   continue on that same branch and PR in the same language. Add the depth,
   polish and discoveries, then rename the title to drop `(part 1 of 2)`.
 - QA happens after part 2. At most one two-night project at a time.
@@ -80,9 +80,11 @@ you move back to DeepSeek.
 1. **Pick.** Clone sparsely and read the history:
    ```bash
    W=$(mktemp -d ~/work/night-XXXXXX) && cd "$W" && git clone --filter=blob:none --sparse https://github.com/petterfranzen/ghost-in-the-machine ghost
-   cd ghost && git sparse-checkout set --no-cone LOG.md
+   cd ghost && git sparse-checkout set --no-cone LOG.md scripts/night-log.py 'nights/*/night.json'
    ```
-   Read `LOG.md`: past nights' language, idea, verdict and Petter's feedback.
+   Run `python3 scripts/night-log.py`: past nights' language, idea and verdict
+   (Petter's feedback), one `nights/*/night.json` each. `LOG.md` holds his
+   wishes, the ideas backlog and the lessons: read those too.
    Check what the other copies claimed tonight (drafts included):
    `gh pr list --repo petterfranzen/ghost-in-the-machine --state open --search "Night YYYY-MM-DD in:title"`.
    Choose a language that's in neither the log nor those PRs, and an idea that
@@ -99,8 +101,9 @@ you move back to DeepSeek.
 2. **Claim it straight away**, so a copy starting later sees your pick:
    `git switch -c night/YYYY-MM-DD-<slug>`, then
    `git sparse-checkout add nights/YYYY-MM-DD-<slug>`, create that folder with a
-   one-line `README.md`, and append your line to `LOG.md`, using the full folder name:
-   `| YYYY-MM-DD | YYYY-MM-DD-<slug> | <language> | <one-line idea> | pending review |`.
+   one-line `README.md`, and a `night.json` (full folder name; the date is the folder's date prefix):
+   `{"date": "YYYY-MM-DD", "language": "<language>", "idea": "<one-line idea>", "verdict": "pending review"}`.
+   If you revise an older night, update that night's `night.json` verdict instead.
    Commit, push, and open a **draft** PR titled
    `Night YYYY-MM-DD: <idea> in <language>` (`gh pr create --draft`). If
    someone else claimed the same language in the meantime, pick again. CI fails
@@ -179,10 +182,8 @@ status is marked `blocked` for you.
   `agents@sectionnine.dev` (the sandbox sets it, and the pre-push hook refuses anything else).
 - About 2.5 hours and roughly $1 a night (budget $10 a month). If you're near
   either, wrap up what works, say what's missing, and open the PR anyway.
-- Never merge. Touch only your night folder and `LOG.md`; CI rejects anything else, and you can't change `.github/`.
-- Two copies can both append to `LOG.md` the same night, so a merge conflict
-  there is expected. Leave it for the Major to resolve. Never force-push over
-  another copy's branch.
+- Never merge. Touch only your own night folder (plus `LOG.md`'s Lessons section only if you add a lesson); CI rejects anything else, and you can't change `.github/`.
+- Never force-push over another copy's branch.
 - Never commit secrets or tokens. The repo is public.
 - If the build can't work in this sandbox (no toolchain, or it needs a GPU),
   pick something else rather than fight it.
