@@ -82,6 +82,35 @@ memory:
   memory_enabled: true
   write_approval: false
 
+# Side-calls (section9-hq #323, 15 Nov). Hermes' background review, compression and
+# titles ran on the session's model after a run's /key delta closed, so they billed
+# as unattributed "Hermes background" (45% of November by 15 Nov, Spend #11). Pin them
+# to the cheapest model, cap the review's replay, compact earlier, and tag all of the
+# key's traffic so OpenRouter's export shows it as ours.
+providers:
+  openrouter:
+    extra_headers:
+      HTTP-Referer: "https://hq.sectionnine.dev"
+      X-Title: "section9-agents"
+    extra_body:
+      user: "section9-agents"
+
+auxiliary:
+  compression:
+    provider: openrouter
+    model: deepseek/deepseek-v4.1-flash
+  title_generation:
+    provider: openrouter
+    model: deepseek/deepseek-v4.1-flash
+    model_upgrade_enabled: false
+  background_review:
+    provider: openrouter
+    model: deepseek/deepseek-v4.1-flash
+    max_input_tokens: 32000
+
+compression:
+  threshold_tokens: 120000
+
 # Web dashboard (enabled in vps/compose.yaml). Behind Cloudflare Access at
 # hq.sectionnine.dev; the login lives in /etc/section9/hermes.env. Themes are
 # YAML files in /opt/data/dashboard-themes (see vps/hq-status.py crew).
