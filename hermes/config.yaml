@@ -40,7 +40,7 @@ provider_routing:
     "deepseek/deepseek-v4.1-flash":
       data_collection: "deny"
       ignore: ["x-ai"]
-      order: ["morph", "open-inference", "relace"]
+      order: ["relace", "open-inference", "coreweave"]
       allow_fallbacks: true
 
 # Tried in order when the primary fails (429/5xx/401/403/404), per turn.
