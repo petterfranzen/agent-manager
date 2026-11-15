@@ -169,6 +169,10 @@ against the daily guidance, the runs and busy hours per lane with the hours two 
 both pace lines with today's spend against them. It guesses nothing: a run whose cost delta was
 unreadable is reported as `—`, and the issue says how many such runs there are.
 
+The hourly **Spend** issue carries the same ledger as an ownership check: "Booked to agents" (the
+month's ledger total, per agent), "Hermes background" (key usage minus that total, never below
+$0.00; a ledger above the key is flagged as two-lane overlap) and "Owned total".
+
 ## Forecast and the budget request (the Major's procedure)
 
 Do this after **14 days or 50 runs**, whichever is later; before that the sample is
