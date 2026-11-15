@@ -31,6 +31,17 @@ provider_routing:
       data_collection: "deny"
       ignore: ["x-ai"]
       only: ["fireworks", "together", "deepinfra", "parasail", "nebius", "moonshotai"]
+    # The agents' default model (section9-hq #316, 15 Nov): the 1-14 Nov export showed
+    # ~$12 of $39 going to providers charging 2-6x the cheapest per prompt token despite
+    # `sort: price`. Try the three cheapest ZDR providers first (slugs from OpenRouter's
+    # providers list); `allow_fallbacks` stays true so a down provider falls back to the
+    # rest, never a hard `only` gate. No `sort` here: it also bypasses default routing and
+    # would compete with `order` for who goes first.
+    "deepseek/deepseek-v4.1-flash":
+      data_collection: "deny"
+      ignore: ["x-ai"]
+      order: ["morph", "open-inference", "relace"]
+      allow_fallbacks: true
 
 # Tried in order when the primary fails (429/5xx/401/403/404), per turn.
 # DeepSeek first (#101): an agent on a $2/$10 model must fail to the cheapest
