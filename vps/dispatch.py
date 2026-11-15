@@ -1012,6 +1012,32 @@ def status(a, board, hermes_key, orkey, log):
         log("hermes: " + ("NOT reachable (" + str(e) + ")" if "no response" in str(e) else "reachable"))
 
 
+LEDGER_AGENTS = ("Batou", "Togusa", "Tachikoma", "Ishikawa")
+
+
+def reconcile_lines(rows, usage, now):
+    """Spend-issue block that books every dollar of the key's month usage to an owner (Petter, 14 Nov):
+    each agent's ledger total, plus "Hermes background" for what no run recorded."""
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    per = {name: 0.0 for name in LEDGER_AGENTS}
+    for r in rows:
+        when = parse_when(r.get("start"))
+        if when and when >= start:
+            name = r.get("agent") or "unknown"
+            per[name] = per.get(name, 0.0) + run_cost(r)
+    names = list(LEDGER_AGENTS) + sorted(n for n in per if n not in LEDGER_AGENTS)
+    booked = sum(per.values())
+    gap = float(usage) - booked
+    background = max(gap, 0.0)
+    owned = booked + background
+    return ["",
+            f"- Booked to agents (ledger, this month): {money(booked)}",
+            "  " + " \u00b7 ".join(f"{n} {money(per[n])}" for n in names),
+            f"- Hermes background (not tied to a run): {money(background)}"
+            + (" (ledger exceeds key \u2014 check two-lane overlap)" if gap < 0 else ""),
+            f"- Owned total: {money(owned)}" + (" (= key usage)" if gap >= 0 else f" (key usage {money(float(usage))})")]
+
+
 def spend(a, board, orkey, log):
     """Keep one open issue titled "Spend" current: OpenRouter's own month, cap, left and today."""
     k = (http("GET", a.openrouter.rstrip("/") + "/key", orkey, timeout=20) or {}).get("data") or {}
@@ -1031,6 +1057,9 @@ def spend(a, board, orkey, log):
     if mult != 1.0:
         lines.append(f"- Cash (x{mult:g} fees and tax): {cash('usage_monthly')} this month, "
                      f"{cash('usage_daily')} today. The cap stays usage, not cash.")
+    if isinstance(k["usage_monthly"], (int, float)):
+        ledger = Path(getattr(a, "ledger", "") or (Path(a.state_dir) / LEDGER_NAME))
+        lines += reconcile_lines(read_ledger(ledger), k["usage_monthly"], now)
     lines += ["", "Rewritten every hour; don't edit. Leave this issue open and pinned."]
     body = "\n".join(lines)
     open_ = board.pages("/issues?state=open&sort=created&direction=asc")

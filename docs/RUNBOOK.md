@@ -250,7 +250,9 @@ the VPS tunnel -> Public hostnames -> add `hq.sectionnine.dev`, path `^/board` (
 covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/board.json | head`.
 
 `section9-spend.timer` (hourly) keeps the open `Spend` issue in `section9-hq` current: month, cap,
-left and today from OpenRouter, with an "As of" time. Pin it in the GitHub UI if the automatic pin
+left and today from OpenRouter, with an "As of" time, then a reconciliation block: the ledger's
+per-agent month total, "Hermes background" (key usage no run recorded) and the owned total, so every
+dollar has an owner line. Pin it in the GitHub UI if the automatic pin
 failed (the log says so). If "As of" is over 3 hours old, check `systemctl status section9-spend.timer`.
 
 `section9-capacity.timer` (daily) rolls `/var/lib/section9/runs.jsonl` up into the open `Capacity`

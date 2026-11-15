@@ -565,6 +565,43 @@ class TestSpend(Base):
         self.assertIn("$6.60", issue["body"])           # cash = 5.00 x 1.32
         self.assertIn("Cash (x1.32", issue["body"])
 
+    def seed_ledger(self, rows):
+        path = self.t / "state" / "runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        now = dispatch.dt.datetime.now(dispatch.dt.timezone.utc)
+        with path.open("w", encoding="utf-8") as f:
+            for agent, cost in rows:
+                f.write(json.dumps({"agent": agent, "start": now.isoformat(), "outcome": "ok",
+                                    "cost_usd": cost}) + "\n")
+
+    def spend_body(self):
+        self.run_dispatch("spend")
+        (issue,) = self.stub.issues.values()
+        return issue["body"]
+
+    def test_reconciliation_books_the_gap_to_hermes_background(self):
+        self.seed_ledger([("Batou", 1.0), ("Togusa", 0.5), ("Batou", 0.25), ("Saito", 0.75)])
+        body = self.spend_body()
+        self.assertIn("Booked to agents (ledger, this month): $2.50", body)
+        self.assertIn("Batou $1.25 \u00b7 Togusa $0.50 \u00b7 Tachikoma $0.00 \u00b7 Ishikawa $0.00 \u00b7 Saito $0.75", body)
+        self.assertIn("Hermes background (not tied to a run): $2.50", body)
+        self.assertIn("Owned total: $5.00 (= key usage)", body)
+        self.assertIn("This month (UTC): $5.00", body)
+
+    def test_reconciliation_when_the_ledger_exceeds_the_key(self):
+        self.seed_ledger([("Ishikawa", 7.0)])
+        body = self.spend_body()
+        self.assertIn("Hermes background (not tied to a run): $0.00 (ledger exceeds key", body)
+        self.assertIn("two-lane overlap", body)
+        self.assertIn("Owned total: $7.00 (key usage $5.00)", body)
+
+    def test_reconciliation_with_an_empty_ledger(self):
+        body = self.spend_body()
+        self.assertIn("Booked to agents (ledger, this month): $0.00", body)
+        self.assertIn("Batou $0.00 \u00b7 Togusa $0.00 \u00b7 Tachikoma $0.00 \u00b7 Ishikawa $0.00", body)
+        self.assertIn("Hermes background (not tied to a run): $5.00", body)
+        self.assertIn("Owned total: $5.00 (= key usage)", body)
+
     def test_dispatcher_ignores_it(self):
         self.run_dispatch("spend")
         self.run_dispatch()
