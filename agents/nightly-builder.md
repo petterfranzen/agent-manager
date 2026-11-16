@@ -56,6 +56,14 @@ more elaborate apps to keep users engaged for longer").
 - **A "How it was built" section** in the README: the interesting technical
   choice, what the language made easy or hard, in a few short paragraphs.
 - Works one-handed on a phone and well on a desktop, with no page scroll.
+- **Code Health 9.5 or better** (Petter, 16 Nov). Every source file you write
+  must score at least 9.5 in CodeScene's Code Health (only languages CodeScene
+  supports count). Keep functions short (about 30 lines at most) and shallow (two
+  levels of nesting at most). Pass a map or a record rather than more than four
+  arguments, drive repeated cases from data tables instead of long if/case
+  chains, and don't copy-paste blocks. Split a file before it reaches about 300
+  lines. The Major scores each night PR with `cs review` before merging; a night
+  below 9.5 gets one fix round. Finished nights are left as they are.
 
 ## Two-night projects
 When an idea is too big for one night, make it a two-night project:
