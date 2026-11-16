@@ -206,19 +206,28 @@ def host_pins():
     openssh-server is an Ubuntu package, and OSV's Ubuntu database indexes it by source name.
     """
     queries, notes = [], []
-    out = run(["docker", "version"])
-    versions = re.findall(r"(?m)Version:\s*v?([0-9][\w.+-]*)", out or "")
-    if versions:
-        queries.append(("docker", "Go", "github.com/docker/docker", versions[-1], "docker version"))
-    else:
-        notes.append("docker version: not available")
-    for pin in (runc_pin, containerd_pin, openssh_pin):
+    for pin in (docker_pin, runc_pin, containerd_pin, openssh_pin):
         query, note = pin()
         if query:
             queries.append(query)
         else:
             notes.append(note)
     return queries, notes
+
+
+def docker_pin():
+    """(query, None), or (None, note) when docker is not there."""
+    # The engine's version, not a bundled component's: `docker version`'s text output ends with
+    # docker-init (0.19.0), so taking the last `Version:` line pinned docker-init against
+    # github.com/docker/docker and returned a page of ancient false positives. Ask the server first.
+    out = run(["docker", "version", "--format", "{{.Server.Version}}"])
+    m = re.fullmatch(r"v?([0-9][\w.+-]*)\s*", out or "")
+    if not m:  # an old client that cannot format: read the first Version: inside the Server block
+        m = re.search(r"(?s)\bServer\b.*?\n\s*Version:\s*v?([0-9][\w.+-]*)",
+                      run(["docker", "version"]) or "")
+    if m:
+        return ("docker", "Go", "github.com/docker/docker", m.group(1), "docker version"), None
+    return None, "docker version: not available"
 
 
 def runc_pin():
