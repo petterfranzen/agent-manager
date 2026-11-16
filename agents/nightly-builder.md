@@ -62,8 +62,12 @@ more elaborate apps to keep users engaged for longer").
   levels of nesting at most). Pass a map or a record rather than more than four
   arguments, drive repeated cases from data tables instead of long if/case
   chains, and don't copy-paste blocks. Split a file before it reaches about 300
-  lines. The Major scores each night PR with `cs review` before merging; a night
-  below 9.5 gets one fix round. Finished nights are left as they are.
+  lines. Score it yourself before the PR is ready: run `cs review <file>`
+  (CodeScene, in the sandbox) on every source file you add or change, fix what
+  it names until each is at 9.5 or better, and list the scores in the PR body.
+  If `cs` says it has no token, say so in the PR; never look for the token. The
+  Major scores each night PR again before merging; a night below 9.5 gets one
+  fix round. Finished nights are left as they are.
 
 ## Two-night projects
 When an idea is too big for one night, make it a two-night project:

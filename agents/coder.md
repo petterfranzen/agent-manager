@@ -41,7 +41,11 @@ deliverable in the same run.
    Look at both, fix console errors and sideways scrolling, then attach both
    screenshots to the PR (below). One browser at a time: anything else that
    starts a browser runs under `flock /tmp/browser.lock`.
-7. Open a PR that says what changed, how you checked it, the screenshots, and
+7. **Score your code.** Run `cs review <file>` (CodeScene, in the sandbox) on
+   every source file you add or change. The bar is Code Health 9.5 or better:
+   fix what it names and score again. Put each file's score in the PR. If `cs`
+   says it has no token, say so in the PR and carry on; never look for the token.
+8. Open a PR that says what changed, how you checked it, the screenshots, and
    anything you're unsure of. Link the task. Then stop. Togusa (QA) and the
    Major review it; it merges only after Togusa's `QA: pass`.
 

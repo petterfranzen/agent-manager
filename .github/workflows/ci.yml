@@ -149,7 +149,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build
         run: docker build -t sandbox:ci sandbox
-      - name: Start with a test key and a fake GitHub token
+      - name: Start with a test key and fake GitHub and CodeScene tokens
         run: |
           set -euo pipefail
           ssh-keygen -q -t ed25519 -N '' -f /tmp/ci_key
@@ -157,7 +157,7 @@ jobs:
           # As on the VM: root-owned, not writable by others (sshd StrictModes).
           sudo chown root:root /tmp/authorized_keys && sudo chmod 0644 /tmp/authorized_keys
           docker run -d --name sb -p 127.0.0.1:2222:22 \
-            -e GH_TOKEN=ci-fake-token -e OPENROUTER_API_KEY=must-not-leak \
+            -e GH_TOKEN=ci-fake-token -e CS_ACCESS_TOKEN=ci-fake-cs-token -e OPENROUTER_API_KEY=must-not-leak \
             -v /tmp/authorized_keys:/etc/ssh/authorized_keys/agent:ro sandbox:ci
           for i in $(seq 1 20); do nc -z 127.0.0.1 2222 && break; sleep 1; done
       - name: Checks over SSH, as Hermes would connect
@@ -168,6 +168,12 @@ jobs:
           [ "$(s whoami)" = agent ]
           s 'git --version && gh --version | head -1 && gitleaks version && mise --version'
           s 'test -s ~/.git-credentials && grep -q ci-fake-token ~/.git-credentials'
+          # CodeScene's cs: the pinned binary runs without a token (version only), and the
+          # token the container was given sits in a 0600 file for the wrapper, not in the env.
+          s 'cs version' | grep -q '^cs version [0-9]'
+          [ "$(s 'echo $CS_DISABLE_VERSION_CHECK')" = 1 ]
+          s 'test "$(cat ~/.config/codescene/token)" = ci-fake-cs-token && test "$(stat -c %a ~/.config/codescene/token)" = 600'
+          ! s 'env' | grep -q ci-fake-cs-token
           # gh must accept its config as written (no migration attempt).
           ! s 'gh config get git_protocol -h github.com 2>&1' | grep -qi 'migrat'
           [ "$(s 'gh config get git_protocol -h github.com')" = https ]
