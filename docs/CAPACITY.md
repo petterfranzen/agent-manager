@@ -97,7 +97,7 @@ Tachikoma = 5.0
 
 Before it claims a task the dispatcher sums that agent's ledger rows for the
 current month — the measured `/key` delta when the counter moved, else a token
-estimate at the model's price (`PRICES` in `vps/dispatch.py`; an unknown model is
+estimate at the model's price (`PRICES` in `vps/dispatcher/ledger.py`; an unknown model is
 priced at the dearest allowed rate, so the guard over-counts, never under-counts)
 — and, when it is at or over the ceiling, blocks the task with a comment naming
 the figure. An agent with no `[spend]` entry has no guard. The month is UTC, the

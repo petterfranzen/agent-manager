@@ -68,20 +68,33 @@ def redact(text):
     return KEYS.sub("[redacted]", text)
 
 
+def unquoted(val):
+    """A value without the one pair of matching quotes around it."""
+    val = val.strip()
+    paired = len(val) >= 2 and val[0] == val[-1]
+    if paired and val[0] in "\"'":
+        return val[1:-1]
+    return val
+
+
+def env_pair(line):
+    """(name, value) of one NAME=VALUE line of an env file; None for a comment or anything else."""
+    line = line.strip().removeprefix("export ").lstrip()
+    key, sep, val = line.partition("=")
+    if not sep or line.startswith("#"):
+        return None
+    return key.strip(), unquoted(val)
+
+
 def read_env_value(path, name):
-    value = None
+    """The last NAME=VALUE line for `name` in an env file. Missing or empty is a Failure."""
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError as e:
         raise Failure(f"cannot read {path}: {e.strerror}") from None
-    for line in text.splitlines():
-        line = line.strip().removeprefix("export ").lstrip()
-        key, sep, val = line.partition("=")
-        if sep and not line.startswith("#") and key.strip() == name:
-            val = val.strip()
-            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
-                val = val[1:-1]
-            value = val
+    pairs = [env_pair(line) for line in text.splitlines()]
+    values = [pair[1] for pair in pairs if pair and pair[0] == name]
+    value = values[-1] if values else None
     if not value:
         raise Failure(f"{name} is missing or empty in {path}")
     return value
@@ -125,206 +138,300 @@ def usd(value):
         return None
 
 
+def week_table(body):
+    """The lines of the table under the first "Last 7 days by agent" heading."""
+    lines = [line.strip() for line in (body or "").splitlines()]
+    start = next((n for n, line in enumerate(lines) if "last 7 days by agent" in line.lower()), len(lines))
+    rows = []
+    for line in lines[start + 1:]:
+        if line.startswith("|"):
+            rows.append(line)
+        elif rows or line.startswith("#"):
+            break
+    return rows
+
+
+def week_row(line):
+    """(lower-case name, week) of one table row; None for the header and the --- row."""
+    cells = [c.strip() for c in line.strip("|").split("|")]
+    nums = [re.sub(r"[$,\s]", "", c) for c in cells[1:6]]
+    try:
+        runs, busy, spend, _, timeouts = (float(n) for n in nums)
+    except ValueError:
+        return None
+    return re.sub(r"[*`]", "", cells[0]).strip().lower(), {
+        "runs": int(runs), "busyH": round(busy, 1), "spendUsd": round(spend, 2), "timeouts": int(timeouts)}
+
+
 def capacity(body):
     """The "Last 7 days by agent" table in the body of section9-hq #80 ("Capacity"), rows
     `| Name | runs | busy h | $ | $/h | timeouts | timeout h | credits |`. Returns
     ({lower-case name: week}, the "As of ... UTC" time as ISO or None)."""
-    weeks, seen, in_table = {}, False, False
-    for line in (body or "").splitlines():
-        line = line.strip()
-        if not seen:
-            seen = "last 7 days by agent" in line.lower()
-            continue
-        if not line.startswith("|"):
-            if in_table or line.startswith("#"):
-                break
-            continue
-        in_table = True
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        nums = [re.sub(r"[$,\s]", "", c) for c in cells[1:6]]
-        try:
-            runs, busy, spend, _, timeouts = (float(n) for n in nums)
-        except ValueError:
-            continue            # the header and the --- row
-        weeks[re.sub(r"[*`]", "", cells[0]).strip().lower()] = {
-            "runs": int(runs), "busyH": round(busy, 1), "spendUsd": round(spend, 2), "timeouts": int(timeouts)}
+    rows = [week_row(line) for line in week_table(body)]
+    weeks = dict(row for row in rows if row)
     m = re.search(r"As of\s+(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d)\s*UTC", body or "")
     return weeks, (m.group(1) + "T" + m.group(2) + ":00Z" if m else None)
 
 
-def build(now, agents, issues, comments, key, model, deny, reveal=False, weeks=None, as_of=None):
-    """The status document. `deny` is a compiled regex, or None when there is no deny file.
+def labels(issue):
+    return {l["name"] for l in issue.get("labels", [])}
 
-    `reveal` builds the board's own copy (board/board.json): the board is served only behind the
+
+def label_values(issue, prefix):
+    """What follows `prefix` in each of the issue's labels that has it."""
+    return [l[len(prefix):] for l in labels(issue) if l.startswith(prefix)]
+
+
+def issue_key(comment):
+    """The number of the issue a comment is on, as text."""
+    return comment["issue_url"].rsplit("/", 1)[-1]
+
+
+def latest_match(comments, pattern):
+    """Issue number -> the pattern's match in that issue's latest comment that has one.
+    Comments come oldest first, so a later comment wins."""
+    found = {}
+    for c in comments:
+        m = pattern.search(c.get("body") or "")
+        if m:
+            found[issue_key(c)] = m.group(0)
+    return found
+
+
+def status_of(issue):
+    """The board column: done for a closed issue, else its first status label by weight."""
+    names = labels(issue)
+    if "status:done" in names or issue.get("state") == "closed":
+        return "done"
+    return next((s for s in ("blocked", "review", "working", "todo") if f"status:{s}" in names), "todo")
+
+
+class Copy:
+    """One copy of the status document, and how much it may show.
+
+    `reveal` is the board's own copy (board/board.json): the board is served only behind the
     Cloudflare Access app that admits Petter alone (RUNBOOK), so it shows real titles, issue links,
     PR links in any of Petter's repos and the "Waits on" notes. The site-root status.json, kept for a
-    later public crew page, is always built with reveal=False and stays redacted. Only the board
-    copy carries dollar amounts (budget, per-agent cap and last week's spend); `weeks` and `as_of`
-    come from capacity()."""
-    labels = lambda i: {l["name"] for l in i.get("labels", [])}
-    base = re.compile(DENY_BASE, re.IGNORECASE)
-    if reveal:
-        deny = deny or re.compile(r"(?!)")    # a never-matching pattern: "a deny list exists, it is empty"
-    pr_ok = OWNER_URLS if reveal else PUBLIC_URLS
+    later public crew page, is always built with reveal=False and stays redacted. `deny` is a
+    compiled regex, or None when there is no deny file."""
 
-    def text(issue):
+    def __init__(self, deny, comments, reveal=False):
+        self.reveal = reveal
+        # On the board, a never-matching pattern: "a deny list exists, it is empty".
+        self.deny = (deny or re.compile(r"(?!)")) if reveal else deny
+        self.base = re.compile(DENY_BASE, re.IGNORECASE)
+        self.pr_ok = OWNER_URLS if reveal else PUBLIC_URLS
+        self.links = latest_match(comments, URL)
+        self.waits_text = {n: short(text.strip()) for n, text in latest_match(comments, WAITS_ON).items()}
+
+    def is_private(self, issue, title):
+        if "private" in labels(issue) or self.base.search(title):
+            return True
+        return bool(self.deny and self.deny.search(title))
+
+    def text(self, issue):
+        """The title as this copy may show it."""
         title = issue.get("title") or ""
-        if reveal:
+        if self.reveal:
             return short(title)
-        if "private" in labels(issue) or base.search(title) or (deny and deny.search(title)):
+        if self.is_private(issue, title):
             return PRIVATE
-        if not deny:
-            return ON_TASK
-        return short(title)
+        return short(title) if self.deny else ON_TASK
 
-    links = {}
-    for c in comments:           # oldest first, so a later comment's link wins
-        m = URL.search(c.get("body") or "")
-        if m:
-            links[c["issue_url"].rsplit("/", 1)[-1]] = m.group(0)
+    def link(self, issue):
+        """The PR or page a task points at: its latest comment's link, else the one in its body."""
+        url = URL.search(issue.get("body") or "")
+        return self.links.get(str(issue["number"])) or (url.group(0) if url else None)
 
-    waits_text = {}
-    for c in comments:           # oldest first: the latest "Waits on ..." line wins
-        m = WAITS_ON.search(c.get("body") or "")
-        if m:
-            waits_text[c["issue_url"].rsplit("/", 1)[-1]] = short(m.group(0).strip())
+    def recent_item(self, issue):
+        item = {"at": iso(issue.get("closed_at") or issue["updated_at"]), "text": self.text(issue)}
+        url = self.link(issue)
+        if item["text"] != PRIVATE and self.may_link(url):
+            item["url"] = url
+        return item
 
-    out = []
-    for r in agents:
+    def may_link(self, url):
+        """True for a link a finished task may show: any on the board, only the public ones elsewhere."""
+        if not url:
+            return False
+        return self.reveal or url.startswith(PUBLIC_URLS)
+
+    def recent(self, newest):
+        """An agent's finished work, newest first; a run of private tasks shows as one."""
+        if not self.deny:
+            return []
+        items = []
+        for issue in newest:
+            if not labels(issue) & {"status:done", "status:review"}:
+                continue
+            item = self.recent_item(issue)
+            if not (items and item["text"] == PRIVATE == items[-1]["text"]):
+                items.append(item)
+        return items
+
+    def now_text(self, working):
+        if not working:
+            return None
+        return self.text(working[0]) if self.deny else ON_TASK
+
+    def agent(self, r, issues):
         mine = [i for i in issues if f"agent:{r['name'].lower()}" in labels(i) and "pull_request" not in i]
         newest = sorted(mine, key=lambda i: i["updated_at"], reverse=True)
         working = [i for i in newest if "status:working" in labels(i)]
-        now_text = None
-        if working:
-            now_text = text(working[0]) if deny else ON_TASK
-        recent = []
-        for i in newest:
-            if deny and labels(i) & {"status:done", "status:review"}:
-                item = {"at": iso(i.get("closed_at") or i["updated_at"]), "text": text(i)}
-                url = URL.search(i.get("body") or "")
-                url = links.get(str(i["number"])) or (url.group(0) if url else None)
-                if url and item["text"] != PRIVATE and (reveal or url.startswith(PUBLIC_URLS)):
-                    item["url"] = url
-                if recent and item["text"] == PRIVATE == recent[-1]["text"]:
-                    continue
-                recent.append(item)
-        entry = {
+        return {
             "name": r["name"],
             "role": r.get("title") or r.get("role") or "",
             "state": "working" if working else "idle",
-            "now": now_text,
+            "now": self.now_text(working),
             "lastActiveAt": iso(newest[0]["updated_at"]) if newest else None,
             "budgetPercent": 0,       # per-agent spend isn't tracked on the VPS
-            "recent": recent[:RECENT],
+            "recent": self.recent(newest)[:RECENT],
         }
-        if reveal:
-            rpd, cents = r.get("runs_per_day"), r.get("budget_monthly_cents")
-            entry.update({
-                "model": str(r["model"]).split("/", 1)[-1] if r.get("model") else "DeepSeek (default)",
-                "runsPerDay": rpd if isinstance(rpd, int) and rpd >= 0 else None,
-                "budgetMonthlyUsd": usd(cents / 100) if isinstance(cents, (int, float)) else None,
-                "week": (weeks or {}).get(r["name"].lower()),
-            })
-        out.append(entry)
-    tasks = []
-    for i in issues:
-        if "pull_request" in i:
-            continue
-        title = text(i)
-        agent = "unassigned"
-        for l in labels(i):
-            if l.startswith("agent:"):
-                agent = l[6:]
-                break
-        status = "todo"
-        if "status:done" in labels(i) or i.get("state") == "closed":
-            status = "done"
-        else:
-            for s in ("blocked", "review", "working", "todo"):
-                if f"status:{s}" in labels(i):
-                    status = s
-                    break
-        pr = None
-        if title != PRIVATE:
-            u = URL.search(i.get("body") or "")
-            u = links.get(str(i["number"])) or (u.group(0) if u else None)
-            if u and u.startswith(pr_ok):
-                pr = u
+
+    def pr(self, issue):
+        url = self.link(issue)
+        return url if url and url.startswith(self.pr_ok) else None
+
+    def task(self, issue):
+        title = self.text(issue)
         private = title == PRIVATE
-        waits = "agent"
-        for l in labels(i):          # the waits:* label picks the page column
-            if l.startswith("waits:") and l[6:] in WAITS:
-                waits = l[6:]
-                break
-        tasks.append({
-            "id": i["number"],
+        number = issue["number"]
+        return {
+            "id": number,
             "title": title,
-            "agent": agent,
-            "status": status,
-            "waits": waits,
-            "waitsText": "" if private else waits_text.get(str(i["number"]), ""),
-            "url": None if private else f"{ISSUE}{i['number']}",
-            "pr": pr,
-            "updated": iso(i["updated_at"]),
-        })
+            "agent": next(iter(label_values(issue, "agent:")), "unassigned"),
+            "status": status_of(issue),
+            # the waits:* label picks the page column
+            "waits": next((w for w in label_values(issue, "waits:") if w in WAITS), "agent"),
+            "waitsText": "" if private else self.waits_text.get(str(number), ""),
+            "url": None if private else f"{ISSUE}{number}",
+            "pr": None if private else self.pr(issue),
+            "updated": iso(issue["updated_at"]),
+        }
+
+
+def board_fields(r, weeks):
+    """What only the board's copy says about an agent: its model, caps and last week."""
+    rpd, cents = r.get("runs_per_day"), r.get("budget_monthly_cents")
+    runs_ok = isinstance(rpd, int) and rpd >= 0
+    return {
+        "model": str(r["model"]).split("/", 1)[-1] if r.get("model") else "DeepSeek (default)",
+        "runsPerDay": rpd if runs_ok else None,
+        "budgetMonthlyUsd": usd(cents / 100) if isinstance(cents, (int, float)) else None,
+        "week": (weeks or {}).get(r["name"].lower()),
+    }
+
+
+def used_percent(key):
     used, cap = key.get("usage_monthly"), key.get("limit")
+    if used is None or not cap:
+        return 0
+    return round(100 * float(used) / float(cap))
+
+
+def build(src, deny, board=None):
+    """The status document from `src`: now, agents, issues, comments, key (OpenRouter's) and model.
+
+    `board` is None for the redacted site-root copy, or (weeks, as_of) from capacity() for the
+    board's own copy. Only the board copy carries dollar amounts (budget, per-agent cap and last
+    week's spend)."""
+    reveal = board is not None
+    copy = Copy(deny, src["comments"], reveal)
+    key, now = src["key"], src["now"]
+    agents = [copy.agent(r, src["issues"]) for r in src["agents"]]
     doc = {
         "generatedAt": iso(now),
-        "budget": {"usedPercent": round(100 * float(used) / float(cap)) if used is not None and cap else 0,
-                   "month": now.strftime("%Y-%m")},
-        "model": model,
-        "agents": out,
-        "tasks": tasks,
+        "budget": {"usedPercent": used_percent(key), "month": now.strftime("%Y-%m")},
+        "model": src["model"],
+        "agents": agents,
+        "tasks": [copy.task(i) for i in src["issues"] if "pull_request" not in i],
     }
     if reveal:
-        doc["budget"].update({"usedUsd": usd(used), "capUsd": usd(cap), "leftUsd": usd(key.get("limit_remaining")),
-                              "todayUsd": usd(key.get("usage_daily"))})
+        weeks, as_of = board
+        for entry, r in zip(agents, src["agents"]):
+            entry.update(board_fields(r, weeks))
+        doc["budget"].update({"usedUsd": usd(key.get("usage_monthly")), "capUsd": usd(key.get("limit")),
+                              "leftUsd": usd(key.get("limit_remaining")), "todayUsd": usd(key.get("usage_daily"))})
         doc["capacityAsOf"] = as_of
-    validate(doc, deny, reveal)
+    validate(doc, copy.deny, reveal)
     return doc
 
 
-def validate(doc, deny, reveal=False):
-    def need(ok, what):
-        if not ok:
-            raise Failure(f"status.json invalid: {what}")
+MONEY = ("usedUsd", "capUsd", "leftUsd", "todayUsd")
+AGENT_KEYS = {"name", "role", "state", "now", "lastActiveAt", "budgetPercent", "recent"}
+BOARD_AGENT_KEYS = {"model", "runsPerDay", "budgetMonthlyUsd", "week"}
 
+
+def need(ok, what):
+    if not ok:
+        raise Failure(f"status.json invalid: {what}")
+
+
+def allowed_urls(reveal):
+    return OWNER_URLS if reveal else PUBLIC_URLS
+
+
+def validate_top(doc, reveal):
     top = {"generatedAt", "budget", "model", "agents", "tasks"} | ({"capacityAsOf"} if reveal else set())
     need(set(doc) == top and ZULU.match(doc["generatedAt"]), "top level")
     need(isinstance(doc["budget"]["usedPercent"], int) and doc["budget"]["usedPercent"] >= 0, "budget")
-    money = ("usedUsd", "capUsd", "leftUsd", "todayUsd")
-    need(set(doc["budget"]) == {"usedPercent", "month"} | (set(money) if reveal else set()), "budget keys")
+    need(set(doc["budget"]) == {"usedPercent", "month"} | (set(MONEY) if reveal else set()), "budget keys")
     if reveal:
-        need(all(doc["budget"][k] is None or isinstance(doc["budget"][k], float) for k in money), "budget amounts")
+        need(all(doc["budget"][k] is None or isinstance(doc["budget"][k], float) for k in MONEY), "budget amounts")
         need(doc["capacityAsOf"] is None or ZULU.match(doc["capacityAsOf"]), "capacityAsOf")
+
+
+def validate_board_agent(a):
+    need(isinstance(a["model"], str) and (a["runsPerDay"] is None or isinstance(a["runsPerDay"], int)), "agent model/runs")
+    need(a["budgetMonthlyUsd"] is None or isinstance(a["budgetMonthlyUsd"], float), "agent budget")
+    need(a["week"] is None or set(a["week"]) == {"runs", "busyH", "spendUsd", "timeouts"}, "agent week")
+
+
+def validate_agent(a, reveal):
+    need(a["state"] in ("working", "idle") and (a["lastActiveAt"] is None or ZULU.match(a["lastActiveAt"])), "agent")
+    need(set(a) == AGENT_KEYS | (BOARD_AGENT_KEYS if reveal else set()), "agent keys")
+    if reveal:
+        validate_board_agent(a)
+    for r in a["recent"]:
+        need(ZULU.match(r["at"]) and ("url" not in r or r["url"].startswith(allowed_urls(reveal))), "recent item")
+
+
+def validate_task(t, reveal):
+    need(isinstance(t.get("id"), int), "task id")
+    need(isinstance(t.get("title"), str), "task title")
+    need(isinstance(t.get("agent"), str), "task agent")
+    need(t.get("status") in ("todo", "working", "review", "blocked", "done"), "task status")
+    need(t.get("waits") in WAITS, "task waits")
+    need(isinstance(t.get("waitsText"), str), "task waitsText")
+    need(t.get("url") is None or (isinstance(t["url"], str) and t["url"].startswith(ISSUE)), "task url")
+    need(t.get("pr") is None or (isinstance(t["pr"], str) and t["pr"].startswith(allowed_urls(reveal))), "task pr")
+    need(isinstance(t.get("updated"), str) and ZULU.match(t["updated"]), "task updated")
+
+
+def shown_words(doc):
+    """Every piece of free text the document shows."""
+    agents, tasks = doc["agents"], doc["tasks"]
+    return [a["name"] for a in agents] + [a["now"] or "" for a in agents] \
+        + [r["text"] for a in agents for r in a["recent"]] \
+        + [t["title"] for t in tasks] + [t["waitsText"] for t in tasks]
+
+
+def validate_public(doc, deny):
+    """The root copy may go public: no private term and no money amount in it."""
+    words = shown_words(doc)
+    pattern = re.compile(DENY_BASE + ("|" + deny.pattern if deny else ""), re.IGNORECASE)
+    need(not any(pattern.search(w) for w in words), "a private term would be published")
+    need(not re.search(r"\$\s?\d|cents|usd", json.dumps(doc), re.IGNORECASE), "a money amount would be published")
+
+
+def validate(doc, deny, reveal=False):
+    validate_top(doc, reveal)
     for a in doc["agents"]:
-        need(a["state"] in ("working", "idle") and (a["lastActiveAt"] is None or ZULU.match(a["lastActiveAt"])), "agent")
-        need(set(a) == {"name", "role", "state", "now", "lastActiveAt", "budgetPercent", "recent"}
-             | ({"model", "runsPerDay", "budgetMonthlyUsd", "week"} if reveal else set()), "agent keys")
-        if reveal:
-            need(isinstance(a["model"], str) and (a["runsPerDay"] is None or isinstance(a["runsPerDay"], int)), "agent model/runs")
-            need(a["budgetMonthlyUsd"] is None or isinstance(a["budgetMonthlyUsd"], float), "agent budget")
-            need(a["week"] is None or set(a["week"]) == {"runs", "busyH", "spendUsd", "timeouts"}, "agent week")
-        for r in a["recent"]:
-            need(ZULU.match(r["at"]) and ("url" not in r or r["url"].startswith(OWNER_URLS if reveal else PUBLIC_URLS)), "recent item")
+        validate_agent(a, reveal)
     for t in doc["tasks"]:
-        need(isinstance(t.get("id"), int), "task id")
-        need(isinstance(t.get("title"), str), "task title")
-        need(isinstance(t.get("agent"), str), "task agent")
-        need(t.get("status") in ("todo", "working", "review", "blocked", "done"), "task status")
-        need(t.get("waits") in WAITS, "task waits")
-        need(isinstance(t.get("waitsText"), str), "task waitsText")
-        need(t.get("url") is None or (isinstance(t["url"], str) and t["url"].startswith(ISSUE)), "task url")
-        need(t.get("pr") is None or (isinstance(t["pr"], str) and t["pr"].startswith(OWNER_URLS if reveal else PUBLIC_URLS)), "task pr")
-        need(isinstance(t.get("updated"), str) and ZULU.match(t["updated"]), "task updated")
-    words = [a["name"] for a in doc["agents"]] + [a["now"] or "" for a in doc["agents"]] \
-        + [r["text"] for a in doc["agents"] for r in a["recent"]] \
-        + [t["title"] for t in doc["tasks"]] + [t["waitsText"] for t in doc["tasks"]]
-    if not reveal:      # the board sits behind Access (Petter only); the root copy may go public
-        pattern = re.compile(DENY_BASE + ("|" + deny.pattern if deny else ""), re.IGNORECASE)
-        need(not any(pattern.search(w) for w in words), "a private term would be published")
-    if not reveal:      # dollar amounts are for the board copy only
-        need(not re.search(r"\$\s?\d|cents|usd", json.dumps(doc), re.IGNORECASE), "a money amount would be published")
+        validate_task(t, reveal)
+    if not reveal:      # the board sits behind Access (Petter only) and is the only copy with dollar amounts
+        validate_public(doc, deny)
 
 
 def write_atomic(path, data):
@@ -344,28 +451,29 @@ def load_deny(secrets_dir):
     return re.compile("|".join(re.escape(t) for t in terms), re.IGNORECASE) if terms else None
 
 
+def first_readable(paths):
+    """The bytes of the first file that can be read, or None."""
+    for path in paths:
+        try:
+            return path.read_bytes()
+        except OSError:
+            continue
+    return None
+
+
 def board_assets(repo_root):
     """The page to serve, from the vendored vps/board/. A change there applies through the
     sync like any other (CI green, soak). When the real page is missing, the old placeholder is
     kept as the fallback, so /board still renders. Returns (page bytes, sample bytes or None)."""
     board = Path(repo_root) / "vps" / "board"
-    page = None
-    for name in ("index.html", "placeholder.html"):
-        try:
-            page = (board / name).read_bytes()
-            break
-        except OSError:
-            continue
+    page = first_readable([board / "index.html", board / "placeholder.html"])
     if page is None:
         raise Failure("no board page: vps/board/index.html and placeholder.html are both missing")
-    try:
-        sample = (board / "board-sample.json").read_bytes()
-    except OSError:
-        sample = None
-    return page, sample
+    return page, first_readable([board / "board-sample.json"])
 
 
-def do_status(a):
+def read_keys(a):
+    """(GitHub token, OpenRouter key). Refuses to send either over plain HTTP to a remote host."""
     ghtoken = read_env_value(Path(a.secrets_dir) / "sandbox.env", "GH_TOKEN")
     orkey = read_env_value(Path(a.secrets_dir) / "hermes.env", "OPENROUTER_API_KEY")
     secrets.extend([ghtoken, orkey])
@@ -373,27 +481,46 @@ def do_status(a):
         u = urllib.parse.urlsplit(url)
         if u.scheme != "https" and u.hostname not in LOOPBACK:
             raise Failure(f"refusing to send a key over plain HTTP to {u.hostname}")
+    return ghtoken, orkey
+
+
+def read_repo(repo_root):
+    """(the roster's agents, the default model in the Hermes config)."""
     try:
-        agents = tomllib.loads((Path(a.repo_root) / "agents" / "roster.toml").read_text(encoding="utf-8"))["agents"]
-        model = model_of((Path(a.repo_root) / "hermes" / "config.yaml").read_text(encoding="utf-8"))
+        agents = tomllib.loads((Path(repo_root) / "agents" / "roster.toml").read_text(encoding="utf-8"))["agents"]
+        model = model_of((Path(repo_root) / "hermes" / "config.yaml").read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, KeyError) as e:
         raise Failure(f"cannot read the roster or Hermes config: {e}") from None
+    return agents, model
+
+
+def week_figures(board, ghtoken):
+    """capacity() of the "Capacity" issue; without it the board still builds, minus the week figures."""
+    try:
+        return capacity((http(f"{board}/issues/80", ghtoken) or {}).get("body"))
+    except (Failure, AttributeError):
+        return {}, None
+
+
+def as_json(doc):
+    return (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode()
+
+
+def do_status(a):
+    ghtoken, orkey = read_keys(a)
+    agents, model = read_repo(a.repo_root)
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     board = f"{a.github.rstrip('/')}/repos/{BOARD}"
     issues = http(f"{board}/issues?state=all&sort=updated&direction=desc&per_page=100", ghtoken) or []
     since = iso(now - dt.timedelta(days=14))
     comments = http(f"{board}/issues/comments?since={since}&per_page=100", ghtoken) or []
     key = (http(a.openrouter.rstrip("/") + "/key", orkey) or {}).get("data") or {}
-    try:
-        weeks, as_of = capacity((http(f"{board}/issues/80", ghtoken) or {}).get("body"))     # "Capacity"
-    except (Failure, AttributeError):
-        weeks, as_of = {}, None      # the board still builds, without the week figures
+    src = {"now": now, "agents": agents, "issues": issues, "comments": comments, "key": key, "model": model}
+    weeks = week_figures(board, ghtoken)
     deny = load_deny(a.secrets_dir)
-    doc = build(now, agents, issues, comments, key, model, deny)
-    data = (json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode()
-    write_atomic(Path(a.site_dir) / "status.json", data)            # redacted: may be public one day
-    full = build(now, agents, issues, comments, key, model, deny, reveal=True, weeks=weeks, as_of=as_of)
-    board_data = (json.dumps(full, ensure_ascii=False, indent=2) + "\n").encode()
+    doc = build(src, deny)
+    write_atomic(Path(a.site_dir) / "status.json", as_json(doc))            # redacted: may be public one day
+    board_data = as_json(build(src, deny, board=weeks))
     page, sample = board_assets(a.repo_root)
     board_dir = Path(a.site_dir) / "board"
     write_atomic(board_dir / "board.json", board_data)    # what the waits page polls: behind Access, real titles
@@ -404,6 +531,52 @@ def do_status(a):
     print(f"hq status: {len(doc['agents'])} agents, {sum(x['state'] == 'working' for x in doc['agents'])} working, {len(doc['tasks'])} tasks")
 
 
+def unchanged(state, sha, served):
+    """True when the tree was already mirrored (the state file holds its sha) and `served` is there."""
+    try:
+        return state.read_text().strip() == sha and served.exists()
+    except OSError:
+        return False
+
+
+def mirrored(entry):
+    """True for a crew/ entry to mirror: a file inside the folder, never the live status.json."""
+    path = entry["path"]
+    if entry["type"] != "blob" or path == "status.json":
+        return False
+    return ".." not in path.split("/") and not path.startswith("/")
+
+
+def crew_files(tree):
+    """path -> blob sha of what to mirror. Refuses a file or a total that is too large."""
+    files, total = {}, 0
+    for e in filter(mirrored, tree["tree"]):
+        total += e.get("size", 0)
+        if e.get("size", 0) > MAX_FILE or total > MAX_TOTAL:
+            raise Failure(f"crew/{e['path']} is too large")
+        files[e["path"]] = e["sha"]
+    return files
+
+
+def kept(rel):
+    """Paths in the site dir that crew/ does not own: the live status.json, the board, half-written files."""
+    if rel == "status.json" or rel.endswith(".tmp"):
+        return True
+    return rel == "board" or rel.startswith("board/")
+
+
+def prune(site, files):
+    """Remove the files and folders no longer in crew/."""
+    for p in sorted(site.rglob("*"), reverse=True):
+        rel = p.relative_to(site).as_posix()
+        if kept(rel):
+            continue
+        if p.is_file() and rel not in files:
+            p.unlink()
+        elif p.is_dir() and not any(p.iterdir()):
+            p.rmdir()
+
+
 def do_crew(a):
     """Mirror main's crew/ into the site dir (never its status.json, which is live)."""
     api = f"{a.github.rstrip('/')}/repos/{CREW_REPO}/git"
@@ -411,75 +584,81 @@ def do_crew(a):
     if tree.get("truncated"):
         raise Failure("crew/ listing is truncated")
     site, state = Path(a.site_dir), Path(a.state_dir) / "hq-crew.sha"
-    try:
-        if state.read_text().strip() == tree["sha"] and (site / "index.html").exists():
-            print("hq crew: unchanged")
-            return
-    except OSError:
-        pass
-    files, total = {}, 0
-    for e in tree["tree"]:
-        parts = e["path"].split("/")
-        if e["type"] != "blob" or e["path"] == "status.json" or ".." in parts or e["path"].startswith("/"):
-            continue
-        if e.get("size", 0) > MAX_FILE or (total := total + e.get("size", 0)) > MAX_TOTAL:
-            raise Failure(f"crew/{e['path']} is too large")
-        files[e["path"]] = e["sha"]
+    if unchanged(state, tree["sha"], site / "index.html"):
+        print("hq crew: unchanged")
+        return
+    files = crew_files(tree)
     if "index.html" not in files:
         raise Failure("crew/index.html is missing; keeping what is served")
     for rel, sha in files.items():
         blob = http(f"{api}/blobs/{sha}")
         write_atomic(site / rel, base64.b64decode(blob["content"]))
-    for p in sorted(site.rglob("*"), reverse=True):      # files and folders no longer in crew/
-        rel = p.relative_to(site).as_posix()
-        if rel == "status.json" or rel.endswith(".tmp") or rel == "board" or rel.startswith("board/"):
-            continue
-        if p.is_file() and rel not in files:
-            p.unlink()
-        elif p.is_dir() and not any(p.iterdir()):
-            p.rmdir()
+    prune(site, files)
     write_atomic(state, tree["sha"].encode())
     print(f"hq crew: {len(files)} files")
 
 
-def do_themes(a):
-    """Mirror main's hq/*.yaml (Hermes dashboard themes); ghost falls back to the starter in this repo."""
-    api = f"{a.github.rstrip('/')}/repos/{CREW_REPO}/git"
+def themes_tree(api):
+    """The listing of main's hq/ folder; an empty one when the folder does not exist yet."""
     try:
         tree = http(f"{api}/trees/main%3Ahq")
     except Failure as e:
         if "-> 404" not in str(e):
             raise
-        tree = {"sha": "none", "tree": []}          # no hq/ folder yet
+        tree = {"sha": "none", "tree": []}
     if tree.get("truncated"):
         raise Failure("hq/ listing is truncated")
-    out, state = Path(a.themes_dir), Path(a.state_dir) / "hq-themes.sha"
-    try:
-        if state.read_text().strip() == tree["sha"] and (out / "ghost.yaml").exists():
-            print("hq themes: unchanged")
-            return
-    except OSError:
-        pass
+    return tree
+
+
+def theme(api, entry):
+    """One theme file's bytes. Refuses one that is too large or has no `name:`."""
+    if entry.get("size", 0) > MAX_THEME:
+        raise Failure(f"hq/{entry['path']} is too large")
+    data = base64.b64decode(http(f"{api}/blobs/{entry['sha']}")["content"])
+    if not THEME_NAME.search(data.decode("utf-8", "replace")):
+        raise Failure(f"hq/{entry['path']} has no `name:`; keeping what is served")
+    return data
+
+
+def theme_files(api, tree):
+    """name -> bytes of every hq/*.yaml in the listing."""
     files = {}
     for e in tree["tree"]:
         if e["type"] == "blob" and THEME_FILE.match(e["path"]):
-            if e.get("size", 0) > MAX_THEME:
-                raise Failure(f"hq/{e['path']} is too large")
-            blob = http(f"{api}/blobs/{e['sha']}")
-            data = base64.b64decode(blob["content"])
-            if not THEME_NAME.search(data.decode("utf-8", "replace")):
-                raise Failure(f"hq/{e['path']} has no `name:`; keeping what is served")
-            files[e["path"]] = data
+            files[e["path"]] = theme(api, e)
+    return files
+
+
+def prune_themes(out, files):
+    """Remove the themes no longer in hq/ (never a half-written file)."""
+    for p in out.glob("*"):
+        stale = p.is_file() and p.name not in files
+        if stale and not p.name.endswith(".tmp"):
+            p.unlink()
+
+
+def starter_theme(repo_root):
+    try:
+        return (Path(repo_root) / "vps" / "dashboard-themes" / "ghost.yaml").read_bytes()
+    except OSError as e:
+        raise Failure(f"no ghost theme and no starter: {e}") from None
+
+
+def do_themes(a):
+    """Mirror main's hq/*.yaml (Hermes dashboard themes); ghost falls back to the starter in this repo."""
+    api = f"{a.github.rstrip('/')}/repos/{CREW_REPO}/git"
+    tree = themes_tree(api)
+    out, state = Path(a.themes_dir), Path(a.state_dir) / "hq-themes.sha"
+    if unchanged(state, tree["sha"], out / "ghost.yaml"):
+        print("hq themes: unchanged")
+        return
+    files = theme_files(api, tree)
     if "ghost.yaml" not in files:
-        try:
-            files["ghost.yaml"] = (Path(a.repo_root) / "vps" / "dashboard-themes" / "ghost.yaml").read_bytes()
-        except OSError as e:
-            raise Failure(f"no ghost theme and no starter: {e}") from None
+        files["ghost.yaml"] = starter_theme(a.repo_root)
     for rel, data in files.items():
         write_atomic(out / rel, data)
-    for p in out.glob("*"):
-        if p.is_file() and p.name not in files and not p.name.endswith(".tmp"):
-            p.unlink()
+    prune_themes(out, files)
     write_atomic(state, tree["sha"].encode())
     print(f"hq themes: {len(files)} files")
 

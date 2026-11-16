@@ -138,6 +138,7 @@ public).
 | 2026-11-15 | The Spend issue books every dollar to an owner: each agent's ledger total, plus "Hermes background" for the key's usage no run recorded | Petter's attribution rule (14 Nov); #316. |
 | 2026-11-15 | DeepSeek V4.1 Flash prefers the three cheapest ZDR providers (order, fallbacks allowed) | OpenRouter export 1–14 Nov: ~$12 of $39 went to providers 2–6x the cheapest despite sort: price (#316). |
 | 2026-11-15 | Hermes side-calls (background review, compression, titles) are pinned to DeepSeek V4.1 Flash, the review replay is capped at 32K tokens, compaction starts at 120K tokens, and all of the key's requests carry `X-Title`/`user` = `section9-agents` so OpenRouter's export shows them as ours. | Spend #11 booked 45% of November ($18.10 of $40.19) as "Hermes background": side-calls billed after each run's key delta closed (Ishikawa, section9-hq #323). |
+| 2026-11-16 | Code Health programme scope (Petter, 16 Nov): CodeScene Code Health ≥ 9.5 per repo, free tier. Finished ghost-in-the-machine nights are left as they are; every new night must score ≥ 9.5. Uplift order: agent-manager, then ghost-in-the-machine, then flight-tracker. Deadline reviewed with Petter on Friday 20 Nov. | Better code health makes the agents' next change easier (Petter's positive feedback loop). agent-manager is refactored by the Major's Fable helper because agents can't push here. |
 
 ## Open
 - Apply the roster on the VM and switch Saito to the Hermes gateway.
