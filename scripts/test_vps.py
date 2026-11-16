@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import unittest
 from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,7 +35,8 @@ def load(name, filename):
     return mod
 
 
-dispatch = load("dispatch", "dispatch.py")
+dispatch = load("dispatch", "dispatch.py")     # also puts vps/ on sys.path, for its parts:
+import dispatcher  # noqa: E402
 hq = load("hq_status", "hq-status.py")
 sca = load("sca_watch", "sca-watch.py")
 
@@ -373,7 +375,7 @@ class TestDispatch(Base):
         def steal(todo, *args, **kwargs):
             self.stub.issues[n]["labels"] = [{"name": "agent:batou"}, {"name": "status:working"}]
             return todo
-        with mock.patch.object(dispatch, "hold_low_priority", side_effect=steal):
+        with mock.patch.object(dispatcher.pick, "hold_low_priority", side_effect=steal):
             code, out = self.run_dispatch()
         self.assertEqual((code, self.stub.hermes_calls), (0, []))
         self.assertEqual(self.stub.labels(n), {"agent:batou", "status:working"})
@@ -530,7 +532,7 @@ class TestPaging(Base):
         self.stub.page_size = 1
         self.stub.add(["agent:batou", "status:todo"])
         self.stub.add(["agent:batou", "status:todo"])
-        with mock.patch.object(dispatch, "MAX_PAGES", 1):
+        with mock.patch.object(dispatcher.board, "MAX_PAGES", 1):
             code, _ = self.run_dispatch()
         self.assertEqual((code, self.stub.hermes_calls, self.stub.comments), (1, [], []))
 
@@ -568,7 +570,7 @@ class TestSpend(Base):
     def seed_ledger(self, rows):
         path = self.t / "state" / "runs.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        now = dispatch.dt.datetime.now(dispatch.dt.timezone.utc)
+        now = dt.datetime.now(dt.timezone.utc)
         with path.open("w", encoding="utf-8") as f:
             for agent, cost in rows:
                 f.write(json.dumps({"agent": agent, "start": now.isoformat(), "outcome": "ok",
@@ -610,8 +612,8 @@ class TestSpend(Base):
 
 class TestCredits(Base):
     def test_one_issue_with_steal_the_ceiling_and_the_caps_no_agent_labels(self):
-        with mock.patch.object(dispatch, "SAMPLE_SECONDS", 0.01), \
-                mock.patch.object(dispatch, "PROBE_SECONDS", 0.01):
+        with mock.patch.object(dispatcher.cpu, "SAMPLE_SECONDS", 0.01), \
+                mock.patch.object(dispatcher.cpu, "PROBE_SECONDS", 0.01):
             self.run_dispatch("cpu")
             self.run_dispatch("cpu")
         (n, issue), = self.stub.issues.items()
@@ -710,12 +712,12 @@ class TestRoutines(Base):
         from zoneinfo import ZoneInfo
         tz = ZoneInfo("Europe/Stockholm")
         at = lambda h, m, d=1: dt.datetime(2026, 11, d, h, m, tzinfo=tz)   # 1 Nov 2026 is a Sunday
-        self.assertTrue(dispatch.cron_matches("40 5,16 * * *", at(16, 40)))
-        self.assertFalse(dispatch.cron_matches("40 5,16 * * *", at(16, 41)))
-        self.assertTrue(dispatch.cron_matches("0 1 * * 0", at(1, 0)))
-        self.assertFalse(dispatch.cron_matches("0 1 * * 1-5", at(1, 0)))
-        self.assertTrue(dispatch.cron_matches("0 1 * * 1-5", at(1, 0, 2)))
-        self.assertTrue(dispatch.cron_matches("*/15 * * * *", at(3, 45)))
+        self.assertTrue(dispatcher.routines.cron_matches("40 5,16 * * *", at(16, 40)))
+        self.assertFalse(dispatcher.routines.cron_matches("40 5,16 * * *", at(16, 41)))
+        self.assertTrue(dispatcher.routines.cron_matches("0 1 * * 0", at(1, 0)))
+        self.assertFalse(dispatcher.routines.cron_matches("0 1 * * 1-5", at(1, 0)))
+        self.assertTrue(dispatcher.routines.cron_matches("0 1 * * 1-5", at(1, 0, 2)))
+        self.assertTrue(dispatcher.routines.cron_matches("*/15 * * * *", at(3, 45)))
 
 
 class TestS9Task(Base):
@@ -1245,12 +1247,12 @@ class TestGuardrails(Base):
         self.assertIn("timed out at 1 s", self.stub.comments[0][1])
 
     def test_the_ceiling_is_the_root_only_value_and_the_roster_can_only_lower_it(self):
-        self.assertEqual(dispatch.ceiling({"name": "Batou", "timeout_sec": 3600}, {"Batou": 60}), 60)
-        self.assertEqual(dispatch.ceiling({"name": "Ishikawa", "timeout_sec": 60}, {"default": 30}), 30)
-        self.assertEqual(dispatch.ceiling({"name": "Saito", "timeout_sec": 60}, {}), 60)
-        caps, preamble = dispatch.limits_of(self.t / "gone.toml")
+        self.assertEqual(dispatcher.limits.ceiling({"name": "Batou", "timeout_sec": 3600}, {"Batou": 60}), 60)
+        self.assertEqual(dispatcher.limits.ceiling({"name": "Ishikawa", "timeout_sec": 60}, {"default": 30}), 30)
+        self.assertEqual(dispatcher.limits.ceiling({"name": "Saito", "timeout_sec": 60}, {}), 60)
+        caps, preamble = dispatcher.limits.limits_of(self.t / "gone.toml")
         self.assertEqual((caps, preamble), ({}, ""))
-        self.assertEqual(dispatch.limits_of(self.limits('preamble = "p"\n[timeout_sec]\ndefault = 5\n')),
+        self.assertEqual(dispatcher.limits.limits_of(self.limits('preamble = "p"\n[timeout_sec]\ndefault = 5\n')),
                          ({"default": 5}, "p"))
 
 
@@ -1571,8 +1573,8 @@ class TestLedger(Base):
         (row,) = self.ledger()
         # The model is what the run asked for (the gateway default here), plus the model it was booked to.
         self.assertEqual((row["v"], row["issue"], row["agent"], row["role"], row["type"], row["model"]),
-                         (1, n, "Batou", "", "qa", dispatch.DEFAULT_MODEL))
-        self.assertEqual(row["model_requested"], dispatch.DEFAULT_MODEL)
+                         (1, n, "Batou", "", "qa", dispatcher.limits.DEFAULT_MODEL))
+        self.assertEqual(row["model_requested"], dispatcher.limits.DEFAULT_MODEL)
         self.assertEqual((row["outcome"], row["queue_before"]), ("ok", 1))
         self.assertGreaterEqual(row["seconds"], 0)
         self.assertEqual(row["cost_usd"], 0.03)
@@ -1607,7 +1609,7 @@ class TestLedger(Base):
 
     def test_a_broken_ledger_never_stops_the_run(self):
         n = self.stub.add(["agent:batou", "status:todo"])
-        with mock.patch.object(dispatch, "append_ledger", side_effect=OSError("disk full")):
+        with mock.patch.object(dispatcher.ledger, "append_ledger", side_effect=OSError("disk full")):
             code, out = self.run_dispatch()
         self.assertEqual(code, 0)
         self.assertEqual(self.stub.labels(n), {"agent:batou", "status:review"})
@@ -1633,14 +1635,14 @@ class TestLedger(Base):
         self.assertEqual((row["usage_before"], row["usage_after"], row["cost_usd"]), ({}, {}, None))
 
     def test_key_usage_is_empty_when_the_read_fails(self):
-        for boom in (dispatch.Failure("no key"), ValueError("not JSON after all")):
+        for boom in (dispatcher.net.Failure("no key"), ValueError("not JSON after all")):
             with self.subTest(boom=type(boom).__name__):
-                with mock.patch.object(dispatch, "http", side_effect=boom):
-                    self.assertEqual(dispatch.key_usage("http://x/api/v1", "k"), {})
+                with mock.patch.object(dispatcher.net, "http", side_effect=boom):
+                    self.assertEqual(dispatcher.openrouter.key_usage("http://x/api/v1", "k"), {})
 
     def test_a_failing_cpu_sample_still_runs_and_records_no_cpu(self):
         n = self.stub.add(["agent:batou", "status:todo"])
-        with mock.patch.object(dispatch, "cpu_sample", side_effect=OSError("no /proc/stat")):
+        with mock.patch.object(dispatcher.cpu, "cpu_sample", side_effect=OSError("no /proc/stat")):
             code, _ = self.run_dispatch()
         self.assertEqual(code, 0)
         self.assertEqual(self.stub.labels(n), {"agent:batou", "status:review"})
@@ -1668,14 +1670,14 @@ class TestLedger(Base):
 class TestCpuUnits(unittest.TestCase):
     def test_proc_stat_ticks_are_converted_to_seconds(self):
         fields = [100, 0, 50, 900, 20, 10, 10, 5]        # user nice system idle iowait irq softirq steal
-        with mock.patch.object(dispatch, "CLK_TCK", 100.0):
-            self.assertAlmostEqual(dispatch.busy_seconds(fields), 1.7)   # (100+50+10+10)/100
-            self.assertEqual(dispatch.cpu_sample.__name__, "cpu_sample")
+        with mock.patch.object(dispatcher.cpu, "CLK_TCK", 100.0):
+            self.assertAlmostEqual(dispatcher.cpu.busy_seconds(fields), 1.7)   # (100+50+10+10)/100
+            self.assertEqual(dispatcher.cpu.cpu_sample.__name__, "cpu_sample")
 
     def test_the_draw_is_not_a_hundred_times_too_big(self):
         before = {"at": 0.0, "busy": 0.0, "steal": 0.0, "total": 0.0}
         after = {"at": 3600.0, "busy": 1185.0, "steal": 18.0, "total": 3600.0}
-        d = dispatch.cpu_delta(before, after)
+        d = dispatcher.cpu.cpu_delta(before, after)
         self.assertAlmostEqual(d["credits"], 285.0)      # 1185 - 25% baseline x 3600 = 285
         self.assertAlmostEqual(d["steal_pct"], 0.5)
 
@@ -1683,33 +1685,33 @@ class TestCpuUnits(unittest.TestCase):
 class TestPace(unittest.TestCase):
     def test_the_two_lines_for_a_forty_dollar_month(self):
         now = dt.datetime(2026, 11, 15, 12, tzinfo=dt.timezone.utc)
-        p = dispatch.month_pace(now, 40, 20)
+        p = dispatcher.openrouter.month_pace(now, 40, 20)
         self.assertEqual(p["days"], 30)
         self.assertAlmostEqual(p["linear_per_day"], 39 / 30)
         self.assertAlmostEqual(p["linear_to_date"], (39 / 30) * 14.5)
         self.assertAlmostEqual(p["remaining_per_day"], (40 - 20 - 1) / 15.5)
-        self.assertFalse(dispatch.over_pace(now, 40, 20))
-        self.assertTrue(dispatch.over_pace(now, 40, 30))
+        self.assertFalse(dispatcher.openrouter.over_pace(now, 40, 20))
+        self.assertTrue(dispatcher.openrouter.over_pace(now, 40, 30))
 
     def test_slack_days_is_the_tolerance(self):
         now = dt.datetime(2026, 11, 15, 12, tzinfo=dt.timezone.utc)
-        pace = dispatch.month_pace(now, 40, 20)["linear_to_date"]
-        just_over = pace + 0.5 * dispatch.month_pace(now, 40, 20)["linear_per_day"]
-        self.assertFalse(dispatch.over_pace(now, 40, just_over, slack_days=1.0))
-        self.assertTrue(dispatch.over_pace(now, 40, just_over, slack_days=0.0))
+        pace = dispatcher.openrouter.month_pace(now, 40, 20)["linear_to_date"]
+        just_over = pace + 0.5 * dispatcher.openrouter.month_pace(now, 40, 20)["linear_per_day"]
+        self.assertFalse(dispatcher.openrouter.over_pace(now, 40, just_over, slack_days=1.0))
+        self.assertTrue(dispatcher.openrouter.over_pace(now, 40, just_over, slack_days=0.0))
 
 
 class TestCash(unittest.TestCase):
     def test_the_multiplier_defaults_to_one_and_reads_a_number(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "limits.toml"
-            self.assertEqual(dispatch.cash_multiplier(p), 1.0)          # absent file
+            self.assertEqual(dispatcher.limits.cash_multiplier(p), 1.0)          # absent file
             p.write_text("cash_multiplier = 1.32\n")
-            self.assertEqual(dispatch.cash_multiplier(p), 1.32)
+            self.assertEqual(dispatcher.limits.cash_multiplier(p), 1.32)
             p.write_text("cash_multiplier = \"lots\"\n")                # not a number
-            self.assertEqual(dispatch.cash_multiplier(p), 1.0)
+            self.assertEqual(dispatcher.limits.cash_multiplier(p), 1.0)
             p.write_text("lanes = 2\n")
-            self.assertEqual(dispatch.cash_multiplier(p), 1.0)
+            self.assertEqual(dispatcher.limits.cash_multiplier(p), 1.0)
 
 
 class TestLimitsExample(unittest.TestCase):
@@ -1720,7 +1722,7 @@ class TestLimitsExample(unittest.TestCase):
         text = (Path(__file__).resolve().parent.parent / "docs" / "RUNBOOK.md").read_text(encoding="utf-8")
         marker = "# /etc/section9/limits.toml"
         start = text.index(marker)
-        return dispatch.tomllib.loads(text[start:text.index("```", start)])
+        return tomllib.loads(text[start:text.index("```", start)])
 
     def test_the_runbook_example_parses_with_every_key_where_the_dispatcher_reads_it(self):
         data = self.runbook_limits()
@@ -1730,14 +1732,14 @@ class TestLimitsExample(unittest.TestCase):
             p = Path(d) / "limits.toml"
             p.write_text((Path(__file__).resolve().parent.parent / "docs" / "RUNBOOK.md").read_text(
                 encoding="utf-8").split("# /etc/section9/limits.toml", 1)[1].split("```", 1)[0].split("\n", 1)[1])
-            self.assertEqual(dispatch.cash_multiplier(p), 1.266)
-            self.assertEqual(dispatch.spend_caps(p), {"Ishikawa": 8.0, "Tachikoma": 5.0})
-            pins, allow = dispatch.models_of(p)
+            self.assertEqual(dispatcher.limits.cash_multiplier(p), 1.266)
+            self.assertEqual(dispatcher.limits.spend_caps(p), {"Ishikawa": 8.0, "Tachikoma": 5.0})
+            pins, allow = dispatcher.limits.models_of(p)
             self.assertIn("anthropic/claude-sonnet-5.5", allow)
             self.assertEqual(pins, {})
 
     def test_the_allow_list_in_the_example_holds_no_xai_model(self):
-        self.assertTrue(all(dispatch.model_ok(m) for m in self.runbook_limits()["models"]["allow"]))
+        self.assertTrue(all(dispatcher.limits.model_ok(m) for m in self.runbook_limits()["models"]["allow"]))
 
 
 class TestPacing(Base):
@@ -1750,10 +1752,10 @@ class TestPacing(Base):
         # #205 item 4: pacing is a code default -- no limits file names it, and a low task is held.
         low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
         normal = self.stub.add(["agent:ishikawa", "status:todo"])
-        with mock.patch.object(dispatch, "month_pace",
+        with mock.patch.object(dispatcher.openrouter, "month_pace",
                                return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
                                              "days": 30, "left_days": 29, "remaining_per_day": 1}), \
-                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+                mock.patch.object(dispatcher.cpu, "cpu_delta", return_value={"steal_pct": 0.0}):
             code, out = self.run_dispatch()          # no limits file at all
         self.assertEqual(code, 0)
         self.assertIn("status:todo", self.stub.labels(low))
@@ -1771,19 +1773,19 @@ class TestPacing(Base):
     def test_pacing_is_a_no_op_when_no_low_priority_task_is_queued(self):
         # It can only hold low-priority work, so with none queued it reads no figures and samples no CPU.
         todo = [({"number": 1, "labels": [{"name": "status:todo"}]}, {"name": "Batou"}, False, None)]
-        with mock.patch.object(dispatch, "pacing_settings") as settings, \
-                mock.patch.object(dispatch, "key_usage") as usage:
-            self.assertIs(dispatch.hold_low_priority(todo, None, None, lambda *a: None), todo)
+        with mock.patch.object(dispatcher.limits, "pacing_settings") as settings, \
+                mock.patch.object(dispatcher.openrouter, "key_usage") as usage:
+            self.assertIs(dispatcher.pick.hold_low_priority(todo, None, None, lambda *a: None), todo)
         settings.assert_not_called()
         usage.assert_not_called()
 
     def test_over_pace_holds_only_low_priority_work(self):
         self.stub.add(["agent:batou", "status:todo", "priority:low"])
         normal = self.stub.add(["agent:ishikawa", "status:todo"])
-        with mock.patch.object(dispatch, "month_pace",
+        with mock.patch.object(dispatcher.openrouter, "month_pace",
                                return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
                                              "days": 30, "left_days": 29, "remaining_per_day": 1}), \
-                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+                mock.patch.object(dispatcher.cpu, "cpu_delta", return_value={"steal_pct": 0.0}):
             code, out = self.run_dispatch(limits=self.limits(
                 "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
         low = next(i for i in self.stub.issues.values() if "priority:low" in self.stub.labels(i["number"]))
@@ -1796,10 +1798,10 @@ class TestPacing(Base):
         # The pick lowercases labels; the pacing hold must normalise the same way (was a raw compare).
         low = self.stub.add(["agent:batou", "status:todo", "priority:Low"])
         normal = self.stub.add(["agent:ishikawa", "status:todo"])
-        with mock.patch.object(dispatch, "month_pace",
+        with mock.patch.object(dispatcher.openrouter, "month_pace",
                                return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
                                              "days": 30, "left_days": 29, "remaining_per_day": 1}), \
-                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+                mock.patch.object(dispatcher.cpu, "cpu_delta", return_value={"steal_pct": 0.0}):
             code, out = self.run_dispatch(limits=self.limits(
                 "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
         self.assertEqual(code, 0)
@@ -1811,10 +1813,10 @@ class TestPacing(Base):
         # #78 nit 1: a short /proc/stat line (IndexError) must fail closed, not crash the tick.
         low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
         normal = self.stub.add(["agent:ishikawa", "status:todo"])
-        with mock.patch.object(dispatch, "month_pace",
+        with mock.patch.object(dispatcher.openrouter, "month_pace",
                                return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
                                              "days": 30, "left_days": 29, "remaining_per_day": 1}), \
-                mock.patch.object(dispatch, "cpu_sample", side_effect=IndexError("short cpu line")):
+                mock.patch.object(dispatcher.cpu, "cpu_sample", side_effect=IndexError("short cpu line")):
             code, out = self.run_dispatch(limits=self.limits(
                 "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
         self.assertEqual(code, 0)
@@ -1824,10 +1826,10 @@ class TestPacing(Base):
 
     def test_under_pace_admits_the_low_priority_task_too(self):
         low = self.stub.add(["agent:batou", "status:todo", "priority:low"])
-        with mock.patch.object(dispatch, "month_pace",
+        with mock.patch.object(dispatcher.openrouter, "month_pace",
                                return_value={"linear_to_date": 100.0, "linear_per_day": 1.0, "elapsed": 1,
                                              "days": 30, "left_days": 29, "remaining_per_day": 1}), \
-                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+                mock.patch.object(dispatcher.cpu, "cpu_delta", return_value={"steal_pct": 0.0}):
             self.run_dispatch(limits=self.limits(
                 "[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n"))
         self.assertEqual(self.stub.labels(low), {"agent:batou", "status:review", "priority:low"})
@@ -1839,7 +1841,7 @@ class TestDayCap(Base):
     def seed_today(self, agent, count):
         path = self.t / "state" / "runs.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        now = dispatch.dt.datetime.now(dispatch.dt.timezone.utc).isoformat()
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
         with path.open("a", encoding="utf-8") as f:
             for _ in range(count):
                 f.write(json.dumps({"agent": agent, "start": now, "outcome": "ok"}) + "\n")
@@ -1865,7 +1867,7 @@ class TestDayCap(Base):
 
     def test_a_zero_cap_never_skips_an_agent(self):
         # The nightly builder's roster entry says runs_per_day = 0: no day cap, however many runs.
-        self.assertTrue(dispatch.day_ok(type("A", (), {"state_dir": str(self.t / "state"), "ledger": ""})(),
+        self.assertTrue(dispatcher.pick.day_ok(type("A", (), {"state_dir": str(self.t / "state"), "ledger": ""})(),
                                         {"name": "Tachikoma", "runs_per_day": 0}))
 
     def test_under_the_day_cap_the_agent_still_runs(self):
@@ -2210,10 +2212,10 @@ timeout_sec = 60
         normal = self.stub.add(["agent:ishikawa", "status:todo"])
         path = self.t / "limits.toml"
         path.write_text("[timeout_sec]\ndefault = 60\n[pacing]\nenabled = true\nsample_seconds = 0\n")
-        with mock.patch.object(dispatch, "month_pace",
+        with mock.patch.object(dispatcher.openrouter, "month_pace",
                                return_value={"linear_to_date": 0.0, "linear_per_day": 1.0, "elapsed": 1,
                                              "days": 30, "left_days": 29, "remaining_per_day": 1}), \
-                mock.patch.object(dispatch, "cpu_delta", return_value={"steal_pct": 0.0}):
+                mock.patch.object(dispatcher.cpu, "cpu_delta", return_value={"steal_pct": 0.0}):
             self.run_dispatch(limits=str(path))
         self.assertIn("status:todo", self.stub.labels(low))
         self.assertIn("agent:any", self.stub.labels(low))
@@ -2262,7 +2264,7 @@ class TestPriority(Base):
             "spec.loader.exec_module(m)",
             "issue = {'labels': [{'name': 'agent:any'}, {'name': 'agent:qa'}], 'body': ''}",
             "agents = [{'name': 'A'}, {'name': 'B', 'role': 'qa'}, {'name': 'C', 'title': 'QA reviewer'}]",
-            "print(len(m.candidates(issue, agents)[0]))",
+            "print(len(m.board.candidates(issue, agents)[0]))",
         ]
         seen = set()
         for seed in ("0", "3", "12345", "random"):        # seed 3 exposes the old set-order pick
@@ -2293,7 +2295,7 @@ class TestPriority(Base):
         def rank(labels, ago_h):
             issue = {"labels": [{"name": x} for x in labels],
                      "created_at": (now - dt.timedelta(hours=ago_h)).isoformat()}
-            return dispatch.priority_rank(issue, now)
+            return dispatcher.board.priority_rank(issue, now)
         self.assertEqual(rank([], 0), 1)
         self.assertEqual(rank(["priority:high"], 0), 0)
         self.assertEqual(rank(["priority:Low"], 0), 2)         # label case never matters
@@ -2347,7 +2349,7 @@ class TestLanes(Base):
 
     def lane_one(self, limits=None):
         """Run lane 1 with the steal sample stubbed out: the tests seed the rest of the gate."""
-        with mock.patch.object(dispatch, "steal_secs", return_value=0.0):
+        with mock.patch.object(dispatcher.cpu, "steal_secs", return_value=0.0):
             return self.run_dispatch("run", limits=limits or self.limits(self.TWO), lane=1)
 
     def test_lane_one_is_off_unless_the_switch_says_two(self):
@@ -2431,12 +2433,12 @@ class TestLanes(Base):
                          [{"agent:batou", "status:review"}, {"agent:ishikawa", "status:review"}])
         rows = self.ledger()
         self.assertEqual(sorted(r["lane"] for r in rows), [0, 1])
-        self.assertGreater(dispatch.concurrent_hours(rows), 0.0)
+        self.assertGreater(dispatcher.ledger.concurrent_hours(rows), 0.0)
         self.assertIn("(lane 1)", out1)
 
     def test_cpu_steal_drops_the_second_lane_and_writes_the_latch(self):
         n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
-        with mock.patch.object(dispatch, "steal_secs", return_value=25.0):
+        with mock.patch.object(dispatcher.cpu, "steal_secs", return_value=25.0):
             code, out = self.run_dispatch("run", limits=self.limits(self.TWO), lane=1)
         self.assertEqual((code, self.stub.hermes_calls), (0, []))
         self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:todo"})
@@ -2447,7 +2449,7 @@ class TestLanes(Base):
 
     def test_unreadable_cpu_stands_the_second_lane_down_cleanly(self):
         n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
-        with mock.patch.object(dispatch, "steal_secs", side_effect=OSError("no /proc/stat")):
+        with mock.patch.object(dispatcher.cpu, "steal_secs", side_effect=OSError("no /proc/stat")):
             code, out = self.run_dispatch("run", limits=self.limits(self.TWO), lane=1)
         self.assertEqual((code, self.stub.hermes_calls), (0, []))
         self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:todo"})
@@ -2455,7 +2457,7 @@ class TestLanes(Base):
         self.assertEqual(self.latch()["lanes"], 1)
 
     def lane_zero(self, limits):
-        with mock.patch.object(dispatch, "steal_secs", return_value=0.0):
+        with mock.patch.object(dispatcher.cpu, "steal_secs", return_value=0.0):
             return self.run_dispatch("run", limits=limits, lane=0)
 
     def test_lane_zero_skips_the_agent_lane_one_is_running(self):
@@ -2504,7 +2506,7 @@ class TestLanes(Base):
     def test_lane_one_stands_down_cleanly_on_an_index_error(self):
         # #78 nit 1: a short /proc/stat line must not crash the lane.
         n = self.stub.add(["agent:ishikawa", "status:todo"], "nvim-trainer: add a keymap")
-        with mock.patch.object(dispatch, "cpu_sample", side_effect=IndexError("short cpu line")):
+        with mock.patch.object(dispatcher.cpu, "cpu_sample", side_effect=IndexError("short cpu line")):
             code, out = self.run_dispatch("run", limits=self.limits(self.TWO), lane=1)
         self.assertEqual((code, self.stub.hermes_calls), (0, []))
         self.assertEqual(self.stub.labels(n), {"agent:ishikawa", "status:todo"})
@@ -2587,25 +2589,25 @@ class TestLanes(Base):
         self.assertIn("two at once 0.50 h", body)
 
     def test_repo_key_and_the_lanes_switch(self):
-        self.assertEqual(dispatch.repo_key({"title": "flight-tracker: x", "body": "", "labels": []}), "flight-tracker")
-        self.assertEqual(dispatch.repo_key({"title": "QA the PR", "body": "see nvim-trainer", "labels": []}),
+        self.assertEqual(dispatcher.board.repo_key({"title": "flight-tracker: x", "body": "", "labels": []}), "flight-tracker")
+        self.assertEqual(dispatcher.board.repo_key({"title": "QA the PR", "body": "see nvim-trainer", "labels": []}),
                          "nvim-trainer")
-        self.assertEqual(dispatch.repo_key({"title": "Do a thing", "body": "", "labels": [{"name": "repo:portfolio"}]}),
+        self.assertEqual(dispatcher.board.repo_key({"title": "Do a thing", "body": "", "labels": [{"name": "repo:portfolio"}]}),
                          "portfolio")
-        self.assertEqual(dispatch.repo_key({"title": "Do a thing", "body": "", "labels": []}), "")
+        self.assertEqual(dispatcher.board.repo_key({"title": "Do a thing", "body": "", "labels": []}), "")
         path = self.t / "limits.toml"
         for text, want in (("", 1), ("lanes = 1\n", 1), ("lanes = 2\n", 2), ("lanes = 3\n", 1),
                            ("lanes = '2'\n", 1)):
             path.write_text(text)
-            self.assertEqual(dispatch.lanes_setting(path), want, text)
+            self.assertEqual(dispatcher.limits.lanes_setting(path), want, text)
 
     def test_the_two_lanes_never_overlap(self):
         rows = [{"start": "2026-11-05T10:00:00+00:00", "end": "2026-11-05T11:00:00+00:00", "lane": 0},
                 {"start": "2026-11-05T10:30:00+00:00", "end": "2026-11-05T11:30:00+00:00", "lane": 1},
                 {"start": "2026-11-05T12:00:00+00:00", "end": "2026-11-05T12:10:00+00:00", "lane": 0}]
-        self.assertAlmostEqual(dispatch.concurrent_hours(rows), 0.5)
-        self.assertTrue(dispatch.lane_line(rows).endswith("two at once 0.50 h"))
-        self.assertEqual(dispatch.lane_line([]), "—")
+        self.assertAlmostEqual(dispatcher.ledger.concurrent_hours(rows), 0.5)
+        self.assertTrue(dispatcher.capacity.lane_line(rows).endswith("two at once 0.50 h"))
+        self.assertEqual(dispatcher.capacity.lane_line([]), "—")
 
 
 class TestModels(Base):
@@ -2675,17 +2677,17 @@ class TestModels(Base):
         self.assertEqual((body["model"], body["provider"]), ("anthropic/claude-sonnet-5.5", "openrouter"))
 
     def test_an_xai_model_is_refused_even_if_the_allow_list_names_it(self):
-        pins, allow = dispatch.models_of(self.limits(
+        pins, allow = dispatcher.limits.models_of(self.limits(
             '[models]\nallow = ["x-ai/grok-9-turbo"]\n'))
-        self.assertEqual(dispatch.model_for({"name": "Saito", "model": "x-ai/grok-9-turbo"}, pins, allow),
-                         dispatch.DEFAULT_MODEL)
+        self.assertEqual(dispatcher.limits.model_for({"name": "Saito", "model": "x-ai/grok-9-turbo"}, pins, allow),
+                         dispatcher.limits.DEFAULT_MODEL)
 
     def test_the_root_pin_rolls_the_agent_back_with_one_line(self):
-        pins, allow = dispatch.models_of(self.limits(
+        pins, allow = dispatcher.limits.models_of(self.limits(
             '[models]\nallow = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5.5"]\n'
             'Saito = "deepseek/deepseek-v4.1-flash"\n'))
-        self.assertEqual(dispatch.model_for({"name": "Saito", "model": "anthropic/claude-sonnet-5.5"}, pins, allow),
-                         dispatch.DEFAULT_MODEL)
+        self.assertEqual(dispatcher.limits.model_for({"name": "Saito", "model": "anthropic/claude-sonnet-5.5"}, pins, allow),
+                         dispatcher.limits.DEFAULT_MODEL)
 
     def test_the_ledger_records_the_model_that_answered(self):
         self.stub.hermes_runtime = {"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash",
@@ -2732,10 +2734,10 @@ class TestModels(Base):
         self.assertEqual(self.stub.labels(n), {"agent:saito", "status:review"})
 
     def test_the_guard_estimates_a_run_the_counter_could_not_price(self):
-        self.assertAlmostEqual(dispatch.run_cost({"model": "anthropic/claude-sonnet-5.5", "cost_usd": None,
+        self.assertAlmostEqual(dispatcher.ledger.run_cost({"model": "anthropic/claude-sonnet-5.5", "cost_usd": None,
                                                   "tokens": {"prompt_tokens": 1000, "completion_tokens": 1000}}),
                                0.012)
-        self.assertEqual(dispatch.run_cost({"model": "who/knows", "tokens": {"completion_tokens": 1_000_000}}),
+        self.assertEqual(dispatcher.ledger.run_cost({"model": "who/knows", "tokens": {"completion_tokens": 1_000_000}}),
                          10.0)              # an unknown model is priced at the dearest allowed rate
 
     def test_capacity_shows_cost_by_agent_and_model(self):
@@ -2756,24 +2758,24 @@ class TestRunCost(unittest.TestCase):
     def test_a_zero_key_delta_is_priced_from_the_run_tokens(self):
         row = {"model": "deepseek/deepseek-v4.1-flash", "cost_usd": 0.0,
                "tokens": {"prompt_tokens": 1000, "completion_tokens": 1000}}
-        self.assertAlmostEqual(dispatch.run_cost(row), (1000 * 0.05 + 1000 * 0.19) / 1_000_000.0)
+        self.assertAlmostEqual(dispatcher.ledger.run_cost(row), (1000 * 0.05 + 1000 * 0.19) / 1_000_000.0)
 
     def test_a_measured_delta_still_wins_over_the_tokens(self):
-        self.assertEqual(dispatch.run_cost({"model": "deepseek/deepseek-v4.1-flash", "cost_usd": 0.25,
+        self.assertEqual(dispatcher.ledger.run_cost({"model": "deepseek/deepseek-v4.1-flash", "cost_usd": 0.25,
                                             "tokens": {"prompt_tokens": 1000, "completion_tokens": 1000}}),
                          0.25)
 
     def test_a_zero_delta_with_no_tokens_stays_zero_and_unpriced(self):
-        self.assertEqual(dispatch.run_cost({"cost_usd": 0.0, "tokens": None}), 0.0)
-        self.assertFalse(dispatch.priceable({"cost_usd": 0.0, "tokens": None}))
-        self.assertTrue(dispatch.priceable({"cost_usd": 0.0, "tokens": {"total_tokens": 1}}))
+        self.assertEqual(dispatcher.ledger.run_cost({"cost_usd": 0.0, "tokens": None}), 0.0)
+        self.assertFalse(dispatcher.ledger.priceable({"cost_usd": 0.0, "tokens": None}))
+        self.assertTrue(dispatcher.ledger.priceable({"cost_usd": 0.0, "tokens": {"total_tokens": 1}}))
 
 
 class TestRosterTimeouts(unittest.TestCase):
     """#205 items 2 and 6: the per-agent timeout and daily run cap, shipped in the roster."""
 
     def roster(self):
-        return dispatch.tomllib.loads((ROOT / "agents" / "roster.toml").read_text(encoding="utf-8"))
+        return tomllib.loads((ROOT / "agents" / "roster.toml").read_text(encoding="utf-8"))
 
     def test_batou_and_togusa_default_to_2400_seconds(self):
         # #205 item 2: 16 timed-out runs in the week, Batou's 11 h and Togusa's 5 h, mostly stuck.
