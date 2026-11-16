@@ -2945,16 +2945,38 @@ class TestSca(Base):
         self.assertTrue(any("hermes-agent" in n for n in notes))
 
     def test_reads_the_host_versions(self):
+        # docker-init (0.19.0) is the last `Version:` line in `docker version`; the server engine
+        # version is what to query, so the --format call must win over the text scrape.
         def fake(cmd):
-            return {"docker": "Client:\n Version: 27.3.1\nServer:\n Engine:\n  Version: 28.0.1\n",
+            if cmd[:3] == ["docker", "version", "--format"]:
+                return "28.0.1\n"
+            return {"docker": "Client:\n Version: 27.3.1\nServer:\n Engine:\n  Version: 28.0.1\n"
+                              " containerd:\n  Version: 1.7.24\n runc:\n  Version: 1.1.12\n"
+                              " docker-init:\n  Version: 0.19.0\n",
                     "runc": "runc version 1.1.12\ncommit: v1.1.12-0-g1d9c0e3\n",
                     "containerd": "containerd github.com/containerd/containerd v1.7.24 a88e0e0\n",
                     "dpkg": "Package: openssh-server\nSource: openssh\nVersion: 1:9.6p1-3ubuntu13\n"}[cmd[0]]
         with mock.patch.object(sca, "run", side_effect=fake):
             queries, _ = sca.host_pins()
         self.assertIn(("docker", "Go", "github.com/docker/docker", "28.0.1", "docker version"), queries)   # the server
+        self.assertNotIn(("docker", "Go", "github.com/docker/docker", "0.19.0", "docker version"), queries)
         self.assertIn(("runc", "Go", "github.com/opencontainers/runc", "1.1.12", "runc --version"), queries)
         self.assertIn(("openssh-server", "Ubuntu", "openssh", "1:9.6p1-3ubuntu13", "dpkg -s openssh-server"), queries)
+
+    def test_reads_the_server_engine_from_text_when_the_client_cannot_format(self):
+        # A client too old for --format: the text scrape must still pick the engine, not docker-init.
+        def fake(cmd):
+            if cmd[0] != "docker":
+                return ""
+            if "--format" in cmd:
+                return None
+            return ("Server: Docker Engine - Community\n Engine:\n  Version: 29.9.2\n"
+                    " containerd:\n  Version: 2.4.2\n runc:\n  Version: 1.5.2\n"
+                    " docker-init:\n  Version: 0.19.0\n")
+        with mock.patch.object(sca, "run", side_effect=fake):
+            queries, _ = sca.host_pins()
+        self.assertIn(("docker", "Go", "github.com/docker/docker", "29.9.2", "docker version"), queries)
+        self.assertNotIn(("docker", "Go", "github.com/docker/docker", "0.19.0", "docker version"), queries)
 
     def test_cvss_v3_base_scores(self):
         self.assertEqual(sca.cvss_base("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"), 9.8)
