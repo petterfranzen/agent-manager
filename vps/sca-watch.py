@@ -29,6 +29,7 @@ KEYS = re.compile(r"(sk-or-|github_pat_|ghp_)[A-Za-z0-9_-]*")
 CVSS_MIN = 7.0
 MAX_FETCH = 300          # cap on advisory detail fetches per run; refuse to hammer OSV past it
 PER_PAGE, MAX_PAGES = 100, 20
+TIMEOUT = 30             # seconds, for every HTTP call
 
 # The repo pins we can query by version: (file, regex, label, ecosystem, OSV package). The version
 # is the regex's group 1. Only what OSV indexes by version is here; a digest or a runtime is not.
@@ -53,37 +54,54 @@ def redact(text):
     return KEYS.sub("[redacted]", str(text))
 
 
+def unquoted(val):
+    """A value without the one pair of matching quotes around it."""
+    val = val.strip()
+    paired = len(val) >= 2 and val[0] == val[-1]
+    if paired and val[0] in "\"'":
+        return val[1:-1]
+    return val
+
+
+def env_pair(line):
+    """(name, value) of one NAME=VALUE line of an env file; None for a comment or anything else."""
+    line = line.strip().removeprefix("export ").lstrip()
+    key, sep, val = line.partition("=")
+    if not sep or line.startswith("#"):
+        return None
+    return key.strip(), unquoted(val)
+
+
 def read_env_value(path, name):
+    """The last NAME=VALUE line for `name` in an env file. Missing or empty is a Failure."""
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError as e:
         raise Failure(f"cannot read {path}: {e.strerror}") from None
-    value = None
-    for line in text.splitlines():
-        line = line.strip().removeprefix("export ").lstrip()
-        key, sep, val = line.partition("=")
-        if sep and not line.startswith("#") and key.strip() == name:
-            val = val.strip()
-            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
-                val = val[1:-1]
-            value = val
+    pairs = [env_pair(line) for line in text.splitlines()]
+    values = [pair[1] for pair in pairs if pair and pair[0] == name]
+    value = values[-1] if values else None
     if not value:
         raise Failure(f"{name} is missing or empty in {path}")
     return value
 
 
-def request(method, url, token=None, body=None, timeout=30):
-    """(parsed JSON or None, response headers). A public endpoint (OSV, KEV) is called without a token."""
-    data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, method=method)
+def new_request(method, url, token, body):
+    req = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode(), method=method)
     if token:
         req.add_header("Authorization", "Bearer " + token)
     req.add_header("Accept", "application/json")
     req.add_header("User-Agent", "section9-sca")
-    if data is not None:
+    if body is not None:
         req.add_header("Content-Type", "application/json")
+    return req
+
+
+def request(method, url, token=None, body=None):
+    """(parsed JSON or None, response headers). A public endpoint (OSV, KEV) is called without a token."""
+    req = new_request(method, url, token, body)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             raw, headers = resp.read(), resp.headers
     except urllib.error.HTTPError as e:
         raise Failure(f"{method} {redact(url)} -> {e.code}: {redact(e.read().decode('utf-8', 'replace'))[:200]}") from None
@@ -135,39 +153,50 @@ def run(cmd):
     return p.stdout if p.returncode == 0 else None
 
 
+# What sandbox/Dockerfile pins by hand or by digest: noted in the issue, not queried by version.
+SANDBOX_NOTED = ((r"(?m)^FROM (\S+)", "sandbox base image"),
+                 (r"(?m)^ARG NODE_VERSION=(\S+)", "Node runtime"),
+                 (r"(?m)^ARG PONYTAIL_TAG=(\S+)", "Ponytail skill"))
+
+
+def read_or_none(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def pin_of(root, pin):
+    """(query, None) for a pin found in its file, else (None, note)."""
+    rel, pattern, label, eco, pkg = pin
+    m = re.search(pattern, read_or_none(root / rel) or "")
+    if m:
+        return (label, eco, pkg, m.group(1), rel), None
+    return None, f"{rel}: the {label} pin was not found"
+
+
+def unqueried(root):
+    """Notes for what the repo pins in a way OSV cannot be asked about by version."""
+    sand = read_or_none(root / "sandbox/Dockerfile") or ""
+    found = [(re.search(pattern, sand), what) for pattern, what in SANDBOX_NOTED]
+    notes = [f"{what} {m.group(1)} (pinned by hand or a digest, so not queried by version)" for m, what in found if m]
+    m = re.search(r"(?m)^\s*image:\s*(nousresearch/hermes-agent:\S+)", read_or_none(root / "vps/compose.yaml") or "")
+    if m:
+        notes.append(f"Hermes image {m.group(1)} (our own image, not queried)")
+    port = read_or_none(root / "portfolio/Dockerfile") or ""
+    return notes + [f"portfolio base image {m.group(1)} (not queried by version)"
+                    for m in re.finditer(r"(?m)^FROM (\S+)", port)]
+
+
 def repo_pins(root):
     """(queries, notes): the repo's version pins we can query, and the ones we cannot.
 
     A query is (label, ecosystem, OSV package, version, where it came from).
     """
-    def read(rel):
-        try:
-            return (root / rel).read_text(encoding="utf-8")
-        except OSError:
-            return None
-
-    queries, notes = [], []
-    for rel, pattern, label, eco, pkg in PINS:
-        m = re.search(pattern, read(rel) or "")
-        if m:
-            queries.append((label, eco, pkg, m.group(1), rel))
-        else:
-            notes.append(f"{rel}: the {label} pin was not found")
-    sand = read("sandbox/Dockerfile") or ""
-    for pattern, what in ((r"(?m)^FROM (\S+)", "sandbox base image"),
-                          (r"(?m)^ARG NODE_VERSION=(\S+)", "Node runtime"),
-                          (r"(?m)^ARG PONYTAIL_TAG=(\S+)", "Ponytail skill")):
-        m = re.search(pattern, sand)
-        if m:
-            notes.append(f"{what} {m.group(1)} (pinned by hand or a digest, so not queried by version)")
-    m = re.search(r"(?m)^\s*image:\s*(nousresearch/hermes-agent:\S+)", read("vps/compose.yaml") or "")
-    if m:
-        notes.append(f"Hermes image {m.group(1)} (our own image, not queried)")
-    port = read("portfolio/Dockerfile")
-    if port is not None:
-        notes += [f"portfolio base image {m.group(1)} (not queried by version)"
-                  for m in re.finditer(r"(?m)^FROM (\S+)", port)]
-    return queries, notes
+    found = [pin_of(root, pin) for pin in PINS]
+    queries = [query for query, _ in found if query]
+    notes = [note for _, note in found if note]
+    return queries, notes + unqueried(root)
 
 
 def host_pins():
@@ -183,27 +212,40 @@ def host_pins():
         queries.append(("docker", "Go", "github.com/docker/docker", versions[-1], "docker version"))
     else:
         notes.append("docker version: not available")
+    for pin in (runc_pin, containerd_pin, openssh_pin):
+        query, note = pin()
+        if query:
+            queries.append(query)
+        else:
+            notes.append(note)
+    return queries, notes
+
+
+def runc_pin():
+    """(query, None), or (None, note) when runc is not there."""
     out = run(["runc", "--version"])
     m = re.search(r"runc version v?([0-9][\w.+-]*)", out or "")
     if m:
-        queries.append(("runc", "Go", "github.com/opencontainers/runc", m.group(1), "runc --version"))
-    else:
-        notes.append("runc --version: not available")
+        return ("runc", "Go", "github.com/opencontainers/runc", m.group(1), "runc --version"), None
+    return None, "runc --version: not available"
+
+
+def containerd_pin():
     out = run(["containerd", "--version"])
     m = re.search(r"(?m)^containerd\b.*?\bv?([0-9]+\.[0-9][\w.+-]*)", out or "")
     if m:
-        queries.append(("containerd", "Go", "github.com/containerd/containerd", m.group(1), "containerd --version"))
-    else:
-        notes.append("containerd --version: not available")
+        return ("containerd", "Go", "github.com/containerd/containerd", m.group(1), "containerd --version"), None
+    return None, "containerd --version: not available"
+
+
+def openssh_pin():
     out = run(["dpkg", "-s", "openssh-server"])
     version = re.search(r"(?m)^Version:\s*(\S+)", out or "")
     source = re.search(r"(?m)^Source:\s*(\S+)", out or "")
     if version:
-        queries.append(("openssh-server", "Ubuntu", source.group(1) if source else "openssh-server",
-                        version.group(1), "dpkg -s openssh-server"))
-    else:
-        notes.append("dpkg -s openssh-server: not available")
-    return queries, notes
+        return ("openssh-server", "Ubuntu", source.group(1) if source else "openssh-server",
+                version.group(1), "dpkg -s openssh-server"), None
+    return None, "dpkg -s openssh-server: not available"
 
 
 _AV = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
@@ -238,22 +280,34 @@ def cvss_base(vector):
     return roundup(min((impact + exploit) * (1.08 if scope_changed else 1.0), 10.0))
 
 
+def vector_score(detail):
+    """The base score of the record's first CVSS-v3 vector that can be read, or None."""
+    vectors = [sev.get("score", "") for sev in detail.get("severity") or []
+               if str(sev.get("type", "")).startswith("CVSS_V3")]
+    scores = (cvss_base(vector) for vector in vectors)
+    return next((s for s in scores if s is not None), None)
+
+
+def severe_label(detail):
+    """The record's first 'critical' or 'high' label (Ubuntu's, then the database's own), or None."""
+    labels = [sev.get("score") for sev in detail.get("severity") or [] if sev.get("type") == "Ubuntu"]
+    labels.append((detail.get("database_specific") or {}).get("severity"))
+    words = (str(lab).strip().lower() for lab in labels)
+    return next((w for w in words if w in ("critical", "high")), None)
+
+
 def score_of(detail):
     """(score, how). A CVSS-v3 vector if the record carries one, else a label's floor, else None.
 
     Many Go and Ubuntu records carry no vector; their GitHub (GHSA) or Ubuntu sibling does, and
     grouping by CVE picks that sibling. A bare 'high'/'critical' label is treated as the 7.0 floor.
     """
-    for sev in detail.get("severity") or []:
-        if str(sev.get("type", "")).startswith("CVSS_V3"):
-            s = cvss_base(sev.get("score", ""))
-            if s is not None:
-                return s, "vector"
-    labels = [sev.get("score") for sev in detail.get("severity") or [] if sev.get("type") == "Ubuntu"]
-    labels.append((detail.get("database_specific") or {}).get("severity"))
-    for lab in labels:
-        if str(lab).strip().lower() in ("critical", "high"):
-            return CVSS_MIN, str(lab).strip().lower()
+    score = vector_score(detail)
+    if score is not None:
+        return score, "vector"
+    label = severe_label(detail)
+    if label:
+        return CVSS_MIN, label
     return None, "no CVSS"
 
 
@@ -294,36 +348,74 @@ def judge(detail, kev):
     return (score >= CVSS_MIN), (f"{score:.1f}" if how == "vector" else f"{how} (label)")
 
 
-def findings(queries, reply, kev, fetch):
-    """(rows, dropped): one row per CVE (the CVE is what a fix and a KEV entry key on)."""
+def advisory_hits(queries, reply):
+    """advisory id -> the first query OSV matched it to."""
     hits = {}
     for q, res in zip(queries, reply.get("results", [])):
         for v in (res or {}).get("vulns", []):
             hits.setdefault(v["id"], q)
+    return hits
+
+
+def evidence(detail):
+    """How much a record says about its severity: 2 a vector, 1 a label, 0 nothing."""
+    score, how = score_of(detail)
+    if how == "vector":
+        return 2
+    return 1 if score else 0
+
+
+def finding(label, members, kev):
+    """The row for one CVE of one component, from its best-scored record; None when it is dropped."""
+    version = members[0][0][3]
+    best = max((d for _, d in members), key=evidence)
+    keep, score = judge(best, kev)
+    if not keep:
+        return None
+    return {"component": label, "version": version, "id": best.get("id"), "score": score,
+            "fix": fixed_for(best, version), "published": (best.get("published") or "")[:10]}
+
+
+def findings(queries, reply, kev, fetch):
+    """(rows, dropped): one row per CVE (the CVE is what a fix and a KEV entry key on)."""
+    hits = advisory_hits(queries, reply)
     if len(hits) > MAX_FETCH:
         raise Failure(f"{len(hits)} advisories is over the {MAX_FETCH} cap; refusing to fetch that many")
     details = {vid: fetch(vid) for vid in hits}
     groups = {}
     for vid, q in hits.items():
         groups.setdefault((q[0], cve_key(details[vid])), []).append((q, details[vid]))
-    rows, dropped = [], 0
-    for (label, _cve), members in groups.items():
-        version = members[0][0][3]
-        best = max((d for _, d in members),
-                   key=lambda d: 2 if score_of(d)[1] == "vector" else (1 if score_of(d)[0] else 0))
-        keep, score = judge(best, kev)
-        if not keep:
-            dropped += 1
-            continue
-        rows.append({"component": label, "version": version, "id": best.get("id"), "score": score,
-                     "fix": fixed_for(best, version), "published": (best.get("published") or "")[:10]})
-    return sorted(rows, key=lambda r: (r["component"], str(r["id"]))), dropped
+    found = [finding(label, members, kev) for (label, _cve), members in groups.items()]
+    rows = [row for row in found if row]
+    return sorted(rows, key=lambda r: (r["component"], str(r["id"]))), len(found) - len(rows)
 
 
 def kev_set(catalog):
     """The CISA KEV catalogue's CVE ids, or an empty set when it could not be read."""
     ids = {v.get("cveID") for v in (catalog or {}).get("vulnerabilities", []) if v.get("cveID")}
     return ids
+
+
+def scan_args(tool, ref):
+    if tool == "trivy":
+        return [tool, "image", "--quiet", "--severity", "HIGH,CRITICAL", "--format", "json", ref]
+    return [tool, "image", ref, "-o", "json"]
+
+
+def scan_hits(tool, out):
+    if tool == "trivy":
+        return sum(len(r.get("Vulnerabilities") or []) for r in out.get("Results", []))
+    return len(out.get("matches") or [])
+
+
+def scan_image(tool, ref):
+    """One image's count of HIGH/CRITICAL findings, or why the scan failed."""
+    try:
+        p = subprocess.run(scan_args(tool, ref), capture_output=True, text=True, timeout=600)
+        out = json.loads(p.stdout or "{}")
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return f"{ref}: scan failed ({redact(str(e))[:60]})"
+    return f"{ref}: {scan_hits(tool, out)} HIGH/CRITICAL"
 
 
 def image_scan():
@@ -335,44 +427,42 @@ def image_scan():
     refs = sorted(set((run(["docker", "ps", "--format", "{{.Image}}"]) or "").split()))
     if not refs:
         return f"{tool} is installed but `docker ps` gave no images; image scan skipped."
-    counts = []
-    for ref in refs:
-        args = ([tool, "image", "--quiet", "--severity", "HIGH,CRITICAL", "--format", "json", ref] if tool == "trivy"
-                else [tool, "image", ref, "-o", "json"])
-        try:
-            p = subprocess.run(args, capture_output=True, text=True, timeout=600)
-            out = json.loads(p.stdout or "{}")
-        except (OSError, subprocess.SubprocessError, ValueError) as e:
-            counts.append(f"{ref}: scan failed ({redact(str(e))[:60]})")
-            continue
-        hits = (sum(len(r.get("Vulnerabilities") or []) for r in out.get("Results", [])) if tool == "trivy"
-                else len(out.get("matches") or []))
-        counts.append(f"{ref}: {hits} HIGH/CRITICAL")
+    counts = [scan_image(tool, ref) for ref in refs]
     return f"{tool} image scan (HIGH/CRITICAL): " + "; ".join(counts) + "."
 
 
-def body(rows, queries, notes, dropped, now, kev_ok, images=None):
-    lines = [f"**Supply-chain scan, run by the VPS weekly.** As of {now:%Y-%m-%d %H:%M} UTC.", ""]
-    if rows:
-        lines += [f"**{len(rows)} finding(s) at CVSS 7.0+ or on the CISA KEV list.**", "",
-                  "| component | version | advisory | CVSS | fixed in | fix published |", "|---|---|---|---:|---|---|"]
-        for r in rows:
-            lines.append(f"| {r['component']} | {r['version']} | [{r['id']}](https://osv.dev/vulnerability/{r['id']})"
-                         f"{' (KEV)' if r['score'] == 'KEV' else ''} | {r['score']} | {r['fix'] or '—'} | "
-                         f"{r['published'] or '—'} |")
-        lines += ["", "The fix column is the earliest fixed release above the version we run; the date is that "
-                  "advisory's OSV published time, the closest OSV gives to the fix's own release.", ""]
-    else:
-        lines += [f"**Clear, {now:%Y-%m-%d}:** no advisory at CVSS 7.0 or higher, and none on the CISA KEV "
-                  "list, for any pin below.", ""]
-    lines += ["**Pins checked:**"]
-    lines += [f"- {label} {v} — {eco} {pkg} (from {src})" for label, eco, pkg, v, src in queries]
-    if dropped:
-        lines.append(f"{dropped} advisory/advisories below CVSS 7.0 and not on the CISA KEV list was/were dropped.")
-    if not kev_ok:
+def finding_lines(rows, now):
+    """The table of findings, or the line that says the scan is clear."""
+    if not rows:
+        return [f"**Clear, {now:%Y-%m-%d}:** no advisory at CVSS 7.0 or higher, and none on the CISA KEV "
+                "list, for any pin below.", ""]
+    lines = [f"**{len(rows)} finding(s) at CVSS 7.0+ or on the CISA KEV list.**", "",
+             "| component | version | advisory | CVSS | fixed in | fix published |", "|---|---|---|---:|---|---|"]
+    for r in rows:
+        lines.append(f"| {r['component']} | {r['version']} | [{r['id']}](https://osv.dev/vulnerability/{r['id']})"
+                     f"{' (KEV)' if r['score'] == 'KEV' else ''} | {r['score']} | {r['fix'] or '—'} | "
+                     f"{r['published'] or '—'} |")
+    return lines + ["", "The fix column is the earliest fixed release above the version we run; the date is that "
+                    "advisory's OSV published time, the closest OSV gives to the fix's own release.", ""]
+
+
+def pin_lines(scan):
+    """What was checked, what was dropped and what could not be queried."""
+    lines = ["**Pins checked:**"]
+    lines += [f"- {label} {v} — {eco} {pkg} (from {src})" for label, eco, pkg, v, src in scan["queries"]]
+    if scan["dropped"]:
+        lines.append(f"{scan['dropped']} advisory/advisories below CVSS 7.0 and not on the CISA KEV list was/were dropped.")
+    if not scan["kev_ok"]:
         lines.append("The CISA KEV list could not be read this run, so KEV-only advisories may be missing.")
-    if notes:
-        lines += ["**Not queried by version:**"] + [f"- {n}" for n in notes]
+    if scan["notes"]:
+        lines += ["**Not queried by version:**"] + [f"- {n}" for n in scan["notes"]]
+    return lines
+
+
+def body(scan, now, images=None):
+    """The issue text. `scan` holds rows, dropped, queries, notes and kev_ok."""
+    lines = [f"**Supply-chain scan, run by the VPS weekly.** As of {now:%Y-%m-%d %H:%M} UTC.", ""]
+    lines += finding_lines(scan["rows"], now) + pin_lines(scan)
     lines += ["", images if images else "Rewritten by `vps/sca-watch.py`; don't edit. Leave this issue open and pinned."]
     return "\n".join(lines)
 
@@ -395,6 +485,33 @@ def post(a, board, text, log):
         log(f"supply-chain: could not pin #{issue['number']} (pin it by hand): {e}")
 
 
+def read_kev(url, log):
+    """(the KEV ids, True), or (an empty set, False) when the catalogue could not be read."""
+    try:
+        return kev_set(http("GET", url)), True
+    except Failure as e:
+        log(f"kev: {e}")
+        return set(), False
+
+
+def scan_pins(a, log):
+    """Query OSV for every pin. Returns what `body` writes up."""
+    queries, notes = repo_pins(Path(a.repo_root))
+    hq, hn = host_pins()
+    queries, notes = queries + hq, notes + hn
+    if not queries:
+        raise Failure("no version pins to query")
+    log(f"pins: {len(queries)} queried, {len(notes)} noted")
+    kev, kev_ok = read_kev(a.kev, log)
+    reply = http("POST", a.osv.rstrip("/") + "/querybatch",
+                 body={"queries": [{"package": {"ecosystem": q[1], "name": q[2]}, "version": q[3]}
+                                   for q in queries]})
+    rows, dropped = findings(queries, reply or {},
+                             kev, lambda vid: http("GET", a.osv.rstrip("/") + "/vulns/" + vid))
+    log(f"findings: {len(rows)} kept, {dropped} dropped")
+    return {"rows": rows, "dropped": dropped, "queries": queries, "notes": notes, "kev_ok": kev_ok}
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--secrets-dir", default="/etc/section9")
@@ -413,25 +530,8 @@ def main(argv=None):
         token = read_env_value(Path(a.secrets_dir) / "sandbox.env", "GH_TOKEN")
         secrets.append(token)
         board = Board(a.github, token)
-        queries, notes = repo_pins(Path(a.repo_root))
-        hq, hn = host_pins()
-        queries, notes = queries + hq, notes + hn
-        if not queries:
-            raise Failure("no version pins to query")
-        log(f"pins: {len(queries)} queried, {len(notes)} noted")
-        try:
-            kev, kev_ok = kev_set(http("GET", a.kev)), True
-        except Failure as e:
-            log(f"kev: {e}")
-            kev, kev_ok = set(), False
-        reply = http("POST", a.osv.rstrip("/") + "/querybatch",
-                     body={"queries": [{"package": {"ecosystem": q[1], "name": q[2]}, "version": q[3]}
-                                       for q in queries]})
-        rows, dropped = findings(queries, reply or {},
-                                 kev, lambda vid: http("GET", a.osv.rstrip("/") + "/vulns/" + vid))
-        log(f"findings: {len(rows)} kept, {dropped} dropped")
-        text = body(rows, queries, notes, dropped, dt.datetime.now(dt.timezone.utc), kev_ok,
-                    image_scan() if a.images else None)
+        scan = scan_pins(a, log)
+        text = body(scan, dt.datetime.now(dt.timezone.utc), image_scan() if a.images else None)
         post(a, board, text, log)
         return 0
     except Failure as e:
