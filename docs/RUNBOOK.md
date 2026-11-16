@@ -65,6 +65,23 @@ the two timers. The first build takes several minutes.
 If step 5.5 works, tell the Major (then step 6). Then the Major moves the agents over one by one
 (phase 3 of the plan).
 
+**5b. CodeScene's `cs` in the sandbox (16 Nov).** The sandbox image carries a pinned
+`cs` CLI so the agents score their own code (`cs review <file>`, bar 9.5). Its token is the
+agents' own, in the root-only `/etc/section9/codescene.env` as one line, `CS_ACCESS_TOKEN=...`
+(`chown root:root`, `chmod 600`; never in a repo or in chat). Compose hands the file to the
+sandbox if it exists (`required: false`, Compose 2.24 or newer: check with
+`docker compose version`), the entrypoint stores the token for the agent user only
+(`~/.config/codescene/token`, 0600) and `/usr/local/bin/cs` reads it. Without the file the
+stack runs as before and `cs review` says it has no token. After creating or changing the
+file: `docker compose -f /opt/agent-manager/vps/compose.yaml up -d sandbox`. Check, without
+showing the token (it ends with a score; a git complaint outside a repo is harmless):
+```bash
+docker exec -u agent section9-sandbox-1 sh -c 'cs version && cd /tmp && echo "x = 1" > t.py && cs review t.py'
+```
+To bump `cs`: `curl -s 'https://devtools.codescene.io/api/cli/cs?version=<version>'` gives the
+build commit; set `CODESCENE_CLI_VERSION`, `_COMMIT` and `_SHA256` (of
+`cs-linux-amd64-<commit>.zip`) in `sandbox/Dockerfile`, once the release is 24 h old.
+
 **6. Pick up the HQ page, sync and spend (one time, after the VPS is already running)**
 
 On the VPS, or in the darkstar session:

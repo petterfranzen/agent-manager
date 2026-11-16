@@ -14,6 +14,8 @@ Run by systemd timers on the VPS (vps/systemd). One run at a time in each lane (
 Standard library only. Secrets come from root-only files and are never printed:
   OPENROUTER_API_KEY, API_SERVER_KEY  in <secrets-dir>/hermes.env
   GH_TOKEN                            in <secrets-dir>/sandbox.env
+  CS_ACCESS_TOKEN                     in <secrets-dir>/codescene.env (optional; compose hands it
+                                      to the sandbox, here it is only redacted from what we print)
 Optional, root-only, outside the repo (a commit to it cannot change them):
   <secrets-dir>/limits.toml           per-agent run ceiling and the guardrail preamble
   <secrets-dir>/briefs/<Name>.md      an agent's brief, when it must not live in the repo
@@ -67,13 +69,22 @@ def log(msg):
     print(net.redact(msg), flush=True)
 
 
+def optional_secret(path, name):
+    """A secret the run can do without: "" when the file or the value is missing."""
+    try:
+        return net.read_env_value(path, name)
+    except net.Failure:
+        return ""
+
+
 def context(a):
     """Read the secrets (never printed), refuse plain HTTP to a remote host, and open the board."""
     sd = Path(a.secrets_dir)
     ghtoken = net.read_env_value(sd / "sandbox.env", "GH_TOKEN")
     orkey = net.read_env_value(sd / "hermes.env", "OPENROUTER_API_KEY")
     hkey = net.read_env_value(sd / "hermes.env", "API_SERVER_KEY")
-    net.secrets.extend([ghtoken, orkey, hkey])
+    cstoken = optional_secret(sd / "codescene.env", "CS_ACCESS_TOKEN")
+    net.secrets.extend(s for s in (ghtoken, orkey, hkey, cstoken) if s)
     for url, what in ((a.github, "the GitHub token"), (a.hermes, "the Hermes key")):
         net.local_only(url, what)
     return Context(a, board.Board(a.github, ghtoken), (hkey, orkey), log)
