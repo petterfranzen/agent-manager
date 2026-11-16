@@ -1,0 +1,23 @@
+// Managed by agent-manager (vps/apt/52section9-container-runtime, installed by
+// vps/install-units.sh to /etc/apt/apt.conf.d/). The container runtime
+// (docker-ce/docker.io, containerd.io/containerd, runc) is held to the house
+// patch rule (docs/DECISIONS.md, Principles): a release is installed only once
+// it is 24 h old, and a major CVE fix (CVSS 7+ or CISA KEV) inside the 72 h
+// bound. On the VPS these come from Docker's own apt repo (download.docker.com),
+// which unattended-upgrades does not allow anyway; on a box built from
+// docs/RUNBOOK.md step 1 they come from Ubuntu's archive, where it would install
+// them with no delay. vps/container-runtime-patch.sh owns them either way, with
+// the 24 h hold and the containerd/dockerd restart that makes a fix take effect,
+// so unattended-upgrades must not install them.
+// For a major CVE lift the delay with
+// `sudo /opt/agent-manager/vps/container-runtime-patch.sh --now`.
+Unattended-Upgrade::Package-Blacklist {
+        "docker-ce";
+        "docker-ce-cli";
+        "docker-buildx-plugin";
+        "docker-compose-plugin";
+        "containerd.io";
+        "docker.io";
+        "containerd";
+        "runc";
+};

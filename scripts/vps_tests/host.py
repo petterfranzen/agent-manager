@@ -169,10 +169,20 @@ class TestCloudflaredPatch(unittest.TestCase):
     def test_the_timer_and_the_apt_drop_in_are_installed(self):
         units = (ROOT / "vps" / "install-units.sh").read_text()
         self.assertIn("section9-cloudflared.timer", units)
-        self.assertIn("apt/52section9-cloudflared", units)
+        self.assertIn("apt/52section9-*", units)
         drop = (ROOT / "vps" / "apt" / "52section9-cloudflared").read_text()
         self.assertIn("Unattended-Upgrade::Package-Blacklist", drop)
         self.assertIn('"cloudflared";', drop)
+
+    def test_the_container_runtime_is_held_by_its_own_script(self):
+        units = (ROOT / "vps" / "install-units.sh").read_text()
+        self.assertIn("section9-container-runtime-patch.timer", units)
+        drop = (ROOT / "vps" / "apt" / "52section9-container-runtime").read_text()
+        self.assertIn("Unattended-Upgrade::Package-Blacklist", drop)
+        for pkg in ("docker-ce", "containerd.io", "docker.io", "containerd", "runc"):
+            self.assertIn(f'"{pkg}";', drop)
+        unit = (ROOT / "vps" / "systemd" / "section9-container-runtime-patch.service").read_text()
+        self.assertIn("/opt/agent-manager/vps/container-runtime-patch.sh", unit)
 
 
 class TestDashboard(unittest.TestCase):
