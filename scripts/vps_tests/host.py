@@ -116,6 +116,23 @@ class TestCloudflaredPatch(unittest.TestCase):
         self.assertEqual(self.stamp().read_text().split()[0], "2.0")
         self.assertFalse(self.apt_log.exists(), "nothing may be installed on first sight")
 
+    def test_a_superseded_candidate_is_re_stamped_not_wedged(self):
+        # Togusa's case (flight-tracker #224 QA, 17 Nov): an old stamp for 1.5, apt now offers 2.0.
+        self.state.mkdir(parents=True, exist_ok=True)
+        self.stamp().write_text(f"1.5 {int(time.time()) - 25 * 3600}\n")
+        for args in ((), ("--status",)):
+            p = self.run_script(*args)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertTrue(p.stdout.strip(), f"silent exit with {args}")
+        self.assertEqual(self.stamp().read_text().split()[0], "2.0")
+        self.assertFalse(self.apt_log.exists(), "a new candidate is held, not installed")
+
+    def test_dry_run_writes_no_state(self):
+        p = self.run_script("--dry-run")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("would be recorded as new", p.stdout)
+        self.assertFalse(self.stamp().exists())
+
     def test_a_release_seen_for_24h_is_installed(self):
         self.run_script()
         self.age_to(25)

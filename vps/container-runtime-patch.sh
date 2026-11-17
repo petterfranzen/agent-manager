@@ -59,6 +59,7 @@ age_of_candidate() {
   [ -f "$stamp" ] || return 0
   read -r ver at <"$stamp" || true
   [ "${ver:-}" = "$2" ] && [ -n "${at:-}" ] && echo "$(( now - at ))"
+  return 0   # a stamp for a superseded candidate is no age: re-stamp, never exit under set -e
 }
 
 handle_pkg() {
@@ -87,6 +88,10 @@ handle_pkg() {
     return 0
   fi
   if [ "$force" = 0 ]; then
+    if [ -z "${age:-}" ] && [ "$dry" = 1 ]; then
+      echo "container-runtime-patch: $pkg $candidate would be recorded as new and held for $(( DELAY / 3600 )) h"
+      return 0
+    fi
     if [ -z "${age:-}" ]; then
       install -d -m 0755 "$STAMP_DIR"
       printf '%s %s\n' "$candidate" "$now" >"$stamp"

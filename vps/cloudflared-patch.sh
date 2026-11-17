@@ -50,6 +50,7 @@ age_of_candidate() {
   local ver at
   read -r ver at <"$STAMP" || true
   [ "${ver:-}" = "$candidate" ] && [ -n "${at:-}" ] && echo "$(( now - at ))"
+  return 0   # a stamp for a superseded candidate is no age: re-stamp, never exit under set -e
 }
 
 if [ "$candidate" = "${installed:-}" ]; then
@@ -70,6 +71,10 @@ fi
 
 if [ "$force" = 0 ]; then
   age=$(age_of_candidate)
+  if [ -z "${age:-}" ] && [ "$dry" = 1 ]; then
+    echo "cloudflared-patch: $candidate would be recorded as new and held for $(( DELAY / 3600 )) h"
+    exit 0
+  fi
   if [ -z "${age:-}" ]; then
     install -d -m 0755 "$STATE_DIR"
     printf '%s %s\n' "$candidate" "$now" >"$STAMP"
