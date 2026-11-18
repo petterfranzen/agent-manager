@@ -154,8 +154,9 @@ def add_run(out, row):
     """Add one ledger row to a `summarise` bucket."""
     seconds = float(row.get("seconds") or 0.0)
     status = row.get("outcome")
+    cost = run_cost(row)
     out["seconds"] += seconds
-    out["cost"] += run_cost(row)
+    out["cost"] += cost
     out["priced"] += 1 if priceable(row) else 0
     out["credits"] += float((row.get("cpu") or {}).get("credits") or 0.0)
     if status in out["outcomes"]:
@@ -163,12 +164,13 @@ def add_run(out, row):
     if status == "timeout":
         out["timeouts"] += 1
         out["timeout_seconds"] += seconds
+        out["timeout_cost"] += cost
 
 
 def summarise(rows):
     """One bucket of ledger rows: runs, busy time, money, failures and CPU credits."""
     out = {"runs": len(rows), "seconds": 0.0, "cost": 0.0, "priced": 0,
-           "timeouts": 0, "timeout_seconds": 0.0, "credits": 0.0,
+           "timeouts": 0, "timeout_seconds": 0.0, "timeout_cost": 0.0, "credits": 0.0,
            "outcomes": {name: 0 for name in OUTCOMES}}
     for row in rows:
         add_run(out, row)

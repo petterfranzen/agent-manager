@@ -25,14 +25,39 @@ def rate(hours, cost, priced):
 
 
 def table(rows, label):
-    lines = [f"| {label} | runs | busy h | $ | $/h | timeouts | timeout h | credits |",
-             "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    lines = [f"| {label} | runs | busy h | $ | $/h | timeouts | timeout h | timeout $ | credits |",
+             "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for name, group in rows:
         s = ledger.summarise(group)
         lines.append(f"| {name} | {s['runs']} | {s['hours']:.2f} | {spent(s)} | "
                      f"{rate(s['hours'], s['cost'], s['priced'])} | {s['timeouts']} | "
-                     f"{s['timeout_seconds'] / 3600.0:.2f} | {s['credits']:.0f} |")
+                     f"{s['timeout_seconds'] / 3600.0:.2f} | {money(s['timeout_cost'])} | {s['credits']:.0f} |")
     return lines
+
+
+def share(part, whole):
+    return f"{100.0 * part / whole:.0f}%" if whole else DASH
+
+
+def timeout_lines(week):
+    """Every task that timed out this week, worst first: the jobs that cost money and never finished.
+
+    A task with two or more timeouts is the shape to act on (split it or fix what stalls it).
+    """
+    hit = grouped([r for r in week if r.get("outcome") == "timeout"], lambda r: r.get("issue") or 0)
+    if not hit:
+        return ["**Timed out, last 7 days:** none.", ""]
+    hit.sort(key=lambda item: (-len(item[1]), -sum(ledger.run_cost(r) for r in item[1])))
+    lines = ["**Timed out, last 7 days** (tasks with 2 or more timeouts first)",
+             "| Issue | agent | timeouts | minutes | $ |", "|---|---|---:|---:|---:|"]
+    for issue, runs in hit[:15]:
+        agents = ", ".join(sorted({r.get("agent") or "unknown" for r in runs}))
+        minutes = sum(float(r.get("seconds") or 0.0) for r in runs) / 60.0
+        lines.append(f"| #{issue} | {agents} | {len(runs)} | {minutes:.0f} | "
+                     f"{money(sum(ledger.run_cost(r) for r in runs))} |")
+    if len(hit) > 15:
+        lines.append(f"| … {len(hit) - 15} more | | | | |")
+    return lines + [""]
 
 
 def lane_line(rows):
@@ -103,7 +128,8 @@ def week_lines(week):
     guidance = cpu.SAFE_CREDITS_DAY * 7
     return ["**Last 7 days**",
             f"- Runs: {ws['runs']}; busy: {ws['hours']:.2f} h; spend: {spent(ws)}{priced_note(ws)}.",
-            f"- Timeouts: {ws['timeouts']} ({ws['timeout_seconds'] / 3600.0:.2f} h wasted); outcomes: "
+            f"- Timeouts: {ws['timeouts']} of {ws['runs']} runs ({share(ws['timeouts'], ws['runs'])}; "
+            f"{ws['timeout_seconds'] / 3600.0:.2f} h and {money(ws['timeout_cost'])} wasted); outcomes: "
             + ", ".join(f"{k} {v}" for k, v in ws["outcomes"].items()) + ".",
             f"- Queue idle (upper bound): {ledger.queue_idle_hours(week):.2f} h.",
             f"- CPU credits: {ws['credits']:.0f} against a {guidance:.0f} guidance for 7 days "
@@ -126,7 +152,8 @@ def month_lines(mtd, spend, p):
     return ["**Month to date**",
             f"- Runs: {ms['runs']}; busy: {ms['hours']:.2f} h; spend: {spent(ms)}.",
             key_line(spend, ms),
-            f"- Timeouts: {ms['timeouts']} ({ms['timeout_seconds'] / 3600.0:.2f} h wasted); "
+            f"- Timeouts: {ms['timeouts']} of {ms['runs']} runs ({share(ms['timeouts'], ms['runs'])}; "
+            f"{ms['timeout_seconds'] / 3600.0:.2f} h and {money(ms['timeout_cost'])} wasted); "
             f"queue idle (upper bound): {ledger.queue_idle_hours(mtd):.2f} h.",
             month_credits(ms, p), ""]
 
@@ -167,6 +194,6 @@ def capacity(ctx):
     mult = limits.cash_multiplier(a.limits) if readable else 1.0
     lines = [f"**Capacity, rolled up by the VPS from the run ledger.** As of {now:%Y-%m-%d %H:%M} UTC.", ""]
     lines += pace_lines(usage, p, mult) + week_lines(week) + month_lines(mtd, spend, p)
-    lines += breakdown_lines(week) + gap_lines(rows, a)
+    lines += timeout_lines(week) + breakdown_lines(week) + gap_lines(rows, a)
     lines += ["Rewritten by `vps/dispatch.py capacity`; don't edit. Leave this issue open and pinned."]
     board.keep_issue(ctx.board, ctx.log, "Capacity", "\n".join(lines))
