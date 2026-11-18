@@ -522,6 +522,23 @@ class TestModels(Base):
         self.assertIn("by agent and model", body)
         self.assertIn("Saito \u00b7 anthropic/claude-sonnet-5.5", body)
 
+    def test_capacity_lists_the_tasks_that_timed_out_with_their_cost(self):
+        # Petter, 18 Nov: watch the jobs that cost money and never finish.
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        base = {"start": now, "end": now, "agent": "Batou", "model": "deepseek/deepseek-v4.1-flash",
+                "type": "task", "queue_before": 1, "cpu": {"credits": 1}}
+        self.seed([dict(base, issue=7, seconds=2400, outcome="timeout", cost_usd=0.30),
+                   dict(base, issue=7, seconds=2400, outcome="timeout", cost_usd=0.20),
+                   dict(base, issue=9, seconds=2400, outcome="timeout", cost_usd=0.10),
+                   dict(base, issue=8, seconds=600, outcome="ok", cost_usd=0.40)])
+        code, out = self.run_dispatch("capacity")
+        self.assertEqual(code, 0, out)
+        body = next(i["body"] for i in self.stub.issues.values() if i["title"] == "Capacity")
+        self.assertIn("Timeouts: 3 of 4 runs (75%; 2.00 h and $0.60 wasted)", body)
+        self.assertIn("| #7 | Batou | 2 | 80 | $0.50 |", body)
+        self.assertLess(body.index("| #7 |"), body.index("| #9 |"))
+        self.assertNotIn("| #8 |", body)
+
 
 class TestRosterTimeouts(unittest.TestCase):
     """#205 items 2 and 6: the per-agent timeout and daily run cap, shipped in the roster."""
