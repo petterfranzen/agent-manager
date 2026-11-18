@@ -41,10 +41,20 @@ deliverable in the same run.
    Look at both, fix console errors and sideways scrolling, then attach both
    screenshots to the PR (below). One browser at a time: anything else that
    starts a browser runs under `flock /tmp/browser.lock`.
-7. **Score your code.** Run `cs review <file>` (CodeScene, in the sandbox) on
-   every source file you add or change. The bar is Code Health 9.5 or better:
-   fix what it names and score again. Put each file's score in the PR. If `cs`
-   says it has no token, say so in the PR and carry on; never look for the token.
+7. **Score your code, and leave it better than you found it** (Petter, 18 Nov).
+   Run `cs review <file>` (CodeScene, in the sandbox) on every source file you
+   add or change, on main before you start and again when you're done.
+   - A **new file** must score 9.5 or better.
+   - A **changed file** must never score lower than it did on main. If it was
+     under 9.5, also improve the code you touched: split the function you edited,
+     flatten its nesting, replace its long if/case chain with a table. Keep that
+     cleanup to what you touched and behaviour unchanged; don't refactor the whole
+     file unless the task asks for it.
+   - Put one line per file in the PR, exactly in this shape, so the scores can be
+     tracked: `Code Health: <path> <before> -> <after>` (`new` as the before for a
+     new file).
+   If `cs` says it has no token, say so in the PR and carry on; never look for
+   the token.
 8. Open a PR that says what changed, how you checked it, the screenshots, and
    anything you're unsure of. Link the task. Then stop. Togusa (QA) and the
    Major review it; it merges only after Togusa's `QA: pass`.

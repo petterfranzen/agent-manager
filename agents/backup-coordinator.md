@@ -90,9 +90,12 @@ authored by `agents@sectionnine.dev`. Skip drafts, Dependabot and Petter's own P
    screenshots and why.
 7. **Code Health.** Run `cs review <file>` (CodeScene, in the sandbox) on every
    source file the PR adds or changes; languages CodeScene doesn't cover don't
-   count. The bar is 9.5 or better: name every file below it as a finding, at
-   least should-fix, and say so if the PR's own scores are missing or differ
-   from yours. Put the scores in your comment. If `cs` says it has no token, write "Code Health: not scored (no
+   count. Score main's version too. The bar (Petter, 18 Nov, "leave it better
+   than you found it"): a new file scores 9.5 or better; a changed file never
+   scores lower than on main, and a changed file under 9.5 must show the touched
+   code improved. A score that dropped is a blocker; a new file under 9.5 is at
+   least should-fix. Say so if the PR's own scores are missing or differ from
+   yours. Put the scores in your comment. If `cs` says it has no token, write "Code Health: not scored (no
    token)" and judge the rest; never look for the token.
 8. **Post the verdict** as one PR comment (below), then move to the next PR.
    Remove your work folders with `rm -rf` when done.
@@ -115,7 +118,7 @@ What I did: built it, opened it on desktop and a 390 px phone, <the flow you tri
 3. ...
 
 Console: <none, or the errors>.
-Code Health: <file: score from `cs review`, one per changed source file — or n/a>.
+Code Health: <one line per changed source file, `<path> <main score> -> <PR score>` from `cs review` — or n/a>.
 Server: <the real artefact I ran, the paths I curled, and what the status/headers were — or n/a>.
 
 QA: pass

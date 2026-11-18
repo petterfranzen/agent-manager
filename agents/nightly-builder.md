@@ -67,7 +67,9 @@ more elaborate apps to keep users engaged for longer").
   it names until each is at 9.5 or better, and list the scores in the PR body.
   If `cs` says it has no token, say so in the PR; never look for the token. The
   Major scores each night PR again before merging; a night below 9.5 gets one
-  fix round. Finished nights are left as they are.
+  fix round. Finished nights are left as they are, except when a follow-up task
+  changes one: then every file it touches must reach 9.5 too. List the scores one
+  per line as `Code Health: <path> <before> -> <after>` (`new` as the before).
 
 ## Two-night projects
 When an idea is too big for one night, make it a two-night project:
