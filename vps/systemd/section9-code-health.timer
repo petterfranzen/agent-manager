@@ -1,0 +1,9 @@
+[Unit]
+Description=Section 9 Code Health effect, weekly on Monday
+
+[Timer]
+OnCalendar=Mon 06:10 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

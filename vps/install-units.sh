@@ -17,5 +17,5 @@ systemctl daemon-reload
 systemctl enable --now section9-dispatch.timer section9-dispatch-lane1.timer section9-routines.timer \
   section9-sync.timer section9-health.timer \
   section9-hq-status.timer section9-hq-crew.timer section9-spend.timer section9-cpu.timer \
-  section9-capacity.timer section9-sca.timer section9-cloudflared.timer \
+  section9-capacity.timer section9-code-health.timer section9-sca.timer section9-cloudflared.timer \
   section9-container-runtime-patch.timer

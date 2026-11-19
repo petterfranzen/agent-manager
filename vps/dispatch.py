@@ -8,6 +8,7 @@
   dispatch.py spend      update the open "Spend" issue with OpenRouter's figures (hourly)
   dispatch.py cpu        update the open "CPU credits" issue with this VPS's own CPU figures (hourly)
   dispatch.py capacity   roll the run ledger up into the open "Capacity" issue (daily)
+  dispatch.py code-health  join the ledger with the PRs' Code Health lines: "Code Health effect" (weekly)
   dispatch.py note       update the open "Sync" issue: what the VPS did with itself
 
 Run by systemd timers on the VPS (vps/systemd). One run at a time in each lane (lock files).
@@ -33,19 +34,20 @@ from pathlib import Path
 # beside it in vps/dispatcher/; appended, so nothing here can shadow the standard library.
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from dispatcher import board, capacity, cpu, net, reports, routines, run   # noqa: E402
+from dispatcher import board, capacity, cpu, health, net, reports, routines, run   # noqa: E402
 from dispatcher.context import Context                                     # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 # Every command but the default, `run` (one task in this lane).
 COMMANDS = {"routines": routines.routines, "status": reports.status, "spend": reports.spend,
-            "cpu": cpu.credits, "capacity": capacity.capacity, "note": reports.note}
+            "cpu": cpu.credits, "capacity": capacity.capacity, "code-health": health.code_health,
+            "note": reports.note}
 
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("cmd", nargs="?", default="run",
-                   choices=["run", "routines", "status", "spend", "cpu", "note", "capacity"])
+                   choices=["run", *COMMANDS])
     p.add_argument("--secrets-dir", default="/etc/section9")
     p.add_argument("--state-dir", default="/var/lib/section9")
     p.add_argument("--repo-root", default=str(ROOT))
