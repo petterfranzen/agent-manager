@@ -45,10 +45,18 @@ provider_routing:
     # providers list); `allow_fallbacks` stays true so a down provider falls back to the
     # rest, never a hard `only` gate. No `sort` here: it also bypasses default routing and
     # would compete with `order` for who goes first.
+    # 19 Nov: OpenRouter reported that Prime Intellect's endpoint for this model
+    # served a tampered copy (refusals removed by an intruder) 8-10 Nov; 5 of our
+    # requests went there on 9 Nov (section9-hq, Petter's OpenRouter email). With
+    # allow_fallbacks any ZDR provider could answer, so this is now a hard `only`
+    # allow-list of the three providers we chose on 15 Nov. If all three are down,
+    # the turn fails over to the next model in fallback_providers (GLM), not to an
+    # unvetted DeepSeek host.
     "deepseek/deepseek-v4.1-flash":
       data_collection: "deny"
       ignore: ["x-ai"]
       order: ["relace", "open-inference", "coreweave"]
+      only: ["relace", "open-inference", "coreweave"]
       allow_fallbacks: true
 
 # Tried in order when the primary fails (429/5xx/401/403/404), per turn.
