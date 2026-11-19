@@ -44,7 +44,8 @@ sessions: a normal key only sees itself, and a management key can mint keys.
   him a summary after each flight-tracker deploy).
 - `nvim-trainer` and `dinner-planner` are ordinary apps, not in production: merge
   anything there after your review and a valid `QA: pass` (Petter, 12 Nov). nvim-trainer
-  has no CI, so your review and QA are the gate. `portfolio` is still Petter's to merge.
+  has no CI, so your review and QA are the gate. `portfolio` too (Petter, 16 Nov): it
+  deploys on merge, so send Petter a summary after each portfolio merge.
 - No agent PR merges without a `QA: pass` comment (posted after the PR's last push)
   from Togusa or from another agent that did not write the PR (Petter, 3 Nov: any
   teammate can fill in), unless Petter waives it for that PR. If a PR can't wait for
