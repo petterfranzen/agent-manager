@@ -1,8 +1,11 @@
 """vps/hq-status.py and vps/sca-watch.py against the stub GitHub, OpenRouter, OSV and KEV."""
 
+import base64
 import contextlib
+import hashlib
 import io
 import json
+import re
 from unittest import mock
 
 from .base import ROOT, Base, hq, sca
@@ -266,6 +269,34 @@ class TestHq(Base):
         self.assertEqual(self.run_hq("crew")[0], 0)
         self.assertEqual((site / "board" / "index.html").read_text(), "BOARD")
         self.assertEqual((site / "board" / "status.json").read_text(), "LIVE")
+
+    def test_crew_files_under_board_are_never_written(self):
+        site = self.t / "site"
+        (site / "board").mkdir(parents=True)
+        (site / "board" / "index.html").write_text("BOARD")
+        self.stub.crew.update({"board/index.html": "EVIL", "board/x.html": "EVIL", "board": "EVIL",
+                               "boards.html": "fine"})
+        self.assertEqual(self.run_hq("crew")[0], 0)
+        self.assertEqual((site / "board" / "index.html").read_text(), "BOARD")
+        self.assertFalse((site / "board" / "x.html").exists())
+        self.assertEqual((site / "boards.html").read_text(), "fine")
+        self.assertFalse(hq.mirrored({"type": "blob", "path": "board/a/b.js"}))
+        self.assertTrue(hq.mirrored({"type": "blob", "path": "css/board/a.css"}))
+
+    def test_the_board_csp_allows_exactly_the_pages_inline_scripts(self):
+        # Caddy serves the board with a hash-based script-src (vps/compose.yaml); a page update
+        # that changes an inline script must update the hash, or the board stops running.
+        want = set()
+        for page in ("index.html", "placeholder.html"):
+            text = (ROOT / "vps" / "board" / page).read_text(encoding="utf-8")
+            for attrs, body in re.findall(r"<script([^>]*)>(.*?)</script>", text, re.S):
+                if "src=" in attrs or "application/json" in attrs:
+                    continue
+                want.add("sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode())
+        compose = (ROOT / "vps" / "compose.yaml").read_text(encoding="utf-8")
+        script_src = re.search(r"script-src ([^;]*);", compose).group(1)
+        self.assertEqual(set(re.findall(r"'(sha256-[^']+)'", script_src)), want)
+        self.assertNotIn("unsafe", script_src)
 
     def test_crew_without_an_index_changes_nothing(self):
         site = self.t / "site"

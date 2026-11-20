@@ -1,0 +1,8 @@
+{
+  "name": "sandbox-playwright",
+  "private": true,
+  "description": "Playwright for the sandbox image, installed with npm ci from the lockfile beside it.",
+  "dependencies": {
+    "playwright": "1.64.1"
+  }
+}

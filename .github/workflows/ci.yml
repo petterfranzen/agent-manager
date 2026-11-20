@@ -97,7 +97,10 @@ jobs:
           assert set(svc) == {"hermes", "sandbox", "hq"}, set(svc)
           h, s, q = svc["hermes"], svc["sandbox"], svc["hq"]
           assert q["mem_limit"] == str(64 * 2**20), q["mem_limit"]
-          assert [(p["host_ip"], p["target"], p["published"]) for p in q["ports"]] == [("127.0.0.1", 8090, "8090")], q["ports"]
+          # 8090: crew page (+ the old /board path); 8091: the board alone, for its own hostname.
+          assert [(p["host_ip"], p["target"], p["published"]) for p in q["ports"]] == [("127.0.0.1", 8090, "8090"), ("127.0.0.1", 8091, "8091")], q["ports"]
+          cf = q["environment"]["HQ_CADDYFILE"]
+          assert ":8091 {" in cf and "root * /srv/board" in cf and "frame-ancestors 'none'" in cf, "board site missing"
           assert h["mem_limit"] == str(2**30) and s["mem_limit"] == str(2 * 2**30) and s["memswap_limit"] == str(3 * 2**30)
           # Hostinger's credit budget: 0.40 (sandbox) + 0.30 (hermes) = 0.45 over baseline. Keep
           # SANDBOX_CORES/HERMES_CORES in vps/dispatch.py in step.
@@ -109,6 +112,17 @@ jobs:
           assert (e["HERMES_DASHBOARD"], e["HERMES_DASHBOARD_HOST"], e["HERMES_DASHBOARD_PORT"]) == ("1", "127.0.0.1", "9119"), e
           assert any(v["target"] == "/opt/data/dashboard-themes" and v.get("read_only") for v in h["volumes"]), h["volumes"]
           assert [(p["host_ip"], p["target"]) for p in s["ports"]] == [("127.0.0.1", 22)]
+          # The sandbox: least capabilities (the same set the smoke test runs with), no
+          # privilege gain, process cap, never privileged, the host network or the Docker socket.
+          assert s.get("cap_drop") == ["ALL"], s.get("cap_drop")
+          assert sorted(s.get("cap_add", [])) == sorted(["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]), s.get("cap_add")
+          assert "no-new-privileges:true" in s.get("security_opt", []), s.get("security_opt")
+          assert s.get("pids_limit"), "sandbox needs a pids limit"
+          assert s.get("network_mode") in (None, "default", "bridge"), s.get("network_mode")
+          for name, c in svc.items():
+              assert not c.get("privileged"), f"{name} is privileged"
+              assert not any("docker.sock" in str(v.get("source", "")) for v in c.get("volumes", [])), f"{name} mounts the Docker socket"
+              assert "no-new-privileges:true" in c.get("security_opt", []), f"{name} lacks no-new-privileges"
           print("vps compose ok")
           EOF
       - name: install.sh and the systemd units
@@ -156,10 +170,15 @@ jobs:
           cp /tmp/ci_key.pub /tmp/authorized_keys
           # As on the VM: root-owned, not writable by others (sshd StrictModes).
           sudo chown root:root /tmp/authorized_keys && sudo chmod 0644 /tmp/authorized_keys
+          # The hardening flags of vps/compose.yaml (the VPS stack job checks the same set there).
           docker run -d --name sb -p 127.0.0.1:2222:22 \
+            --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add SETUID --cap-add SETGID \
+            --cap-add SYS_CHROOT --cap-add KILL --cap-add AUDIT_WRITE \
+            --security-opt no-new-privileges:true --pids-limit 512 --memory 2g --memory-swap 3g \
             -e GH_TOKEN=ci-fake-token -e CS_ACCESS_TOKEN=ci-fake-cs-token -e OPENROUTER_API_KEY=must-not-leak \
             -v /tmp/authorized_keys:/etc/ssh/authorized_keys/agent:ro sandbox:ci
-          for i in $(seq 1 20); do nc -z 127.0.0.1 2222 && break; sleep 1; done
+          # Until sshd answers (the published port accepts before sshd is listening).
+          for i in $(seq 1 30); do ssh-keyscan -p 2222 127.0.0.1 2>/dev/null | grep -q ssh-ed25519 && break; sleep 1; done
       - name: Checks over SSH, as Hermes would connect
         run: |
           set -euo pipefail
@@ -167,6 +186,15 @@ jobs:
           s() { ssh -i /tmp/ci_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@127.0.0.1 "$@"; }
           [ "$(s whoami)" = agent ]
           s 'git --version && gh --version | head -1 && gitleaks version && mise --version'
+          # Git identity and the pre-push hook come from root-owned system config the agent can't edit.
+          [ "$(s 'git config user.email')" = agents@sectionnine.dev ]
+          [ "$(s 'git config --show-origin core.hooksPath')" = "$(printf 'file:/etc/gitconfig\t/etc/git-hooks')" ]
+          s 'test -x /etc/git-hooks/pre-push && ! test -w /etc/git-hooks/pre-push && ! test -w /etc/git-hooks && ! test -w /etc/gitconfig'
+          s 'test ! -e ~/.gitconfig'
+          # A clone and a commit work under the hardened container.
+          s 'cd /tmp && git init -q g && cd g && git commit -q --allow-empty -m t && git log -1 --format=%ae' | grep -qx agents@sectionnine.dev
+          # Playwright resolves from the lockfile install, through NODE_PATH.
+          s 'playwright --version' | grep -q '^Version 1\.'
           s 'test -s ~/.git-credentials && grep -q ci-fake-token ~/.git-credentials'
           # CodeScene's cs: the pinned binary runs without a token (version only), and the
           # token the container was given sits in a 0600 file for the wrapper, not in the env.
