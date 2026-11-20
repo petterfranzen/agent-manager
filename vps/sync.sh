@@ -21,17 +21,25 @@ MAX_ATTEMPTS=3
 self_changed=0
 checks=
 
-# The protected set: what could widen what a merge to main can do as root, or weaken the
-# gate itself. Any other change applies on its own (CI green, fast-forward, soaked). A
-# commit may change a protected path only when PINS_FILE--root-only, outside the repo, so
-# the commit cannot update it--already carries that file's new sha256; otherwise the sync
-# stops until a human runs `sync.sh --accept`. A prefix ending in "/" is a directory; any
-# path with "sudoers" in its name is protected too. /etc/section9/sync.toml can ADD
-# prefixes (protect = ["..."]) and set soak_minutes; it cannot remove these.
-#   sync.sh, install.sh, install-units.sh: the pins/trust logic and what installs the units
-#   systemd/section9-sync.*: the units that run the sync
+# The protected set: what could widen what a merge to main can do as root, or what the
+# sandbox and Hermes get from the host, or weaken the gate itself. Any other change applies
+# on its own (CI green, fast-forward, soaked). A commit may change a protected path only
+# when PINS_FILE--root-only, outside the repo, so the commit cannot update it--already
+# carries that file's new sha256; otherwise the sync stops until a human runs
+# `sync.sh --accept`. A prefix ending in "/" is a directory; any path with "sudoers" in its
+# name is protected too. /etc/section9/sync.toml can ADD prefixes (protect = ["..."]) and
+# set soak_minutes; it cannot remove these.
+#   sync.sh, install.sh, install-units.sh, secret-modes.sh: the pins/trust logic and the installers
+#   systemd/, apt/: root units and apt config, installed as root by install-units.sh
+#   compose.yaml: mounts, privileges and networks of the containers (but see VERSIONS_ONLY)
+#   health.sh, dashboard-prep.sh, *-patch.sh: what root units and the apply run unconfined
 #   .github/workflows/: CI is the green light the sync trusts
-PROTECTED=(vps/sync.sh vps/install.sh vps/install-units.sh vps/systemd/section9-sync. .github/workflows/)
+PROTECTED=(vps/sync.sh vps/install.sh vps/install-units.sh vps/secret-modes.sh vps/systemd/ vps/apt/
+           vps/compose.yaml vps/health.sh vps/dashboard-prep.sh vps/cloudflared-patch.sh
+           vps/container-runtime-patch.sh .github/workflows/)
+# Protected paths whose change applies without a pin when it only moves image tags or
+# digests (Dependabot): every other line, image names included, is as last applied.
+VERSIONS_ONLY=(vps/compose.yaml)
 SOAK_DEFAULT=30       # minutes a commit must have been on main before it applies
 
 # Check runs that must be present and green on a commit: the job names in
@@ -134,19 +142,53 @@ health() {
       | sed -E 's/(sk-or-|github_pat_|ghp_)[A-Za-z0-9_-]*/[redacted]/g' | tr -d '`' | cut -c1-200 || true)
     echo "- \`$u.timer\`: ${active:-unknown}; last trigger $last; last service result ${result:-unknown}; last error line: ${err:-none}.$flag"
   done
+  secret_modes
+}
+
+# One line for the Sync issue: are the secrets in SECRETS_DIR root-only (vps/secret-modes.sh)?
+secret_modes() {
+  local check bad
+  check="$(dirname "${BASH_SOURCE[0]}")/secret-modes.sh"
+  if [ ! -x "$check" ]; then
+    echo "- \`$SECRETS_DIR\` modes: not checked (no secret-modes.sh)."
+  elif bad=$("$check" "$SECRETS_DIR"); then
+    echo "- \`$SECRETS_DIR\` modes: ok (root-only)."
+  else
+    echo "- \`$SECRETS_DIR\` modes: WRONG: $(head -10 <<<"$bad" | tr '\n' ';' | tr -d '`' | cut -c1-600) Fix them on the VPS (\`install.sh\` says how)."
+  fi
 }
 
 # Prints why a commit must not be applied and returns 1, or prints nothing and
 # returns 0 when every protected path it changes is pinned to its new content in
 # PINS_FILE. Reads the commit's own blobs: the checkout is untouched.
 pins_verdict() { # pins_verdict <from> <to>
-  python3 -I - "$1" "$2" "$PINS_FILE" "$REPO_DIR" "${PROTECTED[@]}" <<'PY'
+  python3 -I - "$1" "$2" "$PINS_FILE" "$REPO_DIR" "${VERSIONS_ONLY[*]}" "${PROTECTED[@]}" <<'PY'
 import hashlib
+import re
 import subprocess
 import sys
 import tomllib
 
-base, target, pins_file, repo, *prefixes = sys.argv[1:]
+base, target, pins_file, repo, versions_only, *prefixes = sys.argv[1:]
+# "image: name[:tag][@sha256:digest]" -> "image: name"
+IMAGE = re.compile(r"^(\s*image:\s*\S+?)(:[\w.-]+)?(@sha256:[0-9a-f]{64})?\s*$")
+
+
+def blob(rev, path):
+    p = subprocess.run(["git", "cat-file", "blob", f"{rev}:{path}"], cwd=repo, capture_output=True)
+    return None if p.returncode else p.stdout
+
+
+def unversioned(data):
+    return [IMAGE.sub(r"\1", line) for line in data.decode("utf-8", "replace").splitlines()]
+
+
+def only_versions_moved(path, new):
+    """True when path may skip its pin and the change only moves image tags or digests."""
+    old = blob(base, path) if path in versions_only.split() else None
+    return old is not None and unversioned(old) == unversioned(new)
+
+
 try:
     with open(pins_file, encoding="utf-8") as f:
         pins = tomllib.loads(f.read()).get("pins", {})
@@ -161,11 +203,12 @@ problems = []
 for path in changed:
     if not (path.startswith(tuple(prefixes)) or "sudoers" in path.lower()):
         continue
-    blob = subprocess.run(["git", "cat-file", "blob", f"{target}:{path}"], cwd=repo, capture_output=True)
-    if blob.returncode:       # deleted: nothing of it is left to run here
+    new = blob(target, path)
+    if new is None:           # deleted: nothing of it is left to run here
         continue
-    if pins.get(path) != hashlib.sha256(blob.stdout).hexdigest():
-        problems.append(path + (" is new" if path not in pins else " changed"))
+    if pins.get(path) == hashlib.sha256(new).hexdigest() or only_versions_moved(path, new):
+        continue
+    problems.append(path + (" is new" if path not in pins else " changed"))
 if problems:
     print(f"{pins_file} does not pin " + ", ".join(problems))
     sys.exit(1)
@@ -193,7 +236,7 @@ accept() { # accept [commit]  (default origin/main)
   load_config || exit 1
   tree=$(git rev-parse "$1")
   [ -z "$(git status --porcelain)" ] || { err "refusing to pin: $REPO_DIR has local changes"; exit 1; }
-  install -d -m 0755 "$(dirname "$PINS_FILE")"
+  install -d -m 0700 "$(dirname "$PINS_FILE")"
   python3 -I - "$tree" "$PINS_FILE" "$REPO_DIR" "${PROTECTED[@]}" <<'PY'
 import hashlib
 import os
@@ -228,8 +271,8 @@ print(f"{len(pins)} protected paths pinned in {pins_file} at {tree[:7]}")
 PY
 }
 
-# Prints why a commit is not ready and returns 1, or returns 0 when every
-# required check run is completed with conclusion "success" (as vm-sync's ci_verdict).
+# Prints why a commit is not ready and returns 1, or returns 0 when every required check
+# run, from GitHub Actions, is completed with conclusion "success" (as vm-sync's ci_verdict).
 ci_verdict() { # ci_verdict <check-runs.json>
   python3 -I - "$1" "${REQUIRED_CHECKS[@]}" <<'PY'
 import json
@@ -247,7 +290,8 @@ except (OSError, ValueError, KeyError, TypeError, AttributeError):
 if total > len(runs):
     print(f"{total} check runs, more than one page")
     sys.exit(1)
-names = {r.get("name") for r in runs}
+# A required check counts only when GitHub Actions made it; a red run from anyone still blocks.
+names = {r.get("name") for r in runs if (r.get("app") or {}).get("slug") == "github-actions"}
 missing = [n for n in required if n not in names]
 not_green = [f"{r.get('name')} ({r.get('conclusion') or r.get('status')})"
              for r in runs if r.get("status") != "completed" or r.get("conclusion") != "success"]

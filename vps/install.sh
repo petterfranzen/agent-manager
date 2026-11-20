@@ -12,13 +12,7 @@ command -v docker >/dev/null || { echo "Docker is not installed." >&2; exit 1; }
 
 # 1. Secrets first, so nothing is changed if they are missing.
 missing=0
-for f in hermes.env sandbox.env; do
-  if [[ ! -f $secrets/$f ]]; then echo "MISSING: $secrets/$f" >&2; missing=1
-  elif [[ $(stat -c '%a %U' "$secrets/$f") != "600 root" ]]; then
-    echo "WRONG MODE/OWNER: $secrets/$f (want 0600 root; fix: chown root:root $secrets/$f && chmod 600 $secrets/$f)" >&2; missing=1
-  fi
-done
-for f in hermes_ssh_key sandbox_authorized_keys; do
+for f in hermes.env sandbox.env hermes_ssh_key sandbox_authorized_keys; do
   [[ -f $secrets/$f ]] || { echo "MISSING: $secrets/$f" >&2; missing=1; }
 done
 [[ $missing -eq 0 ]] || { echo "Copy the secrets first (docs/RUNBOOK.md, VPS step 1)." >&2; exit 1; }
@@ -26,6 +20,14 @@ done
 # sshd in the sandbox refuses a key file it can't read as the agent user: root-owned, 0644.
 chown root:root "$secrets/sandbox_authorized_keys"
 chmod 0644 "$secrets/sandbox_authorized_keys"
+
+# Every other file and directory in it root-only (secret-modes.sh says what each wants).
+if ! bad=$("$here/secret-modes.sh" "$secrets"); then
+  echo "WRONG MODE/OWNER in $secrets:" >&2
+  echo "$bad" >&2
+  echo "Fix: chown root:root PATH && chmod 600 PATH (0700 for a directory); see docs/RUNBOOK.md." >&2
+  exit 1
+fi
 
 # Dashboard login and themes folder (also done by sync.sh before it applies a compose change).
 "$here/dashboard-prep.sh"

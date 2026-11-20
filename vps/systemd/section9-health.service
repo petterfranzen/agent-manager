@@ -6,17 +6,30 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# Inside the sandbox image, so it uses the agents' own toolchain and the agents'
-# own token (GH_TOKEN, /etc/section9/sandbox.env) and no other secret. The five
-# repos are public, so the clones need no token at all. --entrypoint sidesteps
-# the image's sshd; --rm throws the container, its clones and its node_modules
-# away again. The service's own cpus/mem_limit/pids_limit bound the run.
-ExecStart=/usr/bin/docker compose -f /opt/agent-manager/vps/compose.yaml run --rm --no-deps -T \
-  --user agent -e HOME=/home/agent -w /home/agent/work \
-  -v /opt/agent-manager/scripts/health-run.sh:/usr/local/bin/health-run.sh:ro \
-  --entrypoint /usr/local/bin/health-run.sh sandbox
+# vps/health.sh: the builds run in a sandbox-image container with no token in it
+# at all; a second one, which builds nothing, posts the table with the agents' own
+# GH_TOKEN (/etc/section9/sandbox.env). The five repos are public, so the clones need
+# no token. The sandbox service's own cpus/mem_limit/pids_limit bound the run.
+ExecStart=/opt/agent-manager/vps/health.sh
 TimeoutStartSec=45min
 Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+# full, not strict: docker compose may (re)build the image and keep state in /root/.docker.
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+# Only the Docker socket and root-owned files: the owner needs no capability.
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

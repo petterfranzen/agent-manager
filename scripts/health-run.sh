@@ -4,15 +4,20 @@
 # section9-hq (created and pinned on the first run).
 #
 #   scripts/health-run.sh --dry-run              print the table, post nothing
-#   scripts/health-run.sh                        rewrite the issue (as the VPS does)
+#   scripts/health-run.sh                        build, then rewrite the issue
+#   scripts/health-run.sh --body-only            build, print the issue body, post nothing
+#   scripts/health-run.sh --post FILE            post a body (FILE, or - for stdin), build nothing
 #   scripts/health-run.sh --only nvim-trainer    one repo (repeatable)
 #   scripts/health-run.sh --repos-dir DIR        use checkouts you already have
 #   scripts/health-run.sh --cmd repo='CMD'       override one repo's commands
 #
-# On the VPS it runs from section9-health.timer, inside the sandbox image: that
-# is the agents' own toolchain and the agents' own token (GH_TOKEN in
-# /etc/section9/sandbox.env). No other secret, no wider scope. The clones need
-# no token at all (all five repos are public). See docs/RUNBOOK.md.
+# On the VPS, section9-health.service runs vps/health.sh, which runs this script in
+# the sandbox image twice: --body-only with no token in the container at all, then
+# --post with the agents' own token (GH_TOKEN in /etc/section9/sandbox.env) for
+# `gh api` alone. Install and build scripts are other people's code, so they never
+# share a container with a token. The clones need none (all five repos are public).
+# Run by hand, the builds' environment carries no GH_TOKEN, GITHUB_TOKEN or
+# CS_ACCESS_TOKEN either; only the final `gh api` calls get GH_TOKEN. See docs/RUNBOOK.md.
 #
 # This is a cheap cross-repo signal, not a second CI. What each repo runs lives
 # in steps_for() below, one case per repo, and is what that repo's own CI or its
@@ -28,15 +33,19 @@ log_lines=${HEALTH_LOG_LINES:-20}
 repos=(ghost-in-the-machine nvim-trainer portfolio dinner-planner flight-tracker)
 
 dry_run=0
+body_only=0
+post_file=""
 repos_dir=""
 only=()
 overrides=()
 
-usage() { sed -n '2,18p' "$0"; exit 0; }
+usage() { sed -n '2,24p' "$0"; exit 0; }
 
 while (( $# )); do
   case $1 in
     --dry-run)   dry_run=1 ;;
+    --body-only) body_only=1 ;;
+    --post)      post_file=${2:?--post needs a file, or - for stdin}; shift ;;
     --repos-dir) repos_dir=${2:?--repos-dir needs a directory}; shift ;;
     --only)      only+=("${2:?--only needs a repo name}"); shift ;;
     --cmd)       overrides+=("${2:?--cmd needs repo=command}"); shift ;;
@@ -45,6 +54,11 @@ while (( $# )); do
   esac
   shift
 done
+
+# The token is for the final `gh api` calls only. Every build step below runs
+# install scripts from npm, so neither token stays in the environment they inherit.
+post_token=${GH_TOKEN:-}
+unset GH_TOKEN GITHUB_TOKEN CS_ACCESS_TOKEN
 
 # ---- what each repo runs -----------------------------------------------------
 # $1 is the checkout, $2 a scratch directory for a build that writes outside the
@@ -114,89 +128,133 @@ trap 'rm -rf "$work"' EXIT
 # ---- run ---------------------------------------------------------------------
 rows=()      # repo|status|seconds|describe|note
 failed=0
-started=$(date -u +%s)
+total=0
 
-for r in "${repos[@]}"; do
-  selected "$r" || continue
-  describe=$(describe_for "$r")
-  note=$(note_for "$r")
-  steps=$(override_for "$r") || steps=$(steps_for "$r") || steps=""
-  log="$work/$r.log"
-  : > "$log"
-  secs=0
+run_repos() {
+  local r describe note steps log secs status src t0 started
+  started=$(date -u +%s)
+  for r in "${repos[@]}"; do
+    selected "$r" || continue
+    describe=$(describe_for "$r")
+    note=$(note_for "$r")
+    steps=$(override_for "$r") || steps=$(steps_for "$r") || steps=""
+    log="$work/$r.log"
+    : > "$log"
+    secs=0
 
-  if [ -z "$steps" ]; then
-    status=SKIP
-    echo "no suite yet" > "$log"
-  else
-    src="$repos_dir/$r"
-    if [ -n "$repos_dir" ] && [ ! -d "$src" ]; then
+    if [ -z "$steps" ]; then
       status=SKIP
-      echo "no checkout at $src" > "$log"
+      echo "no suite yet" > "$log"
     else
-      if [ -z "$repos_dir" ]; then
-        src="$work/src/$r"
-        mkdir -p "$work/src"
-        echo "\$ git clone --depth 1 https://github.com/$org/$r" >> "$log"
-        if ! timeout "$repo_timeout" git clone -q --depth 1 "https://github.com/$org/$r" "$src" >> "$log" 2>&1; then
-          status=FAIL
-          echo "could not clone $org/$r" >> "$log"
-          rows+=("$r|$status|$secs|$describe|$note")
-          failed=$((failed + 1))
-          continue
-        fi
-      fi
-      t0=$(date -u +%s)
-      if timeout "$repo_timeout" bash -c "$steps" health-run "$src" "$work/out-$r" >> "$log" 2>&1; then
-        status=PASS
+      src="$repos_dir/$r"
+      if [ -n "$repos_dir" ] && [ ! -d "$src" ]; then
+        status=SKIP
+        echo "no checkout at $src" > "$log"
       else
-        status=FAIL
-        failed=$((failed + 1))
+        if [ -z "$repos_dir" ]; then
+          src="$work/src/$r"
+          mkdir -p "$work/src"
+          echo "\$ git clone --depth 1 https://github.com/$org/$r" >> "$log"
+          if ! timeout "$repo_timeout" git clone -q --depth 1 "https://github.com/$org/$r" "$src" >> "$log" 2>&1; then
+            status=FAIL
+            echo "could not clone $org/$r" >> "$log"
+            rows+=("$r|$status|$secs|$describe|$note")
+            failed=$((failed + 1))
+            continue
+          fi
+        fi
+        t0=$(date -u +%s)
+        if timeout "$repo_timeout" bash -c "$steps" health-run "$src" "$work/out-$r" >> "$log" 2>&1; then
+          status=PASS
+        else
+          status=FAIL
+          failed=$((failed + 1))
+        fi
+        secs=$(( $(date -u +%s) - t0 ))
       fi
-      secs=$(( $(date -u +%s) - t0 ))
     fi
-  fi
-  rows+=("$r|$status|$secs|$describe|$note")
+    rows+=("$r|$status|$secs|$describe|$note")
 
-  if (( dry_run )); then
-    case $status in PASS) printf 'ok   %-20s %s\n' "$r" "$(human_time "$secs")" ;;
-                   FAIL) printf 'FAIL %-20s %s\n' "$r" "$(human_time "$secs")" ;;
-                   *)    printf 'skip %-20s %s\n' "$r" "$(head -1 "$log")" ;; esac
-  fi
-done
-
-total=$(( $(date -u +%s) - started ))
+    if (( dry_run )); then
+      case $status in PASS) printf 'ok   %-20s %s\n' "$r" "$(human_time "$secs")" ;;
+                     FAIL) printf 'FAIL %-20s %s\n' "$r" "$(human_time "$secs")" ;;
+                     *)    printf 'skip %-20s %s\n' "$r" "$(head -1 "$log")" ;; esac
+    fi
+  done
+  total=$(( $(date -u +%s) - started ))
+}
 
 # ---- the table ---------------------------------------------------------------
+render_body() {
+  local row r status secs describe note notes
+  {
+    printf '**As of %s UTC** — five repos, whole run %s. Written by `scripts/health-run.sh`;\n' \
+      "$(date -u '+%Y-%m-%d %H:%M')" "$(human_time "$total")"
+    printf '`section9-health.timer` runs it nightly on the VPS, inside the sandbox image.\n\n'
+    printf '| Repo | Result | Time | Ran |\n|---|---|---|---|\n'
+    for row in ${rows[@]+"${rows[@]}"}; do
+      IFS='|' read -r r status secs describe note <<<"$row"
+      printf '| %s | %s | %s | %s |\n' "$r" "$status" "$(human_time "$secs")" "$describe"
+    done
+    printf '\n'
+
+    notes=""
+    for row in ${rows[@]+"${rows[@]}"}; do
+      IFS='|' read -r r status secs describe note <<<"$row"
+      [ -n "$note" ] && notes="$notes- $r: not in this run — $note.\n"
+    done
+    if [ -n "$notes" ]; then printf 'Their own CI keeps these:\n\n'; printf '%b' "$notes"; printf '\n'; fi
+
+    for row in ${rows[@]+"${rows[@]}"}; do
+      IFS='|' read -r r status secs describe note <<<"$row"
+      [ "$status" = FAIL ] || continue
+      printf '<details><summary>%s — last %s log lines</summary>\n\n```\n' "$r" "$log_lines"
+      tail -n "$log_lines" "$work/$r.log" | redact
+      printf '```\n\n</details>\n\n'
+    done
+
+    printf "Don't edit: rewritten on every run. Leave this issue open and pinned.\n"
+  }
+}
+
+# ---- post --------------------------------------------------------------------
+# Posts the body in $1 (a file, or - for stdin) and exits: 1 when it has a FAIL row.
+post_body() {
+  local src=$1 body number created node fails
+  body=$(mktemp "$work/post.XXXXXX")
+  if [ "$src" = - ]; then cat > "$body"; else cat -- "$src" > "$body"; fi
+  [ -s "$body" ] || { echo "empty body; nothing posted" >&2; exit 1; }
+  [ -n "$post_token" ] || { echo "GH_TOKEN is not set; nothing posted" >&2; exit 1; }
+  number=$(GH_TOKEN=$post_token gh api "repos/$board/issues?state=open&per_page=100" \
+    --jq "[.[] | select(.title==\"$issue_title\" and (.pull_request|not))][0].number // empty")
+  if [ -n "$number" ]; then
+    GH_TOKEN=$post_token gh api -X PATCH "repos/$board/issues/$number" -F body=@"$body" > /dev/null
+    echo "health run: updated #$number"
+  else
+    created=$(GH_TOKEN=$post_token gh api "repos/$board/issues" -f title="$issue_title" -F body=@"$body")
+    number=$(printf '%s' "$created" | jq -r .number)
+    node=$(printf '%s' "$created" | jq -r .node_id)
+    echo "health run: opened #$number"
+    # Pinning is GraphQL-only. Best effort: an unpinned issue is still readable.
+    GH_TOKEN=$post_token gh api graphql -f query='mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }' \
+      -f id="$node" > /dev/null 2>&1 || echo "could not pin #$number; pin it by hand" >&2
+  fi
+  fails=$(grep -c '^| [^|]* | FAIL |' "$body" || true)
+  if (( fails )); then echo "health run: $fails repo(s) FAIL" >&2; exit 1; fi
+  exit 0
+}
+
+# ---- main --------------------------------------------------------------------
+[ -z "$post_file" ] || post_body "$post_file"
+
+run_repos
 body=$(mktemp "$work/body.XXXXXX")
-{
-  printf '**As of %s UTC** — five repos, whole run %s. Written by `scripts/health-run.sh`;\n' \
-    "$(date -u '+%Y-%m-%d %H:%M')" "$(human_time "$total")"
-  printf '`section9-health.timer` runs it nightly on the VPS, inside the sandbox image.\n\n'
-  printf '| Repo | Result | Time | Ran |\n|---|---|---|---|\n'
-  for row in ${rows[@]+"${rows[@]}"}; do
-    IFS='|' read -r r status secs describe note <<<"$row"
-    printf '| %s | %s | %s | %s |\n' "$r" "$status" "$(human_time "$secs")" "$describe"
-  done
-  printf '\n'
+render_body > "$body"
 
-  notes=""
-  for row in ${rows[@]+"${rows[@]}"}; do
-    IFS='|' read -r r status secs describe note <<<"$row"
-    [ -n "$note" ] && notes="$notes- $r: not in this run — $note.\n"
-  done
-  if [ -n "$notes" ]; then printf 'Their own CI keeps these:\n\n'; printf '%b' "$notes"; printf '\n'; fi
-
-  for row in ${rows[@]+"${rows[@]}"}; do
-    IFS='|' read -r r status secs describe note <<<"$row"
-    [ "$status" = FAIL ] || continue
-    printf '<details><summary>%s — last %s log lines</summary>\n\n```\n' "$r" "$log_lines"
-    tail -n "$log_lines" "$work/$r.log" | redact
-    printf '```\n\n</details>\n\n'
-  done
-
-  printf "Don't edit: rewritten on every run. Leave this issue open and pinned.\n"
-} > "$body"
+if (( body_only )); then
+  cat "$body"
+  exit 0
+fi
 
 if (( dry_run )); then
   echo
@@ -206,21 +264,4 @@ if (( dry_run )); then
   exit 0
 fi
 
-# ---- post --------------------------------------------------------------------
-[ -n "${GH_TOKEN:-}" ] || { echo "GH_TOKEN is not set; nothing posted" >&2; exit 1; }
-number=$(gh api "repos/$board/issues?state=open&per_page=100" \
-  --jq "[.[] | select(.title==\"$issue_title\" and (.pull_request|not))][0].number // empty")
-if [ -n "$number" ]; then
-  gh api -X PATCH "repos/$board/issues/$number" -F body=@"$body" > /dev/null
-  echo "health run: updated #$number"
-else
-  created=$(gh api "repos/$board/issues" -f title="$issue_title" -F body=@"$body")
-  number=$(printf '%s' "$created" | jq -r .number)
-  node=$(printf '%s' "$created" | jq -r .node_id)
-  echo "health run: opened #$number"
-  # Pinning is GraphQL-only. Best effort: an unpinned issue is still readable.
-  gh api graphql -f query='mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }' \
-    -f id="$node" > /dev/null 2>&1 || echo "could not pin #$number; pin it by hand" >&2
-fi
-
-if (( failed )); then echo "health run: $failed repo(s) FAIL" >&2; exit 1; fi
+post_body "$body"
