@@ -8,3 +8,21 @@ Type=oneshot
 ExecStart=/opt/agent-manager/vps/sync.sh
 TimeoutStartSec=30min
 Nice=10
+# What an apply writes: the checkout (/opt), the state dir, the lock in /run, the unit
+# and apt drop-in dirs (install-units.sh) and hermes.env (dashboard-prep.sh). /usr, /boot
+# and the rest of /etc stay read-only. It keeps its capabilities: it is the installer.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/etc/section9 /etc/systemd/system /etc/apt/apt.conf.d
+StateDirectory=section9
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native

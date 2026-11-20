@@ -22,6 +22,7 @@ from vps_tests.host import (  # noqa: E402,F401
     TestS9Task, TestInstall, TestCloudflaredPatch, TestDashboard, HealthRun,
 )
 from vps_tests.host_sync import TestSync  # noqa: E402,F401
+from vps_tests.hardening import TestHealthTokens, TestSecretModes  # noqa: E402,F401
 from vps_tests.codescene import TestCodeSceneToken, TestCsWrapper, TestCsInstall  # noqa: E402,F401
 from vps_tests.hq_sca import (  # noqa: E402,F401
     TestHq, TestSca,

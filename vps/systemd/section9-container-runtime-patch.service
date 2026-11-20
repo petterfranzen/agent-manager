@@ -9,8 +9,16 @@ Type=oneshot
 ExecStart=/opt/agent-manager/vps/container-runtime-patch.sh
 TimeoutStartSec=5min
 Nice=10
-# apt and dpkg write across the filesystem, so unlike the read-only units this one
-# carries no ProtectSystem/ReadOnlyPaths hardening; the script itself is small and
-# pinned like every other guarded path. It restarts containerd and dockerd after
-# an upgrade, which bounces the agent containers -- the dispatcher retries.
+# apt and dpkg write across the filesystem (and packages may ship setuid files), so
+# unlike the read-only units this one carries no ProtectSystem or RestrictSUIDSGID; the
+# script itself is small and in the sync's protected set. What follows leaves apt and dpkg alone.
+# It restarts containerd and dockerd after an upgrade, which bounces the agent
+# containers -- the dispatcher retries.
 StateDirectory=section9
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native

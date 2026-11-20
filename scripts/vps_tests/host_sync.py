@@ -44,7 +44,7 @@ class TestSync(unittest.TestCase):
         self.commit({"vps/install-units.sh": f'#!/bin/sh\necho "install-units" >> {t}/calls\n',
                      "vps/dashboard-prep.sh": f'#!/bin/sh\necho "dashboard-prep $S9_STATE_DIR" >> {t}/prep\n', "README.md": "x"})
         self.git("clone", "-q", str(t / "origin"), str(t / "repo"), cwd=t)
-        self.checks = [{"name": n, "status": "completed", "conclusion": "success"} for n in (
+        self.checks = [{"name": n, "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}} for n in (
             "Secret scan", "Compose and config", "Sandbox image smoke test", "Roster script tests", "Deploy scripts", "VPS stack")]
         self.stub.checks = self.checks
 
@@ -177,12 +177,13 @@ class TestSync(unittest.TestCase):
         self.assertIn("--accept", issue["body"])
 
     def test_accept_pins_what_a_human_read_and_the_sync_then_applies(self):
-        self.commit({"vps/install.sh": "x", "vps/compose.yaml": "y"})
+        self.commit({"vps/install.sh": "x", "vps/compose.yaml": "y", "vps/hq-status.py": "z"})
         p = self.accept()
         self.assertEqual(p.returncode, 0, p.stderr)
         pins = (self.t / "pins.toml").read_text()
         self.assertIn("vps/install.sh", pins)
-        self.assertNotIn("vps/compose.yaml", pins)      # not protected: never needs a pin
+        self.assertIn("vps/compose.yaml", pins)
+        self.assertNotIn("vps/hq-status.py", pins)      # not protected: never needs a pin
         self.assertEqual(oct((self.t / "pins.toml").stat().st_mode & 0o777), "0o600")
         p, calls = self.sync()
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -190,20 +191,21 @@ class TestSync(unittest.TestCase):
         self.assertIn("Applied", self.sync_issue()["body"])
 
     def test_a_normal_change_applies_by_itself_without_any_pin(self):
-        """The point of the PR: compose, units, scripts and sandbox changes need no --accept."""
-        self.commit({"vps/compose.yaml": "x", "vps/systemd/section9-routines.timer": "t", "sandbox/Dockerfile": "d",
-                     "vps/hq-status.py": "p"})
+        """Scripts, the sandbox image and Hermes config need no --accept (compose and units do)."""
+        self.commit({"sandbox/Dockerfile": "d", "hermes/config.yaml": "h", "vps/hq-status.py": "p"})
         p, calls = self.sync()
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(len(calls), 3)             # compose up, the Impeccable prune, install-units
+        self.assertEqual(len(calls), 2)             # compose up, the Impeccable prune
         self.assertFalse((self.t / "pins.toml").exists())
         self.assertEqual(self.head(), self.origin_head())
         self.assertIn("Applied", self.sync_issue()["body"])
 
-    def test_the_protected_set_is_the_sync_its_installers_its_units_workflows_and_sudoers(self):
+    def test_the_protected_set_is_the_sync_its_installers_units_compose_root_scripts_workflows_and_sudoers(self):
         # (vps/sync.sh itself is covered by the replay test: a bogus copy could not run.)
-        for path in ("vps/install.sh", "vps/install-units.sh", "vps/systemd/section9-sync.timer",
-                     "vps/systemd/section9-sync.service", ".github/workflows/ci.yml", "vps/sudoers.d/section9"):
+        for path in ("vps/install.sh", "vps/install-units.sh", "vps/secret-modes.sh", "vps/systemd/section9-sync.timer",
+                     "vps/systemd/section9-sync.service", "vps/systemd/section9-dispatch.service", "vps/apt/52section9-x",
+                     "vps/compose.yaml", "vps/health.sh", "vps/dashboard-prep.sh", "vps/cloudflared-patch.sh",
+                     "vps/container-runtime-patch.sh", ".github/workflows/ci.yml", "vps/sudoers.d/section9"):
             before = self.head()
             self.commit({path: "#!/bin/sh\n:\n"})
             p, calls = self.sync()
@@ -274,7 +276,7 @@ class TestSync(unittest.TestCase):
         self.env["S9_SOAK_MINUTES"] = "30"
         before = self.head()
         now = int(time.time())
-        self.commit({"vps/compose.yaml": "x"}, when=f"{now - 10 * 60} +0000")
+        self.commit({"sandbox/Dockerfile": "x"}, when=f"{now - 10 * 60} +0000")
         p, calls = self.sync()
         self.assertEqual((p.returncode, calls, self.head()), (0, [], before))
         self.assertIn("soak", p.stdout)
@@ -341,3 +343,54 @@ class TestSync(unittest.TestCase):
         self.assertIn("re-running it", p.stdout)
         self.assertEqual((self.t / "marker").read_text(), "new-step\n")
         self.assertEqual(len(calls), 4)             # once per copy: compose-up, then the Impeccable prune
+
+    COMPOSE = ("services:\n  hermes:\n    image: nousresearch/hermes-agent:v1.0@sha256:{a}\n"
+               "  hq:\n    image: caddy:2.1-alpine@sha256:{b}\n    read_only: true\n")
+
+    def pinned_compose(self):
+        self.commit({"vps/compose.yaml": self.COMPOSE.format(a="a" * 64, b="b" * 64)})
+        self.accept()
+        self.assertEqual(self.sync()[0].returncode, 0)
+
+    def test_a_compose_change_that_only_moves_image_versions_applies_without_a_pin(self):
+        self.pinned_compose()
+        self.commit({"vps/compose.yaml": self.COMPOSE.format(a="c" * 64, b="d" * 64).replace("v1.0", "v1.1")})
+        p, calls = self.sync()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.head(), self.origin_head())
+        self.assertTrue(calls[-2].endswith("up -d --build --remove-orphans"), calls)
+        self.commit({"vps/compose.yaml": self.COMPOSE.format(a="e" * 64, b="d" * 64)})   # and again, from there
+        self.assertEqual(self.sync()[0].returncode, 0)
+
+    def test_any_other_compose_change_needs_a_pin(self):
+        self.pinned_compose()
+        for text in (self.COMPOSE.replace("read_only: true", "privileged: true"),
+                     self.COMPOSE.replace("caddy:", "evil/caddy:"),
+                     self.COMPOSE + "    volumes: [/var/run/docker.sock:/var/run/docker.sock]\n"):
+            before = self.head()
+            self.commit({"vps/compose.yaml": text.format(a="a" * 64, b="b" * 64)})
+            p, calls = self.sync()
+            self.assertEqual((p.returncode, self.head()), (1, before), text)
+            self.assertIn("vps/compose.yaml changed", p.stderr)
+            self.git("reset", "-q", "--hard", "HEAD~1", cwd=self.t / "origin")
+
+    def test_a_required_check_counts_only_from_github_actions(self):
+        before = self.head()
+        self.commit({"docs/RUNBOOK.md": "x"})
+        self.checks[-1]["app"] = {"slug": "some-other-app"}     # a green "VPS stack", but not from CI
+        p, _ = self.sync()
+        self.assertEqual((p.returncode, self.head()), (0, before))
+        self.assertIn("missing: VPS stack", p.stdout)
+        del self.checks[-1]["app"]
+        self.assertIn("missing: VPS stack", self.sync()[0].stdout)
+
+    def test_the_sync_issue_says_whether_the_secrets_are_root_only(self):
+        self.sync()
+        self.assertIn("modes: WRONG", self.sync_issue()["body"])     # the test's secrets are not root-only
+        self.env["S9_SECRETS_OWNER"] = str(os.getuid())
+        for f in (self.t / "secrets").iterdir():
+            f.chmod(0o600)
+        (self.t / "secrets").chmod(0o700)
+        self.commit({"docs/RUNBOOK.md": "x"})
+        self.sync()
+        self.assertIn("modes: ok (root-only)", self.sync_issue()["body"])

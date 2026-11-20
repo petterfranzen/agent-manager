@@ -100,23 +100,29 @@ the tip of `origin/main` when all of these hold:
 1. it is a descendant of the commit last applied (fast-forward only; a force-pushed `main` is
    refused and reported, never applied);
 2. every required check run in `ci.yml` (the `REQUIRED_CHECKS` list in `vps/sync.sh`) is completed
-   with conclusion `success` on that exact SHA, read from the public GitHub API;
+   with conclusion `success` on that exact SHA, read from the public GitHub API, and was made by
+   GitHub Actions (a same-named run from any other app does not count; a red one still blocks);
 3. it has been on `main` for the soak, 30 minutes by the commit's time (the squash-merge time), so a
    bad merge that is reverted or fixed inside that window never lands: only the tip ever applies;
 4. it changes none of the **protected set**, or each protected file it changes is pinned (below).
 
 The protected set is short and explicit (`PROTECTED` at the top of `vps/sync.sh`): `vps/sync.sh`,
-`vps/install.sh`, `vps/install-units.sh`, `vps/systemd/section9-sync.*` (the units that run the sync),
-`.github/workflows/` (CI is the green light the sync trusts) and any path with `sudoers` in its name.
-These can widen what a merge does as root or weaken the gate, so they are pinned by sha256 in the
-root-only `/etc/section9/pins.toml`. A commit that changes one waits until you have read the change and run
+`vps/install.sh`, `vps/install-units.sh`, `vps/secret-modes.sh`, all of `vps/systemd/` and `vps/apt/`
+(installed as root), `vps/compose.yaml` (what the containers get from the host), the scripts root runs
+unconfined (`vps/health.sh`, `vps/dashboard-prep.sh`, `vps/cloudflared-patch.sh`,
+`vps/container-runtime-patch.sh`), `.github/workflows/` (CI is the green light the sync trusts) and
+any path with `sudoers` in its name. These can widen what a merge does as root or what the sandbox
+and Hermes get, or weaken the gate, so they are pinned by sha256 in the root-only
+`/etc/section9/pins.toml`. One exception keeps Dependabot's image bumps flowing: a `vps/compose.yaml`
+change that only moves image tags or digests (`VERSIONS_ONLY`; every other line, image names
+included, as last applied) applies without a pin. A commit that changes one waits until you have read the change and run
 ```bash
 sudo /opt/agent-manager/vps/sync.sh --accept   # fetches and pins the protected files of origin/main
 ```
 It stops instead, and says so on one open issue titled **Sync** in `section9-hq` (created the
 first time it has something to say); a dirty checkout and a failed apply are reported on the
-same issue. Anything not in the set (compose, sandbox, hermes, the other units, dispatch.py,
-docs) applies by itself. The defaults cannot be shortened by a file. The optional root-only
+same issue. Anything not in the set (sandbox, hermes, dispatch.py and the dispatcher, docs)
+applies by itself. The defaults cannot be shortened by a file. The optional root-only
 `/etc/section9/sync.toml` can add to them and change the soak (an unreadable file stops the sync
 and says so on the issue):
 ```toml
@@ -189,6 +195,10 @@ only with Petter at the machine.
 `/etc/section9/briefs/<Name>.md`, if it exists, is that agent's brief instead of the repo's.
 `install.sh` also sets `/etc/section9/sandbox_authorized_keys` to `0644` root-owned (sshd in
 the sandbox refuses the `0600` file).
+`vps/secret-modes.sh` then checks all of `/etc/section9`: the directory and `briefs/` root `0700`,
+`hermes_ssh_key` uid 10000 `0400`, `sandbox_authorized_keys` root `0644`, every other file root
+`0600` (or `0400`); no symlinks. `install.sh` stops on a mismatch and names it, and the **Sync**
+issue carries one line saying whether the directory is root-only.
 
 A **second dispatcher lane** (section9-hq #79) is off unless the same root-only file says so:
 ```toml
@@ -295,7 +305,10 @@ for them install a scanner and run the scan by hand (or add `--images` to the un
 running containers' images. Nothing is installed by the repo; without a scanner the issue says so.
 
 **Health run.** `section9-health.timer` (nightly, 05:00 Stockholm, after the nightly
-build's 3 h ceiling) runs `scripts/health-run.sh` inside the sandbox image: it clones the
+build's 3 h ceiling) runs `vps/health.sh`, which runs `scripts/health-run.sh` in the sandbox image
+twice: first `--body-only` with `GH_TOKEN` and `CS_ACCESS_TOKEN` blanked, since `npm ci` runs every
+dependency's install scripts, then `--post -` with the agents' own `GH_TOKEN`, which builds nothing
+and only posts the table with `gh api`. The first run clones the
 five repos (ghost-in-the-machine, nvim-trainer, portfolio, dinner-planner, flight-tracker),
 runs each one's build and the fast suite where one exists, and rewrites one table in the open
 issue **Health run** in `section9-hq` -- created and pinned on the first run -- with an
