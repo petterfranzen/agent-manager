@@ -236,7 +236,7 @@ accept() { # accept [commit]  (default origin/main)
   load_config || exit 1
   tree=$(git rev-parse "$1")
   [ -z "$(git status --porcelain)" ] || { err "refusing to pin: $REPO_DIR has local changes"; exit 1; }
-  install -d -m 0755 "$(dirname "$PINS_FILE")"
+  install -d -m 0700 "$(dirname "$PINS_FILE")"
   python3 -I - "$tree" "$PINS_FILE" "$REPO_DIR" "${PROTECTED[@]}" <<'PY'
 import hashlib
 import os
