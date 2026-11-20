@@ -70,6 +70,8 @@ class Stub:
         self.kev = {"catalogVersion": "test", "vulnerabilities": []}
         self.osv_auth = "unset"
         self.base = ""              # the server's own URL, for Link headers
+        self.issue_comments = {}    # section9-hq issue number -> comment bodies
+        self.prs = {}               # (repo, PR number) -> {"body": ..., "comments": [...]} in another repo
 
     def add(self, labels, title="Do a thing", state="open", age_min=None):
         n = self.next
@@ -99,6 +101,8 @@ class Stub:
         if call.path == "/gh/graphql":
             self.pinned = call.body["variables"]["id"]
             return 200, {"data": {}}
+        if not call.path.startswith(PREFIX + "/"):
+            return self.gh_other_repo(call)
         rest = call.path[len(PREFIX):]
         route = self.GH_ROUTES.get((call.method, rest))
         if route:
@@ -119,6 +123,16 @@ class Stub:
             q.update(page=page + 1, per_page=size)
             self.link = f'<{self.base}{call.path}?{urlencode(q)}>; rel="next"'
         return 200, found[(page - 1) * size:page * size]
+
+    def gh_other_repo(self, call):
+        """GET /issues/<n>[/comments] of a PR in another of Petter's repos (read-only)."""
+        parts = call.path.split("/")      # "", gh, repos, petterfranzen, <repo>, issues, <n>[, comments]
+        pr = self.prs.get((parts[4], int(parts[6]))) if len(parts) >= 7 and parts[5] == "issues" else None
+        if pr is None or call.method != "GET":
+            return 404, {"message": "Not Found"}
+        if parts[7:] == ["comments"]:
+            return 200, [{"body": b} for b in pr["comments"]]
+        return 200, {"number": int(parts[6]), "body": pr["body"]}
 
     def gh_create(self, call):
         n = self.add(call.body.get("labels", []), call.body["title"])
@@ -141,6 +155,8 @@ class Stub:
         if len(parts) == 3 and call.method == "POST":
             self.comments.append((issue["number"], call.body["body"]))
             return 201, {"id": 1}
+        if len(parts) == 3 and call.method == "GET":
+            return 200, [{"body": b} for b in self.issue_comments.get(issue["number"], [])]
         if call.method == "PATCH":
             self.patch(issue, call.body)
         return 200, issue

@@ -281,6 +281,13 @@ world-readable. Those modes apply when the writer creates the file; it also best
 existing file, so a `runs.jsonl` left `0644` by an older build (or by hand) is corrected on the
 next run.
 
+`section9-code-health.timer` (weekly, Monday 06:10 UTC) runs `dispatch.py code-health`: it joins
+each finished coding task in the ledger (tokens, $, timeouts, fix rounds) with the `Code Health:
+<path> <before> -> <after>` lines of the PRs the task links to, and their QA verdicts, read with the
+dispatcher's GitHub token (read-only; it writes only the open **Code Health effect** issue, not pinned).
+Tasks are bucketed by the files' mean "before" score (9.5 and up, 7 to 9.5, under 7, new files only,
+no scores); the issue says when a bucket is too small to read (under 15 tasks). Method: section9-hq #348.
+
 `section9-sca.timer` (weekly, Monday 05:30 UTC) runs `vps/sca-watch.py`: it reads the version pins in the
 repo (`sandbox/Dockerfile` ARGs and the `vps/compose.yaml` image tags) and this host's own docker, runc,
 containerd and openssh-server versions, asks OSV (`api.osv.dev`) for advisories, keeps CVSS 7.0 or higher

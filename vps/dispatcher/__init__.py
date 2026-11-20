@@ -11,6 +11,7 @@
   run        one Hermes run and its ledger record
   routines   cron routines that open issues
   reports    the "Spend", "Capacity" and "Sync" issues, and `status`
+  health     the weekly "Code Health effect" issue: the ledger joined with the PRs' Code Health lines
 
 Standard library only. Functions in another module are called through the module
 (`cpu.cpu_sample()`), so a test can replace one in the module that defines it.

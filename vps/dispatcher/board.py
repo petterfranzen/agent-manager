@@ -16,7 +16,8 @@ REPOS = ("agent-manager", "section9-hq", "ghost-in-the-machine", "flight-tracker
 ANY = "any"
 AUTHOR = re.compile(r"(?im)^\s*author:\s*([A-Za-z][\w.-]*)")
 # The issues the VPS keeps current, by title: (the word its log lines start with, pin a new one).
-KEPT_ISSUES = {"Spend": ("spend", True), "Capacity": ("capacity", True), "CPU credits": ("cpu", False)}
+KEPT_ISSUES = {"Spend": ("spend", True), "Capacity": ("capacity", True), "CPU credits": ("cpu", False),
+               "Code Health effect": ("code-health", False)}
 PIN_QUERY = "mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }"
 
 
@@ -29,13 +30,14 @@ class Board:
     def __init__(self, api, token):
         self.api, self.token = api.rstrip("/"), token
 
-    def call(self, method, path, body=None):
-        return net.http(method, f"{self.api}/repos/{REPO}{path}", self.token, body=body)
+    def call(self, method, path, body=None, repo=REPO):
+        """One REST call on section9-hq, or on `repo` (another of Petter's repos, read-only by convention)."""
+        return net.http(method, f"{self.api}/repos/{repo}{path}", self.token, body=body)
 
-    def pages(self, path):
+    def pages(self, path, repo=REPO):
         """Every item of a list endpoint, following Link: rel="next". Refuses to go on past MAX_PAGES pages
         (a silently short list would hide the oldest todos), or to send the token to another host."""
-        url = f"{self.api}/repos/{REPO}{path}{'&' if '?' in path else '?'}per_page={PER_PAGE}"
+        url = f"{self.api}/repos/{repo}{path}{'&' if '?' in path else '?'}per_page={PER_PAGE}"
         items = []
         for _ in range(MAX_PAGES):
             page, headers = net.request("GET", url, self.token)
