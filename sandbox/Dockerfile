@@ -14,13 +14,29 @@ ARG CODESCENE_CLI_COMMIT=b2580d71be8fbfd6a496d7a007062c0c81cd2b60
 ARG CODESCENE_CLI_SHA256=e358b332230f06ac81f9ca119c787860e25d86176d344fc06be1dffe2affb352
 ARG NODE_VERSION=24.22.2
 ARG NODE_SHA256=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75
+# Playwright comes from playwright/package-lock.json (npm ci, integrity-checked); the build
+# checks the lockfile installs this version (sca-watch reads it here). Bump both together.
 ARG PLAYWRIGHT_VERSION=1.64.1
+# Its headless Chromium shell: the revision playwright-core 1.64.1 names, and the binary's sha256.
+ARG CHROMIUM_SHELL_REVISION=1248
+ARG CHROMIUM_SHELL_SHA256=4fa61f0ba0b4f89b7bec242c32ca16d3bccf69dbfef0651924a9ba8fede5f9d6
+# Every apt package (ours and Playwright's browser libraries) comes from this dated
+# snapshot of the Ubuntu archive. Bump it with the base image, to a date at least 24 h old.
+ARG UBUNTU_SNAPSHOT=20261118T000000Z
 # Ponytail v5.3.3; the build checks the tag still points at this commit.
 ARG PONYTAIL_TAG=v5.3.3
 ARG PONYTAIL_COMMIT=7801d061243d7b753bad0e0b3c057cd250b11755
 
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+# The snapshot is served over HTTPS, so the CA bundle comes first, from the release
+# pocket (fixed since release; apt checks it against the archive's signing key). Then
+# the snapshot stays configured for every later apt call, Playwright's included.
+RUN set -eu; export DEBIAN_FRONTEND=noninteractive \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends -t "$(. /etc/os-release && echo "$VERSION_CODENAME")" ca-certificates \
+ && printf 'APT::Snapshot "%s";\n' "${UBUNTU_SNAPSHOT}" > /etc/apt/apt.conf.d/50section9-snapshot \
+ && apt-get update \
+ && apt-get upgrade -y \
+ && apt-get install -y --no-install-recommends \
       openssh-server ca-certificates curl git gh build-essential pkg-config \
       python3 python3-venv unzip xz-utils jq util-linux \
  && rm -rf /var/lib/apt/lists/*
@@ -53,19 +69,26 @@ COPY --chmod=0755 cs /usr/local/bin/cs
 
 # Node (LTS, checksum-verified), Playwright with only the headless Chromium
 # shell (smaller and lighter than full Chromium) and its system libraries.
-# `shoot` wraps them; see that file.
+# `shoot` wraps them; see that file. Playwright is installed with `npm ci` from the
+# committed lockfile, and linked where `npm install -g` used to put it (NODE_PATH).
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright NODE_PATH=/usr/local/lib/node_modules \
     DO_NOT_TRACK=1 CS_DISABLE_VERSION_CHECK=1
+COPY playwright/package.json playwright/package-lock.json /opt/playwright/
 RUN set -eu; cd /tmp \
  && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && echo "${NODE_SHA256}  node-v${NODE_VERSION}-linux-x64.tar.xz" | sha256sum -c - \
  && tar -xJf "node-v${NODE_VERSION}-linux-x64.tar.xz" -C /usr/local --strip-components=1 \
       --exclude='*/doc' --exclude='*/include' --exclude='*/share' --exclude='*/CHANGELOG.md' --exclude='*/README.md' \
  && rm -f "node-v${NODE_VERSION}-linux-x64.tar.xz" \
- && npm install -g --no-fund --no-audit --no-update-notifier \
-      "playwright@${PLAYWRIGHT_VERSION}" \
+ && (cd /opt/playwright && npm ci --omit=dev --ignore-scripts --no-fund --no-audit --no-update-notifier) \
+ && [ "$(node -p 'require("/opt/playwright/node_modules/playwright/package.json").version')" = "${PLAYWRIGHT_VERSION}" ] \
+ && ln -s /opt/playwright/node_modules/playwright /usr/local/lib/node_modules/playwright \
+ && ln -s /opt/playwright/node_modules/playwright-core /usr/local/lib/node_modules/playwright-core \
+ && ln -s /opt/playwright/node_modules/playwright/cli.js /usr/local/bin/playwright \
+ && grep -q '"revision": "'"${CHROMIUM_SHELL_REVISION}"'"' /opt/playwright/node_modules/playwright-core/browsers.json \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive playwright install --with-deps --only-shell chromium \
+ && echo "${CHROMIUM_SHELL_SHA256}  /opt/ms-playwright/chromium_headless_shell-${CHROMIUM_SHELL_REVISION}/chrome-headless-shell-linux64/chrome-headless-shell" | sha256sum -c - \
  && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/* \
  # For tools that start the browser themselves: the container has no
  # user namespaces for Chromium's own sandbox, and /dev/shm is only 64 MB.
@@ -101,16 +124,20 @@ RUN useradd -m -u 10001 -s /bin/bash agent \
       'HostKey /etc/ssh/hostkeys/ssh_host_ed25519_key' \
       > /etc/ssh/sshd_config.d/agent.conf
 
+# Git identity, credential helper and the pre-push hook live in root-owned system
+# config (/etc/gitconfig, /etc/git-hooks), so the agent user cannot edit them.
+# An address on Petter's own domain with no GitHub account behind it, so no
+# stranger's account is credited (a ...@users.noreply.github.com address is).
+RUN git config --system user.name "Section 9 agent" \
+ && git config --system user.email "agents@sectionnine.dev" \
+ && git config --system credential.helper store \
+ && git config --system core.hooksPath /etc/git-hooks \
+ && chmod 0644 /etc/gitconfig
+COPY --chmod=0755 pre-push /etc/git-hooks/pre-push
+
 USER agent
 RUN echo 'eval "$(mise activate bash)"' >> ~/.bashrc \
- # An address on Petter's own domain with no GitHub account behind it, so no
- # stranger's account is credited (a ...@users.noreply.github.com address is).
- && git config --global user.name "Section 9 agent" \
- && git config --global user.email "agents@sectionnine.dev" \
- && git config --global credential.helper store \
- && git config --global core.hooksPath ~/.config/git/hooks \
- && mkdir -p ~/work ~/.config/git/hooks ~/.config/gh
-COPY --chown=agent:agent --chmod=0755 pre-push /home/agent/.config/git/hooks/pre-push
+ && mkdir -p ~/work ~/.config/gh
 # No skills under ~/.hermes: Hermes's SSH file sync owns that tree. Impeccable's
 # root-owned 22 MB skill there made every sync fail and resend it (1 Nov).
 USER root

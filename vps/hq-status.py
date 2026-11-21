@@ -540,9 +540,13 @@ def unchanged(state, sha, served):
 
 
 def mirrored(entry):
-    """True for a crew/ entry to mirror: a file inside the folder, never the live status.json."""
+    """True for a crew/ entry to mirror: a file inside the folder, never the live status.json and
+    never anything under board/, which section9-hq-status alone writes (the board is served
+    from its own origin, so crew/ must not be able to add pages to it)."""
     path = entry["path"]
     if entry["type"] != "blob" or path == "status.json":
+        return False
+    if path == "board" or path.startswith("board/"):
         return False
     return ".." not in path.split("/") and not path.startswith("/")
 

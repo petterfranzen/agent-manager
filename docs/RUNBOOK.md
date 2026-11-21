@@ -260,7 +260,7 @@ Private tasks show as "On a private task": any issue labelled `private`, and any
 a term in `/etc/section9/crew-deny.txt` (one per line, root-only). Without that file only agent
 states and "On a task" are published. Create the file before you expect titles on the page.
 
-The board: `https://hq.sectionnine.dev/board` is the waits page from ghost-in-the-machine
+The board: `https://board.sectionnine.dev/` is the waits page from ghost-in-the-machine
 (`hq/board/index.html`, PR #18), vendored byte-for-byte into `vps/board/index.html` next to its
 `board-sample.json` (see `vps/board/README.md` for the source sha and the file hashes). A fix goes
 through a ghost-in-the-machine PR, a copy here over that pinned commit sha, then merge. `vps/board/` is not in the protected set, so `section9-sync` applies it after CI and the soak.
@@ -271,10 +271,24 @@ the issue's `waits:*` label (else `agent`), its line from the latest comment sta
 and an issue labelled `private` gets no title, no link and no waits line (rules above). It keeps
 `board/status.json` for the old placeholder page (`vps/board/placeholder.html`, served only when
 `vps/board/index.html` is missing) and `board-sample.json` as the page's own fallback.
-Petter's one-time step in Cloudflare: Zero Trust -> Networks -> Tunnels ->
-the VPS tunnel -> Public hostnames -> add `hq.sectionnine.dev`, path `^/board` (a regex, anchored so that Hermes paths like /api/dashboard do not match) -> `HTTP` `localhost:8090`,
-**above** the catch-all `hq.sectionnine.dev` -> `localhost:9119`; and check that the Access application
-covers the whole hostname (not a path). Check: `curl -s localhost:8090/board/board.json | head`.
+
+The board has its own hostname so its pages never share an origin with the Hermes dashboard
+(which can open a shell). The `hq` container serves it on `127.0.0.1:8091` (the `board/` folder
+only, at the root, with a strict Content-Security-Policy and `X-Frame-Options: DENY`; the Caddyfile
+is the `x-hq-caddyfile` block in `vps/compose.yaml`). `section9-hq-crew` never writes under
+`board/`: a `crew/board/...` file in ghost-in-the-machine is skipped. The CSP allows the page's own
+inline scripts by hash, so a page update also updates the two hashes there (CI checks them).
+
+Petter's one-time steps in Cloudflare (in this order, so the board is never public):
+1. Zero Trust -> Access -> Applications: add a self-hosted app for `board.sectionnine.dev` with
+   your email only (the same policy as `hq.sectionnine.dev`).
+2. Networks -> Tunnels -> the VPS tunnel -> Public hostnames -> add `board.sectionnine.dev` ->
+   `HTTP` `localhost:8091` (this creates the DNS record).
+3. Open `https://board.sectionnine.dev/`, check it loads behind Access, then **delete** the
+   `hq.sectionnine.dev` path `^/board` hostname route (-> `localhost:8090`), so
+   `hq.sectionnine.dev/board` falls through to the dashboard and the board is no longer on its origin.
+
+Check: `curl -sI localhost:8091/ | grep -i content-security` and `curl -s localhost:8091/board.json | head`.
 
 `section9-spend.timer` (hourly) keeps the open `Spend` issue in `section9-hq` current: month, cap,
 left and today from OpenRouter, with an "As of" time, then a reconciliation block: the ledger's
