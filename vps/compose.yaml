@@ -10,6 +10,37 @@ x-logging: &logging
     max-size: "10m"
     max-file: "3"
 
+# The board's CSP allows only its own inline scripts, by hash (vps/board/index.html and
+# placeholder.html); scripts/vps_tests/hq_sca.py fails CI when a page changes without it.
+x-hq-caddyfile: &hq-caddyfile |
+  {
+  	admin off
+  	auto_https off
+  }
+  (board_headers) {
+  	header {args[0]} {
+  		Content-Security-Policy "default-src 'none'; script-src 'sha256-eVdIWHw/Na4kKCdX3WeYJysPUAuLO7hrpuPYTfq+fZQ=' 'sha256-pRbsgQ0/SkXo0MjSFdFvV+ot6b7Pz85vsiIuFSuLwt4='; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://raw.githubusercontent.com; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  		X-Frame-Options DENY
+  		X-Content-Type-Options nosniff
+  		Referrer-Policy no-referrer
+  	}
+  }
+  # The crew page, and /board for the old hq.sectionnine.dev/board route until it is removed.
+  :8090 {
+  	root * /srv
+  	header X-Content-Type-Options nosniff
+  	import board_headers /board*
+  	file_server
+  }
+  # board.sectionnine.dev: the board folder only, at the root (old /board/ links still work).
+  :8091 {
+  	import board_headers *
+  	root * /srv/board
+  	redir /board /
+  	uri /board/* strip_prefix /board
+  	file_server
+  }
+
 services:
   hermes:
     image: nousresearch/hermes-agent:v0.23.1@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
@@ -87,17 +118,34 @@ services:
     # credits; three long nights in a row is the signal to raise it and cut the build.
     cpus: "0.4"
     pids_limit: 512
+    # Only the capabilities the entrypoint and sshd need: CHOWN/DAC_OVERRIDE/FOWNER to write the
+    # agent's token files as root, SETUID/SETGID/SYS_CHROOT for sshd's privilege separation,
+    # KILL for sshd to signal the agent's session, AUDIT_WRITE for PAM's login records.
+    # No setuid binary gains privileges. The root filesystem stays writable: the agent's
+    # home (build caches) and /tmp would otherwise have to be RAM tmpfs inside the 2 GB cap
+    # or persistent volumes, and the agent user can't write the image's root-owned files.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SYS_CHROOT, KILL, AUDIT_WRITE]
+    security_opt: ["no-new-privileges:true"]
     logging: *logging
 
   # Crew page: the crew page plus a live status.json, static files only, on
   # loopback, kept for later public use. hq.sectionnine.dev now points at the
   # Hermes dashboard (port 9119) instead. The files come from vps/hq-status.py.
+  # :8091 serves only the board folder, at the root, for its own hostname
+  # (board.sectionnine.dev), so the board never shares the dashboard's origin.
   hq:
     image: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
     restart: unless-stopped
-    command: ["caddy", "file-server", "--root", "/srv", "--listen", ":8090"]
+    # The Caddyfile lives below (x-hq-caddyfile), in this file, so a change to it is a
+    # compose change the sync applies. Compose can't inject a config file into a
+    # read-only container, so the entrypoint writes it to the /config tmpfs.
+    command: ["sh", "-c", "printf '%s' \"$$HQ_CADDYFILE\" > /config/Caddyfile && exec caddy run --config /config/Caddyfile --adapter caddyfile"]
+    environment:
+      HQ_CADDYFILE: *hq-caddyfile
     ports:
       - "127.0.0.1:8090:8090"
+      - "127.0.0.1:8091:8091"
     volumes:
       - /var/lib/section9/hq:/srv:ro
     tmpfs:
