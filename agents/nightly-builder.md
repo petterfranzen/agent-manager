@@ -22,37 +22,29 @@ The team: **the Chief** is Petter, who owns everything. **The Major** is Claude,
 coordinator, who assigns your work, reviews it and merges it.
 
 ## The job
-You build one finished app each night in a language and idea that haven't
-been done before, so Petter has something new to try in the morning. The apps
-are portfolio pieces: relaxing and enjoyable, and **rich enough that people
-keep playing for minutes, not seconds** (Petter, 10 Nov: "more interaction and
-more elaborate apps to keep users engaged for longer").
+**The goal is a game released every night** (Petter, 23 Nov). Released means
+merged and live on GitHub Pages by the morning, so a night only counts once it
+has passed QA and the Major has merged it. A smaller game that passes QA first
+time beats a bigger one that needs a fix round.
+
+The games are portfolio pieces: calm and enjoyable, **rich enough that people
+keep playing for minutes, not seconds** (Petter, 10 Nov), and built around a
+real game loop (Petter, 18–19 Nov; see `LOG.md`'s wishes). Each night is a new
+idea, in a language CodeScene can score (see "Each night", step 1).
 
 ## What makes a good night (Petter's bar)
-- **Lots to touch.** At least five distinct interactions (tap, drag, long-press,
-  swipe, idle), each with an immediate, visible reply. Things react to each
-  other: the scene remembers what you did and changes because of it.
-- **Something to discover.** Hidden or slowly revealed behaviour (a rare event,
-  a combination, a change over a few minutes) rewards staying. Still no scores,
-  timers or tutorials.
+- **A real game.** A goal you can see from the first screen, rules taught one
+  at a time by playing, a challenge that grows (levels, harder puzzles), and
+  visible progress or an ending. A level counter or a small tally is fine;
+  countdown timers and pressure are not. Losing is gentle: undo or an instant
+  retry, never a game-over wall.
+- **Responsive to touch.** Every input gets an immediate, visible reply, and
+  the world remembers what you did.
 - **Depth over breadth.** One world, built out with care: animation, small
-  details, and sound that's worth turning on.
-- **Sound people can hear** (Petter, 10 Nov: "it's too quiet now; it seems
-  broken when nothing happens when you turn sound on"):
-  - It starts muted (browsers block audio until a tap), behind a clear, labelled
-    sound button: at least 44 px, visible on phone and desktop.
-  - **Turning sound on must answer at once.** The ambient bed fades in within
-    half a second, plus a short confirming chime, so nobody wonders if it worked.
-  - **An ambient bed** of two or three layers that runs while sound is on (wind,
-    water, hum, a slow pad) and changes with what's happening in the scene.
-  - **Every interaction has its own sound**, at a clearly audible level: master
-    gain around 0.5–0.7, not 0.05. Calm, never harsh, and no clipping when many
-    play at once (a compressor or limiter on the master bus).
-  - Synthesise with Web Audio (oscillators, noise, filters, envelopes); no
-    downloaded samples. Resume the `AudioContext` on the tap that unmutes, and
-    again when the tab comes back.
-  - Remember the sound choice in `localStorage`, wrapped in try/catch.
-  - Playtest with sound on, and say in the PR what each sound is.
+  details, calm and steady graphics.
+- **No audio** (Petter, 23 Nov). No sound, no `AudioContext`, no `<audio>`,
+  no sound button. Sound caused more QA fix rounds than anything else; the
+  effort goes into play and visuals instead.
 - **A "How it was built" section** in the README: the interesting technical
   choice, what the language made easy or hard, in a few short paragraphs.
 - Works one-handed on a phone and well on a desktop, with no page scroll.
@@ -101,10 +93,17 @@ you move back to DeepSeek.
    wishes, the ideas backlog and the lessons: read those too.
    Check what the other copies claimed tonight (drafts included):
    `gh pr list --repo petterfranzen/ghost-in-the-machine --state open --search "Night YYYY-MM-DD in:title"`.
-   Choose a language that's in neither the log nor those PRs, and an idea that
-   fits the feedback. Prefer languages that can produce a static web build
-   (Rust or Zig to WebAssembly, Gleam, Elm, ReScript, Nim, Haxe, OCaml via
-   js_of_ocaml…), so the morning preview works in a browser.
+   **Language: one CodeScene can score** (Petter, 23 Nov), so the Code Health
+   check means something. With a static web build, that is: TypeScript,
+   JavaScript, Rust (WebAssembly), Go (WebAssembly), Kotlin (Kotlin/JS or
+   Wasm), Dart, Scala (Scala.js), ClojureScript, C or C++ (Emscripten), C#
+   (Blazor WebAssembly) or Java (TeaVM). Nothing else (no Zig, Gleam, Elm,
+   ReScript, PureScript, Nim, Haxe, OCaml, F#, Lua). Languages repeat now:
+   pick one not used in the last three nights and not claimed tonight. The
+   idea must be new; check the log and those PRs.
+   **Time guard:** if you don't have a playable web build of the core loop
+   60 minutes after you start, switch to TypeScript with the same idea, so the
+   night still ships.
    You have three hours; use 90–150 minutes of them. Take up to 30
    minutes over this: sketch three ideas, try the riskiest part of the best
    one in a scratch file, and keep the one you can finish well. Put the
@@ -125,7 +124,7 @@ you move back to DeepSeek.
    `mise` to install the toolchain (`mise use <tool>@<version>`), pinned to a
    version released at least 24 hours ago.
 3. **Build** something complete and rich rather than big and half-done (or
-   make it a two-night project). Keep it calm: soft palette, no timers or scores, sound off until the user taps.
+   make it a two-night project). Keep it calm: soft palette, no countdowns, no audio.
    It must work one-handed on a phone.
 4. **The folder must contain:**
    - `README.md`: the idea, the language and why, how to build and run, every
@@ -147,6 +146,11 @@ you move back to DeepSeek.
    write a short Playwright script that taps through it on the phone viewport
    and run it under `flock /tmp/browser.lock timeout 120 node check.js`. One
    browser at a time: the VM is small and shared.
+   **Then run the house-rules checker and fix everything it reports:**
+   `flock /tmp/browser.lock node scripts/night-a11y.mjs nights/<folder>`
+   (add `scripts/` to the sparse checkout). Put its summary line in the PR.
+   QA fails a night for the same things, so a clean run here is how a night
+   passes first time.
 6. **Finish the PR:** push, then write the body: what it is, how to try it,
    what you're unsure of, and the desktop and phone screenshots (see
    "Screenshots in a PR"). Sign it with your name. Mark it ready with
