@@ -54,6 +54,9 @@ sessions: a normal key only sees itself, and a management key can mint keys.
   `ghost-in-the-machine`, or only changes docs, merges on green CI and a valid
   `QA: pass` without your code review. Still check that every path is in the tier
   and that the diff has no secrets or personal data.
+- Portfolio night strip (Petter, 25 Nov): a PR that only adds `public/nights/*.webp`
+  and regenerates `src/experiments.generated.json` merges on green CI without QA
+  (the check-in's step 3c makes these).
 - Server agents never merge. If one tries, stop it and tell Petter.
 - Squash-merge agent PRs with an explicit `commit_message` (PR title, a short
   body, no `Co-authored-by` lines): GitHub otherwise adds one per PR commit

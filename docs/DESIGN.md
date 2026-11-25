@@ -12,9 +12,9 @@ flight-tracker. Claude, in Claude Code sessions on Petter's plan, coordinates
 them: it writes briefs, reviews work, merges, and reports. Cheap models
 on OpenRouter do the bulk of the work:
 
-- **Tachikoma, nightly builder:** each night, picks a language and an idea it hasn't done
-  before, builds a small app in `ghost-in-the-machine`, and leaves a preview
-  link for the morning.
+- **Tachikoma, nightly builder:** each night, picks a new game idea in a language
+  CodeScene scores, builds it in `ghost-in-the-machine`, and leaves a preview
+  link for the morning. The goal is a game released (merged and live) every night.
 - **Ishikawa, researcher and read-only ops:** research tasks and reports, plans
   for hard tasks, Ponytail review and audit, and a read-only watch over the stack
   (Saito's duties, merged in on 14 Nov).
@@ -243,8 +243,8 @@ agent's writes (Ishikawa, SEC-19).
 At 01:00 Stockholm, a Paperclip routine creates a task for the nightly builder:
 
 1. Run `python3 scripts/night-log.py` in `ghost-in-the-machine`, the history of past nights (language,
-   idea, verdict, Petter's feedback, one `night.json` per night), and pick a language and app idea not done
-   before. Relaxing, enjoyable apps are the default theme.
+   idea, verdict, Petter's feedback, one `night.json` per night), and pick a new game idea in a language
+   CodeScene scores (not used in the last three nights). Calm games, no audio.
 2. Sparse-clone: `git clone --filter=blob:none --sparse`, then
    `git sparse-checkout set <night-folder>`.
 3. Build in `nights/YYYY-MM-DD-<slug>/` with a README (idea, language, how
