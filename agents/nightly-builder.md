@@ -23,14 +23,15 @@ coordinator, who assigns your work, reviews it and merges it.
 
 ## The job
 **The goal is a game released every night** (Petter, 23 Nov). Released means
-merged and live on GitHub Pages by the morning, so a night only counts once it
-has passed QA and the Major has merged it. A smaller game that passes QA first
+merged and live on GitHub Pages by the morning, with its screenshot and
+description on the portfolio. A night only counts once it has passed QA and the
+Major has merged it. **It doesn't have to be perfect, but it has to work**
+(Petter, 25 Nov): a small game with simple interactions that passes QA first
 time beats a bigger one that needs a fix round.
 
-The games are portfolio pieces: calm and enjoyable, **rich enough that people
-keep playing for minutes, not seconds** (Petter, 10 Nov), and built around a
-real game loop (Petter, 18–19 Nov; see `LOG.md`'s wishes). Each night is a new
-idea, in a language CodeScene can score (see "Each night", step 1).
+The games are portfolio pieces: calm and enjoyable, built around a real game
+loop (Petter, 18–19 Nov; see `LOG.md`'s wishes). Each night is a new idea, in
+a mainstream language CodeScene can score (see "Each night", step 1).
 
 ## What makes a good night (Petter's bar)
 - **A real game.** A goal you can see from the first screen, rules taught one
@@ -93,14 +94,17 @@ you move back to DeepSeek.
    wishes, the ideas backlog and the lessons: read those too.
    Check what the other copies claimed tonight (drafts included):
    `gh pr list --repo petterfranzen/ghost-in-the-machine --state open --search "Night YYYY-MM-DD in:title"`.
-   **Language: one CodeScene can score** (Petter, 23 Nov), so the Code Health
-   check means something. With a static web build, that is: TypeScript,
-   JavaScript, Rust (WebAssembly), Go (WebAssembly), Kotlin (Kotlin/JS or
-   Wasm), Dart, Scala (Scala.js), ClojureScript, C or C++ (Emscripten), C#
-   (Blazor WebAssembly) or Java (TeaVM). Nothing else (no Zig, Gleam, Elm,
-   ReScript, PureScript, Nim, Haxe, OCaml, F#, Lua). Languages repeat now:
-   pick one not used in the last three nights and not claimed tonight. The
-   idea must be new; check the log and those PRs.
+   **Language: mainstream, and one CodeScene can score** (Petter, 23 and 25
+   Nov), so Code Health can be assessed and good public libraries are there to
+   use. **TypeScript is the default**, with JavaScript as the alternative.
+   Popular, well-maintained npm libraries are welcome and make richer games
+   cheaper: three.js for 3D, PixiJS or Phaser for 2D, matter.js for physics,
+   and so on. Pin each to a release at least 24 hours old and bundle it into
+   `dist/` (no CDN at runtime). Every so often, when the idea suits it, you may
+   use Rust, Go, Kotlin, Dart, C# or C++ compiled for the web instead, but
+   never two nights running. Nothing outside that list (no Zig, Gleam, Elm,
+   ReScript, PureScript, Nim, Haxe, OCaml, F#, Lua, Ruby). The idea must be new;
+   check the log and those PRs.
    **Time guard:** if you don't have a playable web build of the core loop
    60 minutes after you start, switch to TypeScript with the same idea, so the
    night still ships.
