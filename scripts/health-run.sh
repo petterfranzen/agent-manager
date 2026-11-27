@@ -16,8 +16,8 @@
 # --post with the agents' own token (GH_TOKEN in /etc/section9/sandbox.env) for
 # `gh api` alone. Install and build scripts are other people's code, so they never
 # share a container with a token. The clones need none (all five repos are public).
-# Run by hand, the builds' environment carries no GH_TOKEN, GITHUB_TOKEN or
-# CS_ACCESS_TOKEN either; only the final `gh api` calls get GH_TOKEN. See docs/RUNBOOK.md.
+# Run by hand, the builds' environment carries no GH_TOKEN or GITHUB_TOKEN either;
+# only the final `gh api` calls get GH_TOKEN. See docs/RUNBOOK.md.
 #
 # This is a cheap cross-repo signal, not a second CI. What each repo runs lives
 # in steps_for() below, one case per repo, and is what that repo's own CI or its
@@ -58,7 +58,7 @@ done
 # The token is for the final `gh api` calls only. Every build step below runs
 # install scripts from npm, so neither token stays in the environment they inherit.
 post_token=${GH_TOKEN:-}
-unset GH_TOKEN GITHUB_TOKEN CS_ACCESS_TOKEN
+unset GH_TOKEN GITHUB_TOKEN
 
 # ---- what each repo runs -----------------------------------------------------
 # $1 is the checkout, $2 a scratch directory for a build that writes outside the

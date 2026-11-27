@@ -163,7 +163,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build
         run: docker build -t sandbox:ci sandbox
-      - name: Start with a test key and fake GitHub and CodeScene tokens
+      - name: Start with a test key and a fake GitHub token
         run: |
           set -euo pipefail
           ssh-keygen -q -t ed25519 -N '' -f /tmp/ci_key
@@ -175,7 +175,7 @@ jobs:
             --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add SETUID --cap-add SETGID \
             --cap-add SYS_CHROOT --cap-add KILL --cap-add AUDIT_WRITE \
             --security-opt no-new-privileges:true --pids-limit 512 --memory 2g --memory-swap 3g \
-            -e GH_TOKEN=ci-fake-token -e CS_ACCESS_TOKEN=ci-fake-cs-token -e OPENROUTER_API_KEY=must-not-leak \
+            -e GH_TOKEN=ci-fake-token -e OPENROUTER_API_KEY=must-not-leak \
             -v /tmp/authorized_keys:/etc/ssh/authorized_keys/agent:ro sandbox:ci
           # Until sshd answers (the published port accepts before sshd is listening).
           for i in $(seq 1 30); do ssh-keyscan -p 2222 127.0.0.1 2>/dev/null | grep -q ssh-ed25519 && break; sleep 1; done
@@ -196,12 +196,8 @@ jobs:
           # Playwright resolves from the lockfile install, through NODE_PATH.
           s 'playwright --version' | grep -q '^Version 1\.'
           s 'test -s ~/.git-credentials && grep -q ci-fake-token ~/.git-credentials'
-          # CodeScene's cs: the pinned binary runs without a token (version only), and the
-          # token the container was given sits in a 0600 file for the wrapper, not in the env.
-          s 'cs version' | grep -q '^cs version [0-9]'
-          [ "$(s 'echo $CS_DISABLE_VERSION_CHECK')" = 1 ]
-          s 'test "$(cat ~/.config/codescene/token)" = ci-fake-cs-token && test "$(stat -c %a ~/.config/codescene/token)" = 600'
-          ! s 'env' | grep -q ci-fake-cs-token
+          # CodeScene's cs is gone (27 Nov 2026).
+          [ -z "$(s 'command -v cs || true')" ]
           # gh must accept its config as written (no migration attempt).
           ! s 'gh config get git_protocol -h github.com 2>&1' | grep -qi 'migrat'
           [ "$(s 'gh config get git_protocol -h github.com')" = https ]

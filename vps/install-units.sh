@@ -8,6 +8,12 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 unit_dir=${S9_UNIT_DIR:-/etc/systemd/system}
 
 install -m 0644 "$here"/systemd/section9-* "$unit_dir"/
+# Units removed from vps/systemd: the copy above never deletes, so stop and remove them here.
+# section9-code-health: the CodeScene "Code Health effect" report, ended 27 Nov 2026.
+for retired in section9-code-health.timer section9-code-health.service; do
+  systemctl disable --now "$retired" 2>/dev/null || true
+  rm -f "$unit_dir/$retired"
+done
 # Keep unattended-upgrades off the packages a patch-rule script owns, with the
 # 24 h delay (docs/DECISIONS.md, Principles): vps/cloudflared-patch.sh owns
 # cloudflared, vps/container-runtime-patch.sh owns the container runtime.
@@ -17,5 +23,5 @@ systemctl daemon-reload
 systemctl enable --now section9-dispatch.timer section9-dispatch-lane1.timer section9-routines.timer \
   section9-sync.timer section9-health.timer \
   section9-hq-status.timer section9-hq-crew.timer section9-spend.timer section9-cpu.timer \
-  section9-capacity.timer section9-code-health.timer section9-sca.timer section9-cloudflared.timer \
+  section9-capacity.timer section9-sca.timer section9-cloudflared.timer \
   section9-container-runtime-patch.timer

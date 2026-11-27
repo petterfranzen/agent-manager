@@ -1,5 +1,5 @@
 # Where agent commands run (Hermes connects over SSH). Holds git, gh, gitleaks,
-# mise for per-project toolchains, CodeScene's `cs` (Code Health scores), Node with Playwright and a headless Chromium
+# mise for per-project toolchains, Node with Playwright and a headless Chromium
 # (`shoot`), and the pinned Ponytail skill under /opt/skills.
 # No model keys ever live here.
 # Everything is pinned; bump versions only once a release is 24 h old.
@@ -7,11 +7,6 @@ FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b
 
 ARG GITLEAKS_VERSION=8.30.1
 ARG MISE_VERSION=2026.10.19
-# CodeScene CLI: downloads are named by build commit, not version
-# (https://devtools.codescene.io/api/cli/cs?version=<version> gives the commit).
-ARG CODESCENE_CLI_VERSION=1.0.58
-ARG CODESCENE_CLI_COMMIT=b2580d71be8fbfd6a496d7a007062c0c81cd2b60
-ARG CODESCENE_CLI_SHA256=e358b332230f06ac81f9ca119c787860e25d86176d344fc06be1dffe2affb352
 ARG NODE_VERSION=24.22.2
 ARG NODE_SHA256=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75
 # Playwright comes from playwright/package-lock.json (npm ci, integrity-checked); the build
@@ -53,26 +48,12 @@ RUN set -eu; cd /tmp \
  && install -m 0755 "mise-v${MISE_VERSION}-linux-x64" /usr/local/bin/mise \
  && rm -f /tmp/gitleaks_* /tmp/mise-* /tmp/SHASUMS256.txt
 
-# CodeScene's `cs`: the zip is checksum-verified against the pin above, the binary
-# against the zip's own cs.sha256. /usr/local/bin/cs is our wrapper (it adds the
-# token the entrypoint stored); the token itself never enters the image.
-RUN set -eu; cd /tmp \
- && curl -fsSLo cs.zip "https://downloads.codescene.io/enterprise/cli/cs-linux-amd64-${CODESCENE_CLI_COMMIT}.zip" \
- && echo "${CODESCENE_CLI_SHA256}  cs.zip" | sha256sum -c - \
- && mkdir -p /tmp/cs /usr/local/lib/codescene \
- && unzip -q cs.zip -d /tmp/cs \
- && (cd /tmp/cs && sed 's#  .*#  cs#' cs.sha256 | sha256sum -c -) \
- && install -m 0755 /tmp/cs/cs /usr/local/lib/codescene/cs \
- && rm -rf /tmp/cs /tmp/cs.zip \
- && CS_DISABLE_VERSION_CHECK=1 /usr/local/lib/codescene/cs version | grep -F "cs version ${CODESCENE_CLI_VERSION} (${CODESCENE_CLI_COMMIT})"
-COPY --chmod=0755 cs /usr/local/bin/cs
-
 # Node (LTS, checksum-verified), Playwright with only the headless Chromium
 # shell (smaller and lighter than full Chromium) and its system libraries.
 # `shoot` wraps them; see that file. Playwright is installed with `npm ci` from the
 # committed lockfile, and linked where `npm install -g` used to put it (NODE_PATH).
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright NODE_PATH=/usr/local/lib/node_modules \
-    DO_NOT_TRACK=1 CS_DISABLE_VERSION_CHECK=1
+    DO_NOT_TRACK=1
 COPY playwright/package.json playwright/package-lock.json /opt/playwright/
 RUN set -eu; cd /tmp \
  && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
@@ -98,7 +79,7 @@ RUN set -eu; cd /tmp \
  && chromium-headless-shell --version \
  # SSH sessions don't get the image's ENV; pam_env gives them these.
  && printf '%s\n' "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright" "NODE_PATH=/usr/local/lib/node_modules" \
-      "DO_NOT_TRACK=1" "CS_DISABLE_VERSION_CHECK=1" >> /etc/environment
+      "DO_NOT_TRACK=1" >> /etc/environment
 COPY --chmod=0755 shoot /usr/local/bin/shoot
 COPY --chmod=0755 shoot.cjs /usr/local/lib/shoot/
 

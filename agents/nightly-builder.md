@@ -31,7 +31,7 @@ time beats a bigger one that needs a fix round.
 
 The games are portfolio pieces: calm and enjoyable, built around a real game
 loop (Petter, 18–19 Nov; see `LOG.md`'s wishes). Each night is a new idea, in
-a mainstream language CodeScene can score (see "Each night", step 1).
+a mainstream language (see "Each night", step 1).
 
 ## What makes a good night (Petter's bar)
 - **A real game.** A goal you can see from the first screen, rules taught one
@@ -49,20 +49,12 @@ a mainstream language CodeScene can score (see "Each night", step 1).
 - **A "How it was built" section** in the README: the interesting technical
   choice, what the language made easy or hard, in a few short paragraphs.
 - Works one-handed on a phone and well on a desktop, with no page scroll.
-- **Code Health 9.5 or better** (Petter, 16 Nov). Every source file you write
-  must score at least 9.5 in CodeScene's Code Health (only languages CodeScene
-  supports count). Keep functions short (about 30 lines at most) and shallow (two
-  levels of nesting at most). Pass a map or a record rather than more than four
-  arguments, drive repeated cases from data tables instead of long if/case
-  chains, and don't copy-paste blocks. Split a file before it reaches about 300
-  lines. Score it yourself before the PR is ready: run `cs review <file>`
-  (CodeScene, in the sandbox) on every source file you add or change, fix what
-  it names until each is at 9.5 or better, and list the scores in the PR body.
-  If `cs` says it has no token, say so in the PR; never look for the token. The
-  Major scores each night PR again before merging; a night below 9.5 gets one
-  fix round. Finished nights are left as they are, except when a follow-up task
-  changes one: then every file it touches must reach 9.5 too. List the scores one
-  per line as `Code Health: <path> <before> -> <after>` (`new` as the before).
+- **Code that's easy to read and change.** Keep functions short (about 30
+  lines at most) and shallow (two levels of nesting at most). Pass a map or a
+  record rather than more than four arguments, drive repeated cases from data
+  tables instead of long if/case chains, and don't copy-paste blocks. Split a
+  file before it reaches about 300 lines. When a follow-up task changes a
+  finished night, leave the code you touch a little better.
 
 ## Two-night projects
 When an idea is too big for one night, make it a two-night project:
@@ -94,9 +86,8 @@ you move back to DeepSeek.
    wishes, the ideas backlog and the lessons: read those too.
    Check what the other copies claimed tonight (drafts included):
    `gh pr list --repo petterfranzen/ghost-in-the-machine --state open --search "Night YYYY-MM-DD in:title"`.
-   **Language: mainstream, and one CodeScene can score** (Petter, 23 and 25
-   Nov), so Code Health can be assessed and good public libraries are there to
-   use. **TypeScript is the default**, with JavaScript as the alternative.
+   **Language: mainstream** (Petter, 23 and 25 Nov), so good public libraries
+   are there to use. **TypeScript is the default**, with JavaScript as the alternative.
    Popular, well-maintained npm libraries are welcome and make richer games
    cheaper: three.js for 3D, PixiJS or Phaser for 2D, matter.js for physics,
    and so on. Pin each to a release at least 24 hours old and bundle it into
