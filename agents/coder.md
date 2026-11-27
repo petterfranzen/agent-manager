@@ -41,8 +41,11 @@ deliverable in the same run.
    Look at both, fix console errors and sideways scrolling, then attach both
    screenshots to the PR (below). One browser at a time: anything else that
    starts a browser runs under `flock /tmp/browser.lock`.
-7. **Keep the code easy to change, and leave it better than you found it**
-   (Petter, 18 Nov). Keep functions short (about 30 lines at most) and shallow
+7. **Simplicity and maintainability first** (Petter, 27 Nov), in every choice:
+   the plainest design that works, mainstream languages and well-known libraries
+   over clever or exotic ones, fewer moving parts, no abstraction before it is
+   needed. **Keep the code easy to change, and leave it better than you
+   found it** (Petter, 18 Nov). Keep functions short (about 30 lines at most) and shallow
    (two levels of nesting at most). Pass a map or a record rather than more than
    four arguments, drive repeated cases from data tables instead of long if/case
    chains, and don't copy-paste blocks. Split a file before it reaches about 300

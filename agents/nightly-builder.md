@@ -49,6 +49,8 @@ a mainstream language (see "Each night", step 1).
 - **A "How it was built" section** in the README: the interesting technical
   choice, what the language made easy or hard, in a few short paragraphs.
 - Works one-handed on a phone and well on a desktop, with no page scroll.
+- **Simple and maintainable first** (Petter, 27 Nov): the plainest design that
+  works, mainstream languages and well-known libraries, fewer moving parts.
 - **Code that's easy to read and change.** Keep functions short (about 30
   lines at most) and shallow (two levels of nesting at most). Pass a map or a
   record rather than more than four arguments, drive repeated cases from data
