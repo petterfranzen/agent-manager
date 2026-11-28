@@ -1,0 +1,17 @@
+repo,commit,path,codescene_score,loc
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/pipeline.ts,10.0,32
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,vite.config.ts,10.0,193
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,scripts/build-experiments.mjs,10.0,229
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/filmstrip.ts,10.0,88
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/rail.ts,10.0,94
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,scripts/capture-nights.mjs,9.63,232
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/flight.ts,9.68,256
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/theme.ts,10.0,76
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/atmosphere.ts,10.0,26
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/main.ts,10.0,33
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,tests/security-headers.spec.mjs,9.53,164
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/boot.ts,10.0,58
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,tests/serve-dist.mjs,10.0,48
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/dom.ts,10.0,27
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,src/palette.ts,10.0,152
+portfolio,fdb383fb9da73339cc31c99fd8801a10f403f67b,tests/smoke.spec.mjs,9.68,541

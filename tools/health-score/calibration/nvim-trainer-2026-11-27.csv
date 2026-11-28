@@ -1,0 +1,12 @@
+repo,commit,path,codescene_score,loc
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,scripts/invariants.mjs,9.68,265
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,src/game/fuzzy.ts,10.0,49
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,src/main.ts,10.0,76
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,scripts/playtest-edge.mjs,10.0,110
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,src/game/input.ts,9.66,97
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,scripts/playtest.mjs,10.0,105
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,src/game/commands.ts,10.0,37
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,src/game/render.ts,9.68,39
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,src/game/controller.ts,10.0,331
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,src/game/storage.ts,10.0,39
+nvim-trainer,d29bb14373d85f2a5c6ca48261b347b14328014c,src/game/engine.ts,9.84,289

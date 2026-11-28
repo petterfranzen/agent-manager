@@ -1,0 +1,6 @@
+repo,commit,path,codescene_score,loc
+portfolio,3a845369169d5daf28fafb8a5e57e10c3dc6465f,scripts/build-experiments.mjs,9.68,170
+portfolio,3a845369169d5daf28fafb8a5e57e10c3dc6465f,src/flight.ts,9.38,232
+portfolio,3a845369169d5daf28fafb8a5e57e10c3dc6465f,src/main.ts,7.43,535
+portfolio,3a845369169d5daf28fafb8a5e57e10c3dc6465f,tests/smoke.spec.mjs,10.0,244
+portfolio,3a845369169d5daf28fafb8a5e57e10c3dc6465f,vite.config.ts,10.0,100

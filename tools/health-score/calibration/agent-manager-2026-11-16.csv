@@ -1,0 +1,8 @@
+repo,commit,path,codescene_score,loc
+agent-manager,41ac1e381118ea98063cffdb784934178774c97d,agents/avatars/make.py,9.68,84
+agent-manager,41ac1e381118ea98063cffdb784934178774c97d,scripts/test_decommission.py,10.0,297
+agent-manager,41ac1e381118ea98063cffdb784934178774c97d,vps/sca-watch.py,6.58,377
+agent-manager,41ac1e381118ea98063cffdb784934178774c97d,scripts/test_vps.py,5.45,2640
+agent-manager,41ac1e381118ea98063cffdb784934178774c97d,mods/section9/hooks/register.tsx,8.92,210
+agent-manager,41ac1e381118ea98063cffdb784934178774c97d,vps/dispatch.py,3.39,1487
+agent-manager,41ac1e381118ea98063cffdb784934178774c97d,vps/hq-status.py,4.07,467
