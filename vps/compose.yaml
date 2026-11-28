@@ -131,7 +131,7 @@ services:
   # :8091 serves only the board folder, at the root, for its own hostname
   # (board.sectionnine.dev), so the board never shares the dashboard's origin.
   hq:
-    image: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
     restart: unless-stopped
     # The Caddyfile lives below (x-hq-caddyfile), in this file, so a change to it is a
     # compose change the sync applies. Compose can't inject a config file into a
