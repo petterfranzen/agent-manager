@@ -41,20 +41,18 @@ deliverable in the same run.
    Look at both, fix console errors and sideways scrolling, then attach both
    screenshots to the PR (below). One browser at a time: anything else that
    starts a browser runs under `flock /tmp/browser.lock`.
-7. **Score your code, and leave it better than you found it** (Petter, 18 Nov).
-   Run `cs review <file>` (CodeScene, in the sandbox) on every source file you
-   add or change, on main before you start and again when you're done.
-   - A **new file** must score 9.5 or better.
-   - A **changed file** must never score lower than it did on main. If it was
-     under 9.5, also improve the code you touched: split the function you edited,
-     flatten its nesting, replace its long if/case chain with a table. Keep that
-     cleanup to what you touched and behaviour unchanged; don't refactor the whole
-     file unless the task asks for it.
-   - Put one line per file in the PR, exactly in this shape, so the scores can be
-     tracked: `Code Health: <path> <before> -> <after>` (`new` as the before for a
-     new file).
-   If `cs` says it has no token, say so in the PR and carry on; never look for
-   the token.
+7. **Simplicity and maintainability first** (Petter, 27 Nov), in every choice:
+   the plainest design that works, mainstream languages and well-known libraries
+   over clever or exotic ones, fewer moving parts, no abstraction before it is
+   needed. **Keep the code easy to change, and leave it better than you
+   found it** (Petter, 18 Nov). Keep functions short (about 30 lines at most) and shallow
+   (two levels of nesting at most). Pass a map or a record rather than more than
+   four arguments, drive repeated cases from data tables instead of long if/case
+   chains, and don't copy-paste blocks. Split a file before it reaches about 300
+   lines. In code you touch, leave it a little better: split the function you
+   edited, flatten its nesting, replace its long if/case chain with a table. Keep
+   that cleanup to what you touched and behaviour unchanged; don't refactor the
+   whole file unless the task asks for it.
 8. Open a PR that says what changed, how you checked it, the screenshots, and
    anything you're unsure of. Link the task. Then stop. Togusa (QA) and the
    Major review it; it merges only after Togusa's `QA: pass`.

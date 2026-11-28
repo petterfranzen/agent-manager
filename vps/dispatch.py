@@ -8,15 +8,12 @@
   dispatch.py spend      update the open "Spend" issue with OpenRouter's figures (hourly)
   dispatch.py cpu        update the open "CPU credits" issue with this VPS's own CPU figures (hourly)
   dispatch.py capacity   roll the run ledger up into the open "Capacity" issue (daily)
-  dispatch.py code-health  join the ledger with the PRs' Code Health lines: "Code Health effect" (weekly)
   dispatch.py note       update the open "Sync" issue: what the VPS did with itself
 
 Run by systemd timers on the VPS (vps/systemd). One run at a time in each lane (lock files).
 Standard library only. Secrets come from root-only files and are never printed:
   OPENROUTER_API_KEY, API_SERVER_KEY  in <secrets-dir>/hermes.env
   GH_TOKEN                            in <secrets-dir>/sandbox.env
-  CS_ACCESS_TOKEN                     in <secrets-dir>/codescene.env (optional; compose hands it
-                                      to the sandbox, here it is only redacted from what we print)
 Optional, root-only, outside the repo (a commit to it cannot change them):
   <secrets-dir>/limits.toml           per-agent run ceiling and the guardrail preamble
   <secrets-dir>/briefs/<Name>.md      an agent's brief, when it must not live in the repo
@@ -34,14 +31,13 @@ from pathlib import Path
 # beside it in vps/dispatcher/; appended, so nothing here can shadow the standard library.
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from dispatcher import board, capacity, cpu, health, net, reports, routines, run   # noqa: E402
+from dispatcher import board, capacity, cpu, net, reports, routines, run   # noqa: E402
 from dispatcher.context import Context                                     # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 # Every command but the default, `run` (one task in this lane).
 COMMANDS = {"routines": routines.routines, "status": reports.status, "spend": reports.spend,
-            "cpu": cpu.credits, "capacity": capacity.capacity, "code-health": health.code_health,
-            "note": reports.note}
+            "cpu": cpu.credits, "capacity": capacity.capacity, "note": reports.note}
 
 
 def parser():
@@ -71,22 +67,13 @@ def log(msg):
     print(net.redact(msg), flush=True)
 
 
-def optional_secret(path, name):
-    """A secret the run can do without: "" when the file or the value is missing."""
-    try:
-        return net.read_env_value(path, name)
-    except net.Failure:
-        return ""
-
-
 def context(a):
     """Read the secrets (never printed), refuse plain HTTP to a remote host, and open the board."""
     sd = Path(a.secrets_dir)
     ghtoken = net.read_env_value(sd / "sandbox.env", "GH_TOKEN")
     orkey = net.read_env_value(sd / "hermes.env", "OPENROUTER_API_KEY")
     hkey = net.read_env_value(sd / "hermes.env", "API_SERVER_KEY")
-    cstoken = optional_secret(sd / "codescene.env", "CS_ACCESS_TOKEN")
-    net.secrets.extend(s for s in (ghtoken, orkey, hkey, cstoken) if s)
+    net.secrets.extend(s for s in (ghtoken, orkey, hkey) if s)
     for url, what in ((a.github, "the GitHub token"), (a.hermes, "the Hermes key")):
         net.local_only(url, what)
     return Context(a, board.Board(a.github, ghtoken), (hkey, orkey), log)

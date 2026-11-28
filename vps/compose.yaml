@@ -99,10 +99,6 @@ services:
     restart: unless-stopped
     env_file:
       - /etc/section9/sandbox.env         # GH_TOKEN (fine-grained)
-      # CS_ACCESS_TOKEN for the `cs` CLI. Optional: without the file the sandbox
-      # starts as before and `cs review` says it has no token (Compose 2.24+).
-      - path: /etc/section9/codescene.env
-        required: false
     ports:
       - "127.0.0.1:2222:22"
     volumes:

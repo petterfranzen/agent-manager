@@ -10,7 +10,6 @@ from pathlib import Path
 from .base import ROOT
 
 TOKEN = "github_pat_" + "t" * 22
-CS = "cs-" + "c" * 20
 
 
 def stub(path, body):
@@ -36,7 +35,7 @@ class TestHealthTokens(unittest.TestCase):
              f'echo "gh token=${{GH_TOKEN:+set}} $*" >> {self.t}/gh.log\n'
              f'for a in "$@"; do case "$a" in body=@*) cp "${{a#body=@}}" {self.t}/posted;; esac; done\n'
              'case "$*" in *"-f title="*) echo \'{"number":7,"node_id":"N1"}\';; esac\n')
-        self.env = dict(os.environ, GH_TOKEN=TOKEN, GITHUB_TOKEN=TOKEN, CS_ACCESS_TOKEN=CS,
+        self.env = dict(os.environ, GH_TOKEN=TOKEN, GITHUB_TOKEN=TOKEN,
                         PATH=f"{self.t / 'bin'}:{os.environ['PATH']}")
 
     def health(self, *args, stdin=None):
@@ -51,7 +50,7 @@ class TestHealthTokens(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         for r in self.REPOS:
             env = (self.t / f"env-{r}").read_text()
-            for name, value in (("GH_TOKEN", TOKEN), ("GITHUB_TOKEN", TOKEN), ("CS_ACCESS_TOKEN", CS)):
+            for name, value in (("GH_TOKEN", TOKEN), ("GITHUB_TOKEN", TOKEN)):
                 self.assertNotIn(f"{name}=", env, r)
                 self.assertNotIn(value, env, r)
         calls = (self.t / "gh.log").read_text().splitlines()
@@ -86,7 +85,7 @@ class TestHealthTokens(unittest.TestCase):
                              env=dict(self.env, S9_REPO_DIR=str(ROOT)), timeout=60)
         self.assertEqual(out.returncode, 0, out.stderr)
         build, post = (self.t / "docker.log").read_text().splitlines()
-        self.assertIn("-e GH_TOKEN= -e CS_ACCESS_TOKEN= sandbox --body-only", build)
+        self.assertIn("-e GH_TOKEN= sandbox --body-only", build)
         self.assertTrue(post.endswith(" sandbox --post -"), post)
         self.assertNotIn("TOKEN", post)
         for call in (build, post):
@@ -104,7 +103,7 @@ class TestSecretModes(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.d = Path(tmp.name) / "section9"
         (self.d / "briefs").mkdir(parents=True)
-        files = {"hermes.env": 0o600, "sandbox.env": 0o600, "codescene.env": 0o600, "limits.toml": 0o400,
+        files = {"hermes.env": 0o600, "sandbox.env": 0o600, "limits.toml": 0o400,
                  "pins.toml": 0o600, "sandbox_authorized_keys": 0o644, "briefs/Togusa.md": 0o600}
         for name, mode in files.items():
             (self.d / name).write_text("x")

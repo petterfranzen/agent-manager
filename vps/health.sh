@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # section9-health: run scripts/health-run.sh in the sandbox image, in two containers.
-# The first builds the five repos with GH_TOKEN and CS_ACCESS_TOKEN blanked, since
+# The first builds the five repos with GH_TOKEN blanked, since
 # `npm ci` runs every dependency's install scripts, and prints the issue body. The
 # second gets the agents' own GH_TOKEN (sandbox.env), builds nothing, and posts that
 # body with `gh api`. --entrypoint sidesteps the image's sshd (and the entrypoint that
@@ -16,5 +16,5 @@ run=(docker compose -f "$repo/vps/compose.yaml" run --rm --no-deps -T
 
 body=$(mktemp)
 trap 'rm -f "$body"' EXIT
-"${run[@]}" -e GH_TOKEN= -e CS_ACCESS_TOKEN= sandbox --body-only > "$body"
+"${run[@]}" -e GH_TOKEN= sandbox --body-only > "$body"
 "${run[@]}" sandbox --post - < "$body"

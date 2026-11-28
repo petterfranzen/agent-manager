@@ -65,22 +65,22 @@ the two timers. The first build takes several minutes.
 If step 5.5 works, tell the Major (then step 6). Then the Major moves the agents over one by one
 (phase 3 of the plan).
 
-**5b. CodeScene's `cs` in the sandbox (16 Nov).** The sandbox image carries a pinned
-`cs` CLI so the agents score their own code (`cs review <file>`, bar 9.5). Its token is the
-agents' own, in the root-only `/etc/section9/codescene.env` as one line, `CS_ACCESS_TOKEN=...`
-(`chown root:root`, `chmod 600`; never in a repo or in chat). Compose hands the file to the
-sandbox if it exists (`required: false`, Compose 2.24 or newer: check with
-`docker compose version`), the entrypoint stores the token for the agent user only
-(`~/.config/codescene/token`, 0600) and `/usr/local/bin/cs` reads it. Without the file the
-stack runs as before and `cs review` says it has no token. After creating or changing the
-file: `docker compose -f /opt/agent-manager/vps/compose.yaml up -d sandbox`. Check, without
-showing the token (it ends with a score; a git complaint outside a repo is harmless):
-```bash
-docker exec -u agent section9-sandbox-1 sh -c 'cs version && cd /tmp && echo "x = 1" > t.py && cs review t.py'
-```
-To bump `cs`: `curl -s 'https://devtools.codescene.io/api/cli/cs?version=<version>'` gives the
-build commit; set `CODESCENE_CLI_VERSION`, `_COMMIT` and `_SHA256` (of
-`cs-linux-amd64-<commit>.zip`) in `sandbox/Dockerfile`, once the release is 24 h old.
+**5b. CodeScene removed (27 Nov).** The CodeScene experiment has ended: the sandbox no
+longer carries `cs`, compose no longer reads `/etc/section9/codescene.env`, and the weekly
+**Code Health effect** report (`section9-code-health.timer`) is gone. Once the PR that
+removed them is on `main`, Petter does this once:
+1. On the VPS, while no task is running (`python3 -I /opt/agent-manager/vps/dispatch.py status`):
+   ```bash
+   sudo rm -f /etc/section9/codescene.env
+   sudo /opt/agent-manager/vps/sync.sh --accept
+   ```
+   `--accept` pins the protected files the PR changed (`.github/workflows/ci.yml`,
+   `vps/compose.yaml`, `vps/health.sh`, `vps/install-units.sh`, `vps/systemd/`). The next sync
+   rebuilds the sandbox without `cs` and re-runs `install-units.sh`, which disables and removes
+   `section9-code-health.timer` and its service. Check: `systemctl list-timers 'section9-*'`
+   no longer lists it.
+2. In the CodeScene account, revoke the agents' CodeScene token.
+3. Close the open **Code Health effect** issue in `section9-hq` (nothing rewrites it now).
 
 **6. Pick up the HQ page, sync and spend (one time, after the VPS is already running)**
 
@@ -305,13 +305,6 @@ world-readable. Those modes apply when the writer creates the file; it also best
 existing file, so a `runs.jsonl` left `0644` by an older build (or by hand) is corrected on the
 next run.
 
-`section9-code-health.timer` (weekly, Monday 06:10 UTC) runs `dispatch.py code-health`: it joins
-each finished coding task in the ledger (tokens, $, timeouts, fix rounds) with the `Code Health:
-<path> <before> -> <after>` lines of the PRs the task links to, and their QA verdicts, read with the
-dispatcher's GitHub token (read-only; it writes only the open **Code Health effect** issue, not pinned).
-Tasks are bucketed by the files' mean "before" score (9.5 and up, 7 to 9.5, under 7, new files only,
-no scores); the issue says when a bucket is too small to read (under 15 tasks). Method: section9-hq #348.
-
 `section9-sca.timer` (weekly, Monday 05:30 UTC) runs `vps/sca-watch.py`: it reads the version pins in the
 repo (`sandbox/Dockerfile` ARGs and the `vps/compose.yaml` image tags) and this host's own docker, runc,
 containerd and openssh-server versions, asks OSV (`api.osv.dev`) for advisories, keeps CVSS 7.0 or higher
@@ -327,7 +320,7 @@ running containers' images. Nothing is installed by the repo; without a scanner 
 
 **Health run.** `section9-health.timer` (nightly, 05:00 Stockholm, after the nightly
 build's 3 h ceiling) runs `vps/health.sh`, which runs `scripts/health-run.sh` in the sandbox image
-twice: first `--body-only` with `GH_TOKEN` and `CS_ACCESS_TOKEN` blanked, since `npm ci` runs every
+twice: first `--body-only` with `GH_TOKEN` blanked, since `npm ci` runs every
 dependency's install scripts, then `--post -` with the agents' own `GH_TOKEN`, which builds nothing
 and only posts the table with `gh api`. The first run clones the
 five repos (ghost-in-the-machine, nvim-trainer, portfolio, dinner-planner, flight-tracker),

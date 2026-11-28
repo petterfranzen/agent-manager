@@ -16,8 +16,7 @@ REPOS = ("agent-manager", "section9-hq", "ghost-in-the-machine", "flight-tracker
 ANY = "any"
 AUTHOR = re.compile(r"(?im)^\s*author:\s*([A-Za-z][\w.-]*)")
 # The issues the VPS keeps current, by title: (the word its log lines start with, pin a new one).
-KEPT_ISSUES = {"Spend": ("spend", True), "Capacity": ("capacity", True), "CPU credits": ("cpu", False),
-               "Code Health effect": ("code-health", False)}
+KEPT_ISSUES = {"Spend": ("spend", True), "Capacity": ("capacity", True), "CPU credits": ("cpu", False)}
 PIN_QUERY = "mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }"
 
 
